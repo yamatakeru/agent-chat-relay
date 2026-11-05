@@ -1,0 +1,8 @@
+# ローカル専用の設定・秘密情報
+mise.local.toml
+*.env
+.env*
+
+# ビルド成果物
+/bin/
+/dist/
