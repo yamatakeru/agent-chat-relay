@@ -82,6 +82,8 @@ cmd_run() {
 }
 
 cmd_tunnel() {
+  # リポジトリの mise.toml で固定した版を使うため、リポジトリで実行する
+  cd "$REPO_ROOT"
   exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://localhost:$CCJ_LINE_PORT"
 }
 

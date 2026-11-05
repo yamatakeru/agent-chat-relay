@@ -21,12 +21,11 @@ LINE ──HTTPS──> Cloudflare Quick Tunnel ──> localhost:18080/callback
 
 ## 1. ツールの導入
 
-cc-connect はリポジトリの `mise.toml` で 1.5.0 に固定している。cloudflared は自分で入れる。
+cc-connect はリポジトリの `mise.toml` で 1.5.0 に固定している。cloudflared は自分で入れる。`-g` を付けずに実行すると、このリポジトリの `mise.toml` に版が記録され、インストールまで行われる。
 
 ```sh
 cd ~/WorkSpace/develop/cc-connect-jtc-adapters
 mise use cloudflared@2026.10.7
-mise install
 ```
 
 ## 2. LINE 公式アカウントとチャネルの準備
