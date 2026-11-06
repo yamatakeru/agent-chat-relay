@@ -16,7 +16,7 @@ LINE ──HTTPS──> Cloudflare Quick Tunnel ──> localhost:18080/callback
 | `scripts/line-native.sh` | 秘密情報と userId の保存、起動、テスト用 Webhook の送信、通数の確認 |
 | `.env`（リポジトリ直下） | dotenvx で暗号化した、チャネルシークレット・チャネルアクセストークン・許可する userId。git の無視対象 |
 | `.env.keys`（リポジトリ直下） | `.env` の復号鍵。git の無視対象で、権限は 600 |
-| `.local/line-native/`（git の無視対象） | 実行時の設定の複製、`data/`（セッション）、`workspace/`（Claude の作業場所） |
+| `.local/line-native/`（git の無視対象） | `data/`（セッション）、`workspace/`（Claude の作業場所） |
 
 秘密情報と userId は、リポジトリ（public）・issue・チャットに書かない。
 

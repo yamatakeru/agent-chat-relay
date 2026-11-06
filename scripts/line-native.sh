@@ -131,9 +131,7 @@ cmd_run_with_env() {
   esac
   local bin
   bin="$(cc_connect_bin)"
-  # cc-connect は設定ファイルを書き換えることがあるため、毎回リポジトリの例から複製して使う
-  install -m 600 "$REPO_ROOT/examples/line-native/config.toml" "$CCJ_LINE_NATIVE_HOME/config.toml"
-  exec "$bin" -config "$CCJ_LINE_NATIVE_HOME/config.toml"
+  exec "$bin" -config "$REPO_ROOT/examples/line-native/config.toml"
 }
 
 cmd_tunnel() {
