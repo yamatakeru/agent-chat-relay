@@ -2,7 +2,7 @@
 # 段階 1（cc-connect 標準の LINE platform で実測）の補助スクリプト。
 # 秘密情報と許可する userId は、dotenvx で暗号化したリポジトリ直下の .env に置く
 # （復号鍵は同じ場所の .env.keys。どちらも .gitignore 対象）。平文の秘密をコマンド引数や履歴に残さない。
-# 実行時のデータ（セッション、Claude の作業場所）は ~/.cc-connect-jtc/line-native/ に置く。
+# 実行時のデータ（セッション、Claude の作業場所）はリポジトリ内の .local/line-native/ に置く（.gitignore 対象）。
 #
 #   scripts/line-native.sh secrets    # チャネルシークレットとアクセストークンを保存（対話入力）
 #   scripts/line-native.sh allow <userId>[,<userId>...]
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export CCJ_LINE_NATIVE_HOME="${CCJ_LINE_NATIVE_HOME:-$HOME/.cc-connect-jtc/line-native}"
+export CCJ_LINE_NATIVE_HOME="${CCJ_LINE_NATIVE_HOME:-$REPO_ROOT/.local/line-native}"
 export CCJ_LINE_PORT="${CCJ_LINE_PORT:-18080}"
 export CCJ_LOG_LEVEL="${CCJ_LOG_LEVEL:-info}"
 ENV_FILE="${CCJ_ENV_FILE:-$REPO_ROOT/.env}"

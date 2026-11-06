@@ -6,3 +6,6 @@ mise.local.toml
 # ビルド成果物
 /bin/
 /dist/
+
+# 実行時のデータ（セッション、Claude の作業場所）と調査用のソース
+/.local/

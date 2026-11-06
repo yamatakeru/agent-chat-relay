@@ -1,7 +1,7 @@
 # cc-connect 1.5.0 標準の LINE platform で実測するための設定（段階 1）
 #
 # このファイルを直接 cc-connect に読ませない。cc-connect は設定ファイルを書き換えることがあるため、
-# scripts/line-native.sh run が実行のたびに ~/.cc-connect-jtc/line-native/ へ複製して使う。
+# scripts/line-native.sh run が実行のたびに .local/line-native/ へ複製して使う。
 # 秘密情報と userId はすべて環境変数から ${VAR} で注入する（docs/line-native-verification.md 参照）。
 
 language = "ja"
