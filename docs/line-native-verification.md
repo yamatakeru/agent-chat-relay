@@ -13,9 +13,10 @@ LINE ──HTTPS──> Cloudflare Quick Tunnel ──> localhost:18080/callback
 | 置き場所 | 内容 |
 |---|---|
 | `examples/line-native/config.toml` | 設定例。秘密情報と userId は含まない |
-| `scripts/line-native.sh` | 秘密情報の保存、起動、テスト用 Webhook の送信、通数の確認 |
-| macOS キーチェーン | チャネルシークレット、チャネルアクセストークン |
-| `~/.cc-connect-jtc/line-native/` | 実行時の設定の複製、`env`（許可する userId）、`data/`（セッション）、`workspace/`（Claude の作業場所） |
+| `scripts/line-native.sh` | 秘密情報と userId の保存、起動、テスト用 Webhook の送信、通数の確認 |
+| `~/.cc-connect-jtc/line-native/.env` | dotenvx で暗号化した、チャネルシークレット・チャネルアクセストークン・許可する userId |
+| `~/.cc-connect-jtc/line-native/.env.keys` | `.env` の復号鍵。リポジトリ外に置き、権限は 600 |
+| `~/.cc-connect-jtc/line-native/` のその他 | 実行時の設定の複製、`data/`（セッション）、`workspace/`（Claude の作業場所） |
 
 秘密情報と userId は、リポジトリ（public）・issue・チャットに書かない。
 
@@ -30,27 +31,70 @@ mise use cloudflared@2026.10.7
 
 ## 2. LINE 公式アカウントとチャネルの準備
 
-2024 年 9 月以降、Messaging API チャネルは LINE Developers コンソールで直接作れない。LINE 公式アカウントを作り、LINE Official Account Manager で Messaging API を有効にする。画面の名称は変わることがある。
+2024 年 9 月以降、Messaging API チャネルは LINE Developers コンソールで直接作れない。まず LINE 公式アカウントを作り、LINE Official Account Manager（以下 OAM）で Messaging API を有効にすると、チャネルが作られる。画面の名称は変わることがあるので、見つからないときは近い名前の項目を探す。
 
-1. 検証専用の LINE 公式アカウントを作る（無料のコミュニケーションプラン）。
-2. LINE Official Account Manager で Messaging API を有効にする。プロバイダーは後から変更できないため、検証用のプロバイダーを選ぶ。
-3. LINE Official Account Manager の応答設定で、次のとおりにする。
-   - 応答メッセージ：オフ
-   - あいさつメッセージ：オフ
-   - Webhook：オン
-4. LINE Official Account Manager のアカウント設定で、グループ・複数人チャットへの参加を許可する。
-5. LINE Developers コンソールで、次の値を控える。チャットには貼らない。
-   - ［チャネル基本設定］タブ：チャネルシークレット
-   - ［Messaging API 設定］タブ：チャネルアクセストークン（長期）。発行する
-6. ［Messaging API 設定］タブの「Webhook の再送」はオフのままにする。停止中に届いた依頼は処理しない方針のため。
+### 2-1. LINE 公式アカウントを作る
 
-## 3. 秘密情報をキーチェーンへ保存
+1. <https://entry.line.biz/start/jp/> から LINE 公式アカウントの作成に進む。
+2. LINE ビジネス ID でログインする。個人の LINE アカウントでログインしてよい。
+3. 作成フォームを埋める。
+   - アカウント名：グループのメンバーに表示される名前。例：「cc-connect 検証」。後から変えられる。
+   - 会社・店舗名、業種など：検証用なので、実態に合う範囲の簡単な値でよい。
+4. 作成すると、無料のコミュニケーションプランで始まる。認証済みアカウントの申請は不要。
+
+### 2-2. Messaging API を有効にする（OAM の Web 版でだけ操作できる）
+
+1. <https://manager.line.biz/> で、作ったアカウントを開く。
+2. 右上の［設定］→ 左メニューの［Messaging API］→［Messaging API を利用する］をクリックする。
+3. 初回は、開発者情報（名前とメールアドレス）の登録画面が出る。
+4. プロバイダーを選ぶ画面で、新しいプロバイダーを作る。例：「ccj-verify」。**プロバイダーは後から変更できない。** 仕事で使っている既存のプロバイダーは選ばない。
+5. プライバシーポリシーと利用規約の URL を聞かれたら、空欄でよい（任意）。
+6. 確認画面で［OK］をクリックすると有効になる。
+
+### 2-3. 応答設定（OAM）
+
+［設定］→［応答設定］で、次のとおりにする。
+
+| 項目 | 設定 | 理由 |
+|---|---|---|
+| チャット | オフ | 手動チャットが混ざらないようにする |
+| あいさつメッセージ | オフ | 友だち追加のときの自動メッセージを出さない |
+| Webhook | **オン** | 発言を cc-connect に届ける |
+| 応答メッセージ | オフ | キーワードへの自動応答が、Bot の返答に混ざらないようにする。チャットをオフにした後に出てくる場合がある |
+
+### 2-4. グループへの参加を許可する（OAM）
+
+［設定］→［アカウント設定］→「機能の利用」にある［トークへの参加］で、グループ・複数人トークへの参加を**許可する**。既定では許可されていない。
+
+1 つのグループに参加できる LINE 公式アカウントは 1 つだけ。
+
+### 2-5. LINE Developers コンソールで値を確認する
+
+<https://developers.line.biz/console/> に同じ LINE アカウントでログインし、2-2 で作ったプロバイダー → 公式アカウントと同じ名前のチャネルを開く。
+
+- ［チャネル基本設定］タブ
+  - **チャネルシークレット**：手順 3 で保存する。チャットには貼らない。
+- ［Messaging API 設定］タブ
+  - **チャネルアクセストークン（長期）**：［発行］をクリックする。手順 3 で保存する。チャットには貼らない。再発行すると、前のトークンは使えなくなる。
+  - QR コード：検証メンバーが Bot を友だちに追加するときに使う（手順 5）。
+  - ［応答メッセージ］［あいさつメッセージ］：「無効」になっていることを確認する。有効なら、［編集］から OAM を開いて 2-3 をやり直す。
+  - ［グループトーク・複数人トークへの参加を許可する］：有効になっていることを確認する。
+  - Webhook の項目は、手順 4 で設定する。
+
+## 3. 秘密情報の保存（dotenvx）
+
+[dotenvx](https://dotenvx.com/) が PATH にあること（`dotenvx --version` で確認）。
 
 ```sh
 scripts/line-native.sh secrets
 ```
 
-入力内容は画面に表示されない。値を更新するときも、同じコマンドを実行する。
+チャネルシークレット、チャネルアクセストークンの順に聞かれる。入力内容は画面に表示されない。値を更新するときも、同じコマンドを実行する。
+
+- 値は `~/.cc-connect-jtc/line-native/.env` に暗号化して保存される。復号鍵は同じ場所の `.env.keys` に作られる。どちらもリポジトリの外にある。
+- `dotenvx set` は値をコマンド引数で受け取るため、ほかのプロセスから見えたり、シェルの履歴に残ったりする。スクリプトは、読み取った値を `.env` に書いてすぐ `dotenvx encrypt` で暗号化する方式にしている。秘密情報を `dotenvx set` で直接入れない。
+- `run`・`webhook`・`quota` は、実行のたびに `.env` を復号して使う。同じ名前の環境変数がすでにあれば、そちらが優先される（ダミー値での確認用）。
+- 中身を確かめたいときは `dotenvx get -f ~/.cc-connect-jtc/line-native/.env` で復号して表示できる。画面に平文が出るので注意する。
 
 ## 4. 起動と Webhook の登録
 
@@ -64,28 +108,46 @@ CCJ_LOG_LEVEL=debug scripts/line-native.sh run
 scripts/line-native.sh tunnel
 ```
 
-1. ターミナル B に出る `https://<ランダム>.trycloudflare.com` を控える。
-2. LINE Developers コンソールの［Messaging API 設定］で、Webhook URL を `https://<ランダム>.trycloudflare.com/callback` にして［更新］をクリックし、続けて［検証］をクリックする。「成功」と出ればよい。
-3. ［Webhook の利用］をオンにする。
+userId を登録する前（手順 5）は、`note: 許可する userId が未登録のため、誰の依頼にも応答しません` と出る。これで正しい。
 
-Quick Tunnel の URL は、tunnel を起動し直すたびに変わる。そのたびに、手順 2 をやり直す。cc-connect だけを再起動するときは、URL は変わらない。
+### Webhook の設定（LINE Developers コンソールの［Messaging API 設定］タブ）
+
+1. ターミナル B に出る `https://<ランダム>.trycloudflare.com` を控える。
+2. ［Webhook URL］の［編集］をクリックし、`https://<ランダム>.trycloudflare.com/callback` を入力して［更新］をクリックする。末尾の `/callback` を忘れない。
+3. ［検証］をクリックする。「成功」と出ればよい。失敗したときは、表示されたステータスで原因を切り分ける。
+
+   | 表示 | 主な原因 |
+   |---|---|
+   | 400 | チャネルシークレットの誤り。ターミナル A に `line: parse webhook failed error="invalid signature"` が出る。`secrets` で入れ直す |
+   | 404 | URL 末尾の `/callback` がない |
+   | 502・530 など | cc-connect が起動していない、または tunnel の URL が古い |
+
+4. ［Webhook の利用］をオンにする。これがオフだと、検証が成功しても発言は届かない。
+5. ［Webhook の再送］はオフのままにする（既定でオフ）。停止中に届いた依頼は処理しない方針のため。
+6. ［エラーの統計情報］はオンにしてよい。届かなかった Webhook の原因をコンソールで確認できる。
+
+### 注意
+
+- Quick Tunnel の URL は、tunnel を起動し直すたびに変わる。そのたびに手順 2〜3 をやり直す。cc-connect だけを再起動するときは、URL は変わらない。
+- URL が古いままだと、発言は届かずに失われる（再送はオフのため）。
+- tunnel の URL は誰でもアクセスできるが、署名が合わないリクエストは cc-connect が 400 で拒否する。
 
 止めるときは、それぞれのターミナルで Ctrl-C を押す。
 
 ## 5. 許可する userId の登録
 
-最初の `env` には誰にも一致しない値を入れてある。そのため、この時点では誰の発言にも応答しない。
-
-1. 検証メンバー（自分を含む 2〜3 人）が、Bot を友だちに追加し、1 対 1 トークで何か送る。
-2. ターミナル A のログに、`line: message from unauthorized user user=U...` が出る。
-3. `~/.cc-connect-jtc/line-native/env` を次の形に書き換える。
+1. 検証メンバー（自分を含む 2〜3 人）が、2-5 の QR コードから Bot を友だちに追加し、1 対 1 トークで何か送る。
+2. ターミナル A のログに、`line: message from unauthorized user user=U...` が出る。userId は `U` と 16 進 32 桁の文字列。
+3. userId を保存する。複数のときはカンマで区切る。前の値は上書きされる。
 
    ```sh
-   CCJ_LINE_ALLOW_FROM=Uxxxxxxxx,Uyyyyyyyy
+   scripts/line-native.sh allow Uxxxxxxxx...,Uyyyyyyyy...
    ```
 
+   `*` や形式の違う値は受け付けない（全員許可を防ぐため）。
+
 4. ターミナル A で cc-connect を再起動する。Ctrl-C で止め、`scripts/line-native.sh run` を実行する。debug ログには発言の内容も出るので、userId を取得した後は info に戻してよい。
-5. 検証メンバーと Bot で LINE グループを作る。必要なら、比較用のグループをもう 1 つ作る。
+5. 検証メンバーと Bot で LINE グループを作る。LINE アプリでグループを作り、メンバーの招待で Bot（友だちに追加済みの公式アカウント）を選ぶ。必要なら、比較用のグループをもう 1 つ作る。
 
 ## 6. 通数の目安
 
@@ -127,6 +189,7 @@ Quick Tunnel の URL は、tunnel を起動し直すたびに変わる。その�
 - 許可していない送信者の発言は無視され、debug ログに userId が出る。
 - 許可した送信者の依頼で Claude Code が `--setting-sources project,local` 付きで起動し、回答まで進む。返信は、ダミーのトークンなので 401 で失敗する。
 - `CCJ_LINE_ALLOW_FROM` が空または `*` のときは、起動を拒否する。
+- `secrets` と `allow` で保存した値が `.env` に暗号化されて入り、`run` と `webhook` で復号して使われる。`allow` は userId の形式以外を拒否する。
 
 ## 実装を読んで分かった注意点
 
