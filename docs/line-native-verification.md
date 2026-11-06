@@ -14,9 +14,9 @@ LINE ──HTTPS──> Cloudflare Quick Tunnel ──> localhost:18080/callback
 |---|---|
 | `examples/line-native/config.toml` | 設定例。秘密情報と userId は含まない |
 | `scripts/line-native.sh` | 秘密情報と userId の保存、起動、テスト用 Webhook の送信、通数の確認 |
-| `~/.cc-connect-jtc/line-native/.env` | dotenvx で暗号化した、チャネルシークレット・チャネルアクセストークン・許可する userId |
-| `~/.cc-connect-jtc/line-native/.env.keys` | `.env` の復号鍵。リポジトリ外に置き、権限は 600 |
-| `~/.cc-connect-jtc/line-native/` のその他 | 実行時の設定の複製、`data/`（セッション）、`workspace/`（Claude の作業場所） |
+| `.env`（リポジトリ直下） | dotenvx で暗号化した、チャネルシークレット・チャネルアクセストークン・許可する userId。git の無視対象 |
+| `.env.keys`（リポジトリ直下） | `.env` の復号鍵。git の無視対象で、権限は 600 |
+| `~/.cc-connect-jtc/line-native/` | 実行時の設定の複製、`data/`（セッション）、`workspace/`（Claude の作業場所） |
 
 秘密情報と userId は、リポジトリ（public）・issue・チャットに書かない。
 
@@ -91,10 +91,11 @@ scripts/line-native.sh secrets
 
 チャネルシークレット、チャネルアクセストークンの順に聞かれる。入力内容は画面に表示されない。値を更新するときも、同じコマンドを実行する。
 
-- 値は `~/.cc-connect-jtc/line-native/.env` に暗号化して保存される。復号鍵は同じ場所の `.env.keys` に作られる。どちらもリポジトリの外にある。
+- 値はリポジトリ直下の `.env` に暗号化して保存される。復号鍵は同じ場所の `.env.keys` に作られる。どちらも `.gitignore` の対象で、スクリプトは保存の前に無視対象になっていることを確かめる。リポジトリは public なので、暗号化済みでも `.env` はコミットしない。
+- 実行時のデータ（セッション、Claude の作業場所）は `~/.cc-connect-jtc/line-native/` に置く。Claude の作業場所をリポジトリの外にしているのは、グループからの依頼で動く Claude に、`.env.keys` やこのリポジトリの設定を見せないため。
 - `dotenvx set` は値をコマンド引数で受け取るため、ほかのプロセスから見えたり、シェルの履歴に残ったりする。スクリプトは、読み取った値を `.env` に書いてすぐ `dotenvx encrypt` で暗号化する方式にしている。秘密情報を `dotenvx set` で直接入れない。
 - `run`・`webhook`・`quota` は、実行のたびに `.env` を復号して使う。同じ名前の環境変数がすでにあれば、そちらが優先される（ダミー値での確認用）。
-- 中身を確かめたいときは `dotenvx get -f ~/.cc-connect-jtc/line-native/.env` で復号して表示できる。画面に平文が出るので注意する。
+- 中身を確かめたいときは `dotenvx get -f .env` で復号して表示できる。画面に平文が出るので注意する。
 
 ## 4. 起動と Webhook の登録
 

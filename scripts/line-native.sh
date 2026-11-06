@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 段階 1（cc-connect 標準の LINE platform で実測）の補助スクリプト。
-# 秘密情報と許可する userId は、dotenvx で暗号化した ~/.cc-connect-jtc/line-native/.env に置く
-# （復号鍵は同じ場所の .env.keys）。平文の秘密をコマンド引数や履歴に残さない。
+# 秘密情報と許可する userId は、dotenvx で暗号化したリポジトリ直下の .env に置く
+# （復号鍵は同じ場所の .env.keys。どちらも .gitignore 対象）。平文の秘密をコマンド引数や履歴に残さない。
+# 実行時のデータ（セッション、Claude の作業場所）は ~/.cc-connect-jtc/line-native/ に置く。
 #
 #   scripts/line-native.sh secrets    # チャネルシークレットとアクセストークンを保存（対話入力）
 #   scripts/line-native.sh allow <userId>[,<userId>...]
@@ -17,7 +18,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export CCJ_LINE_NATIVE_HOME="${CCJ_LINE_NATIVE_HOME:-$HOME/.cc-connect-jtc/line-native}"
 export CCJ_LINE_PORT="${CCJ_LINE_PORT:-18080}"
 export CCJ_LOG_LEVEL="${CCJ_LOG_LEVEL:-info}"
-ENV_FILE="$CCJ_LINE_NATIVE_HOME/.env"
+ENV_FILE="${CCJ_ENV_FILE:-$REPO_ROOT/.env}"
+KEYS_FILE="$(dirname "$ENV_FILE")/.env.keys"
 umask 077
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -71,13 +73,25 @@ store_secret() {
   fi
 }
 
+# public リポジトリに誤ってコミットしないよう、.env と .env.keys が git の無視対象か確かめる
+ensure_ignored() {
+  local f dir
+  for f in "$ENV_FILE" "$KEYS_FILE"; do
+    dir="$(dirname "$f")"
+    if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      && ! git -C "$dir" check-ignore -q "$f"; then
+      die "$f が .gitignore の対象になっていません"
+    fi
+  done
+}
+
 cmd_secrets() {
   require_dotenvx
-  ensure_home
+  ensure_ignored
   echo "LINE Developers コンソールの値を入力します。入力内容は画面に表示されません。"
   store_secret CCJ_LINE_CHANNEL_SECRET "[1/2] チャネルシークレット"
   store_secret CCJ_LINE_CHANNEL_TOKEN "[2/2] チャネルアクセストークン（長期）"
-  echo "保存しました: ${ENV_FILE}（復号鍵: $CCJ_LINE_NATIVE_HOME/.env.keys）"
+  echo "保存しました: ${ENV_FILE}（復号鍵: ${KEYS_FILE}）"
 }
 
 cmd_allow() {
@@ -89,7 +103,7 @@ cmd_allow() {
     [[ "$id" =~ ^U[0-9a-f]{32}$ ]] || die "LINE の userId ではありません: '$id'"
   done
   require_dotenvx
-  ensure_home
+  ensure_ignored
   dotenvx set CCJ_LINE_ALLOW_FROM "$ids" -f "$ENV_FILE" >/dev/null 2>&1 || die "保存に失敗しました"
   echo "許可する userId を ${#list[@]} 件保存しました。cc-connect を再起動すると反映されます。"
 }
