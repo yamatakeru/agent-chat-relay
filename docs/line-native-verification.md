@@ -94,7 +94,6 @@ scripts/line-native.sh secrets
 - 値はリポジトリ直下の `.env` に暗号化して保存される。復号鍵は同じ場所の `.env.keys` に作られる。どちらも `.gitignore` の対象で、スクリプトは保存の前に無視対象になっていることを確かめる。リポジトリは public なので、暗号化済みでも `.env` はコミットしない。
 - 実行時のデータ（セッション、Claude の作業場所）は `.local/line-native/` に置く。作業場所は独立した git リポジトリとして初期化するので、Claude Code はそこをプロジェクトの起点にする。
 - 作業場所の位置は防壁にならない。承認された Bash はユーザー権限で読めるファイルをすべて読めるため、`.env.keys` を守るのは実行承認である。
-- Claude Code は上位ディレクトリの `CLAUDE.md` を読み込む。このリポジトリの直下に `CLAUDE.md` を置くと、グループからの依頼で動く Claude にも読まれる。置かない。
 - `dotenvx set` は値をコマンド引数で受け取るため、ほかのプロセスから見えたり、シェルの履歴に残ったりする。スクリプトは、読み取った値を `.env` に書いてすぐ `dotenvx encrypt` で暗号化する方式にしている。秘密情報を `dotenvx set` で直接入れない。
 - `run`・`webhook`・`quota` は、実行のたびに `.env` を復号して使う。同じ名前の環境変数がすでにあれば、そちらが優先される（ダミー値での確認用）。
 - 中身を確かめたいときは `dotenvx get -f .env` で復号して表示できる。画面に平文が出るので注意する。
@@ -180,7 +179,8 @@ userId を登録する前（手順 5）は、`note: 許可する userId が未�
 
 ## 設定の意図
 
-- `cmd = "claude --setting-sources project,local"`：`~/.claude/settings.json` の allow ルール（例：`Bash(find:*)` や `Bash(uv:*)`。どちらも任意のコードを実行できる）を、グループからの依頼で承認なしに使わせないため。
+- `cmd` の `--setting-sources project,local`：`~/.claude/settings.json` の allow ルール（例：`Bash(find:*)` や `Bash(uv:*)`。どちらも任意のコードを実行できる）を、グループからの依頼で承認なしに使わせないため。
+- `cmd` の `claudeMdExcludes`：あなたの `~/.claude/CLAUDE.md` や上位ディレクトリの `AGENTS.md` を、グループからの依頼で動く Claude に読ませないため。`--setting-sources` を指定しても、`~/.claude/CLAUDE.md` は読み込まれる（2.1.318 で確認）。
 - `disabled_commands`：`/mode` や `/allow` のように実行承認を迂回できるコマンドと、設定を変えるコマンドを無効にする。
 - `admin_from` を設定しない：`/shell` や `/dir` などの特権コマンドは、誰も使えない。
 - `reply_footer = false`：作業ディレクトリの絶対パスなどを、ルームに出さないため。

@@ -39,7 +39,12 @@ work_dir = "${CCJ_LINE_NATIVE_HOME}/workspace"
 mode = "default"
 # ユーザー設定（~/.claude/settings.json）の allow ルールや hooks を読み込ませない。
 # 読み込むと、find や uv のような任意のコードを実行できるコマンドが、承認なしで通ってしまう
-cmd = "claude --setting-sources project,local"
+# claudeMdExcludes：AGENTS.md・CLAUDE.md を読み込ませない。--setting-sources を指定しても、
+# ユーザーの ~/.claude/CLAUDE.md は読み込まれる（2.1.318 で確認）。上位ディレクトリの AGENTS.md も対象
+cmd = [
+  "claude", "--setting-sources", "project,local",
+  "--settings", '{"claudeMdExcludes":["**/AGENTS.md","**/CLAUDE.md"]}',
+]
 
 [[projects.platforms]]
 type = "line"
