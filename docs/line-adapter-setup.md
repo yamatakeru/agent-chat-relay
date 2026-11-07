@@ -11,9 +11,9 @@ LINE チャネルの作成、秘密情報の保存（`.env`）、userId の登�
 | `cmd/line`, `internal/` | アダプター（Go） |
 | `examples/line/config.toml` | cc-connect の設定（multi-workspace モード、cloud_web） |
 | `scripts/line.sh` | 起動・登録・テスト用の補助 |
-| `.local/line/`（git の無視対象） | `data/`（cc-connect のセッションと作業場所の割り当て）、`workspaces/`（ルームごとの作業場所）、`rooms.json`（ルームの登録） |
+| `.local/line/`（git の無視対象） | `data/`（cc-connect のセッションと作業場所の割り当て）、`workspaces/`（ルームごとの作業場所）、`rooms.json`（ルームの登録）、`media/`（LINE へ返した画像。7 日で消す） |
 
-アダプターは、`127.0.0.1:18080` で LINE の Webhook を、`127.0.0.1:18090` で cc-connect からの接続を待つ。外へ公開するのは Webhook だけで、Cloudflare Quick Tunnel を通す。
+アダプターは、`127.0.0.1:18080` で LINE の Webhook と、LINE へ返した画像（`/media/`）を、`127.0.0.1:18090` で cc-connect からの接続を待つ。外へ公開するのは 18080 だけで、Cloudflare Quick Tunnel を通す。画像の公開については ADR 0005 にある。
 
 ## 1. LINE Developers コンソールの設定
 
@@ -58,16 +58,22 @@ scripts/line.sh tunnel
 | 別のグループや 1 対 1 トーク | 会話も作業場所のファイルも混ざらない |
 | cc-connect を止めて依頼 | 「いまは停止中」と返る |
 | 処理中に cc-connect を止める | 「返事が届かなかった可能性があります」と知らせる |
+| 画像を送ってから、メンションして「この画像を説明して」 | 画像を見た答えが来る。画像だけでは反応しない |
+| ファイル（テキストや PDF）を送ってから、メンションして中身を尋ねる | ファイルを読んだ答えが来る |
+| 別の人が画像を送ったあとに、自分がメンションして依頼する | 別の人の画像は添えられない |
+| メンションして「図を PNG で作って LINE に送って」 | 承認依頼のあと、画像が届く。タップすると開ける |
 
 ## ローカルでの確認（実際の LINE を使わない）
 
-`CCJ_LINE_API_BASE` に LINE の API のモックを指定すると、送信をモックへ向けられる。`scripts/line.sh webhook` で、署名付きの Webhook をアダプターへ送れる。
+`CCJ_LINE_API_BASE` に LINE の API のモックを指定すると、送信と、画像・ファイルの取得（`CCJ_LINE_DATA_API_BASE` で別にもできる）をモックへ向けられる。`scripts/line.sh webhook` で、署名付きの Webhook をアダプターへ送れる。トンネルを通さないときは、画像を公開する URL の先頭を `CCJ_LINE_PUBLIC_URL`（例：`http://127.0.0.1:18080`）で指定する。
 
 ```sh
 scripts/line.sh webhook <groupId> <userId> "依頼" --mention        # グループでメンション
 scripts/line.sh webhook - <userId> "依頼"                          # 1 対 1 トーク
 scripts/line.sh webhook <groupId> <userId> "依頼" --mention 2      # 同じ Webhook を 2 回（重複）
 scripts/line.sh webhook <groupId> <userId> "依頼" --redelivery     # 再送
+scripts/line.sh webhook <groupId> <userId> x --image               # 画像の発言（本体はモックが返す）
+scripts/line.sh webhook <groupId> <userId> notes.txt --file        # ファイルの発言（text はファイル名）
 ```
 
 ダミーの値で試すときは、`CCJ_ENV_FILE` に存在しないファイルを指定し、秘密情報を環境変数で渡す。テストで Claude Code を起動すると、`~/.claude/projects/` に会話ログができるので、終わったら片付ける。
@@ -99,3 +105,23 @@ scripts/line.sh webhook <groupId> <userId> "依頼" --redelivery     # 再送
 段階 2 の検証で消費した通数は 0 通（段階 1 からの累計は、月 200 通のうち 31 通のまま）。今回の返事と案内は、すべて Reply で届いた。
 
 未確認：許可したメンバーが複数いるときの承認、受信モード「すべて」、長い答えの分割、通数の上限に達したときの案内、Webhook の再送（アダプターを止めている間の依頼）。
+
+### 2026-11-07 画像とファイル（PR #3・#4）
+
+モックで確かめた結果は PR #3（送信の並行化）と PR #4（画像とファイル）にある。
+
+実際の LINE で確かめた結果（2 人のグループ、許可したのは 1 人）：
+
+| 確かめること | 結果 |
+|---|---|
+| 画像を送ってから、メンションして説明を頼む | 画像を見た答えが届いた。画像だけでは反応しなかった |
+| Markdown のファイルを 2 つ送ってから、メンションして中身を尋ねる | 両方を読んだ答えが届いた |
+| 別の人が画像を送ったあとに、自分がメンションして依頼する | **未確認**（協力者がいなかった。モックでは確かめた） |
+| メンションして図を PNG で作って送るよう頼む | 承認のあと画像が届き、タップすると開けた |
+
+この検証で 3 通を消費した（月 200 通のうち累計 34 通）。
+
+気づいた点：
+
+- 図を作る途中で、Bash の承認を 5 回求められた（使えるライブラリの確認 2 回、作成、修正、送信）。Python の画像ライブラリがなく、Claude が PNG を手で組み立てたため、手数が増えた。UX の問題として #5 に記録した。
+- Claude は作業場所ではなく `/tmp/feeling/` に図を作った。Claude Code も、受け取った画像などを `/private/tmp/claude-<uid>/<作業場所のパス>/` に置く。どちらも macOS では再起動で消える場所なので、そのままにする。本番を Linux で動かすときは、`/tmp` が消えるかを確かめる。

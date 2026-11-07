@@ -11,8 +11,9 @@
 #   scripts/line.sh cc                # cc-connect を起動
 #   scripts/line.sh adapter           # アダプターを起動
 #   scripts/line.sh tunnel            # Cloudflare Quick Tunnel を起動
-#   scripts/line.sh webhook <groupId|-> <userId> <text> [--mention] [--redelivery] [--bad-signature] [times]
+#   scripts/line.sh webhook <groupId|-> <userId> <text> [--mention] [--image] [--file] [--redelivery] [--bad-signature] [times]
 #                                     # Webhook をローカルへ送る（groupId に - を渡すと 1 対 1 トーク）
+#                                     # --image・--file は画像・ファイルの発言にする（--file では text をファイル名にする）
 #   scripts/line.sh quota             # 今月の Push 等の消費通数と上限を表示
 set -euo pipefail
 
@@ -67,13 +68,15 @@ cmd_room() {
 }
 
 cmd_webhook() {
-  local group_id="${1:-}" user_id="${2:-}" text="${3:-}" times=1 mention=0 redelivery=0 bad=0
+  local group_id="${1:-}" user_id="${2:-}" text="${3:-}" times=1 mention=0 redelivery=0 bad=0 kind=text
   [[ -n "$group_id" && -n "$user_id" && -n "$text" ]] \
-    || die "usage: $0 webhook <groupId|-> <userId> <text> [--mention] [--redelivery] [--bad-signature] [times]"
+    || die "usage: $0 webhook <groupId|-> <userId> <text> [--mention] [--image] [--file] [--redelivery] [--bad-signature] [times]"
   shift 3
   for arg in "$@"; do
     case "$arg" in
       --mention) mention=1 ;;
+      --image) kind="image" ;;
+      --file) kind="file" ;;
       --redelivery) redelivery=1 ;;
       --bad-signature) bad=1 ;;
       *[!0-9]* | "") die "times は正の整数: $arg" ;;
@@ -82,13 +85,17 @@ cmd_webhook() {
   done
   make_tmp
   # 再送を模すため、times 回とも同じ本文（同じ webhookEventId）を送る
-  CCJ_G="$group_id" CCJ_U="$user_id" CCJ_T="$text" CCJ_M="$mention" CCJ_R="$redelivery" python3 -I -c '
+  CCJ_G="$group_id" CCJ_U="$user_id" CCJ_T="$text" CCJ_M="$mention" CCJ_R="$redelivery" CCJ_K="$kind" python3 -I -c '
 import json, os, time, uuid
 now = int(time.time() * 1000)
 g, u, text = os.environ["CCJ_G"], os.environ["CCJ_U"], os.environ["CCJ_T"]
 src = {"type": "user", "userId": u} if g == "-" else {"type": "group", "groupId": g, "userId": u}
 msg = {"id": str(now), "type": "text", "quoteToken": "local-test", "text": text}
-if os.environ["CCJ_M"] == "1":
+if os.environ["CCJ_K"] == "image":
+    msg = {"id": str(now), "type": "image", "contentProvider": {"type": "line"}}
+elif os.environ["CCJ_K"] == "file":
+    msg = {"id": str(now), "type": "file", "fileName": text, "fileSize": 1000}
+elif os.environ["CCJ_M"] == "1":
     msg["text"] = "@Bot " + text
     msg["mention"] = {"mentionees": [{"index": 0, "length": 4, "type": "user", "isSelf": True}]}
 print(json.dumps({"destination": "local-test", "events": [{

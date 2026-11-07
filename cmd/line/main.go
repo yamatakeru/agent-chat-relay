@@ -116,6 +116,29 @@ func parseAllowFrom(s string) (map[string]bool, error) {
 	return allow, nil
 }
 
+// retention は、受け取った添付と、LINE へ返した画像を残す期間。
+const retention = 7 * 24 * time.Hour
+
+// prune は、保存期間を過ぎた添付と公開した画像を、起動時と 1 時間ごとに消す。
+func prune(ctx context.Context, bindings *workspace.Bindings, media *line.Media) {
+	tick := time.NewTicker(time.Hour)
+	defer tick.Stop()
+	for {
+		now := time.Now()
+		if err := bindings.PruneAttachments(retention, now); err != nil {
+			slog.Warn("line: prune attachments", "error", err)
+		}
+		if err := media.Prune(retention, now); err != nil {
+			slog.Warn("line: prune media", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
 func serve() error {
 	level := slog.LevelInfo
 	if env("CCJ_LOG_LEVEL", "info") == "debug" {
@@ -132,11 +155,14 @@ func serve() error {
 	}
 
 	const platform = "line"
-	cw := &cloudweb.Server{Token: os.Getenv("CCJ_CLOUDWEB_TOKEN"), Platform: platform}
+	// 受け取るのはテキストと画像。ファイルは LINE へ送れないので宣言しない（ADR 0005）
+	cw := &cloudweb.Server{Token: os.Getenv("CCJ_CLOUDWEB_TOKEN"), Platform: platform, Capabilities: []string{"text", "image"}}
 	client := &line.Client{
-		BaseURL: env("CCJ_LINE_API_BASE", "https://api.line.me"),
-		Token:   os.Getenv("CCJ_LINE_CHANNEL_TOKEN"),
+		BaseURL:     strings.TrimRight(env("CCJ_LINE_API_BASE", "https://api.line.me"), "/"),
+		DataBaseURL: strings.TrimRight(env("CCJ_LINE_DATA_API_BASE", env("CCJ_LINE_API_BASE", "https://api-data.line.me")), "/"),
+		Token:       os.Getenv("CCJ_LINE_CHANNEL_TOKEN"),
 	}
+	media := &line.Media{Dir: filepath.Join(home(), "media")}
 	bindings := &workspace.Bindings{
 		Path:     filepath.Join(home(), "data", "workspace_bindings.json"),
 		Project:  env("CCJ_CC_PROJECT", "line"),
@@ -144,8 +170,9 @@ func serve() error {
 		BaseDir:  filepath.Join(home(), "workspaces"),
 	}
 	adapter := line.New(
-		line.Config{ChannelSecret: os.Getenv("CCJ_LINE_CHANNEL_SECRET"), AllowFrom: allow, Platform: platform},
-		client, cw, bindings, &line.Rooms{Path: roomsPath()},
+		line.Config{ChannelSecret: os.Getenv("CCJ_LINE_CHANNEL_SECRET"), AllowFrom: allow, Platform: platform,
+			PublicURL: os.Getenv("CCJ_LINE_PUBLIC_URL")},
+		client, cw, bindings, &line.Rooms{Path: roomsPath()}, media,
 	)
 	cw.OnFrame = adapter.OnFrame
 	cw.OnDisconnect = adapter.OnDisconnect
@@ -153,9 +180,12 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go adapter.Run(ctx)
+	go prune(ctx, bindings, media)
 
+	// トンネルで公開するのは、Webhook の受け口と、LINE へ返した画像だけ
 	webhookMux := http.NewServeMux()
 	webhookMux.Handle("/callback", adapter)
+	webhookMux.Handle("GET /media/{name}", media)
 	cwMux := http.NewServeMux()
 	cwMux.Handle("/cloud-web/ws", cw)
 
