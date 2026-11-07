@@ -33,6 +33,8 @@ const (
 	replyTokenTTL = 50 * time.Second
 	// LINE の再送に備え、webhookEventId を覚えておく期間。
 	seenTTL = 24 * time.Hour
+	// ルームごとに、送信を待たせておける数。LINE に送れない状態が続いたときに溢れた分は捨てる。
+	maxOutbox = 100
 )
 
 // Sender は、cc-connect へ発言を渡す口（cloudweb.Server）。
@@ -77,7 +79,18 @@ type replyToken struct {
 	at    time.Time
 }
 
+// outgoing は、LINE へ送る 1 回分。
+type outgoing struct {
+	texts  []string
+	token  string // 指定があれば、この Reply トークンで返す（参加時の案内）
+	notice bool   // 案内：Reply でだけ送る（通数を使わない）
+}
+
 type roomState struct {
+	id      string
+	outbox  []outgoing // LINE への送信待ち（順に送る）
+	sending bool       // LINE へ送っている途中
+
 	tokens []replyToken       // 未使用の Reply トークン
 	wait   waitKind           // 承認待ち・回答待ち
 	held   []cloudweb.Message // 待ちの間に保留した発言（受信モードが「すべて」のとき）
@@ -85,7 +98,9 @@ type roomState struct {
 	quota  bool               // 通数の上限で Push できなかった（次の Reply で伝える）
 }
 
-// Adapter は、すべての処理を 1 つのゴルーチンで順に行う（ルームの状態に鍵をかけないため）。
+// Adapter は、状態の読み書きを 1 つのゴルーチン（Run）で順に行う（ルームの状態に鍵をかけないため）。
+// LINE への送信は時間がかかるので、別のゴルーチンで行い、結果だけを Run に戻す。
+// 送信はルームごとに 1 つずつ順に行い、ルームが違えば並行に行う。
 type Adapter struct {
 	cfg   Config
 	line  Messenger
@@ -93,7 +108,11 @@ type Adapter struct {
 	bind  Binder
 	rooms RoomLookup
 	now   func() time.Time
+	// spawn は、io を Run の外で実行し、終わったら done を Run で実行する（テストでは同期的に置き換える）
+	spawn func(io, done func())
 
+	ctx    context.Context // Run が終わると取り消される（送信中の HTTP も止まる）
+	stop   context.CancelFunc
 	events chan func()
 	state  map[string]*roomState
 	seen   map[string]time.Time
@@ -101,16 +120,26 @@ type Adapter struct {
 
 // New は Adapter を作る。Run を別のゴルーチンで動かしてから使う。
 func New(cfg Config, line Messenger, cc Sender, bind Binder, rooms RoomLookup) *Adapter {
-	return &Adapter{
+	ctx, stop := context.WithCancel(context.Background())
+	a := &Adapter{
 		cfg: cfg, line: line, cc: cc, bind: bind, rooms: rooms, now: time.Now,
+		ctx: ctx, stop: stop,
 		events: make(chan func(), 256),
 		state:  map[string]*roomState{},
 		seen:   map[string]time.Time{},
 	}
+	a.spawn = func(io, done func()) {
+		go func() {
+			io()
+			a.enqueue(done)
+		}()
+	}
+	return a
 }
 
 // Run は、ctx が終わるまで処理を順に実行する。
 func (a *Adapter) Run(ctx context.Context) {
+	defer a.stop()
 	for {
 		select {
 		case f := <-a.events:
@@ -121,7 +150,12 @@ func (a *Adapter) Run(ctx context.Context) {
 	}
 }
 
-func (a *Adapter) enqueue(f func()) { a.events <- f }
+func (a *Adapter) enqueue(f func()) {
+	select {
+	case a.events <- f:
+	case <-a.ctx.Done():
+	}
+}
 
 // OnFrame は、cc-connect から届いた返事を受け取る（cloudweb.Server.OnFrame に渡す）。
 func (a *Adapter) OnFrame(f cloudweb.Frame) { a.enqueue(func() { a.handleFrame(f) }) }
@@ -159,7 +193,7 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *Adapter) room(id string) *roomState {
 	st := a.state[id]
 	if st == nil {
-		st = &roomState{}
+		st = &roomState{id: id}
 		a.state[id] = st
 	}
 	return st
@@ -205,7 +239,9 @@ func (a *Adapter) handleEvent(ev event) {
 	if ev.Type == "join" {
 		if _, ok := a.rooms.Lookup(roomID); !ok {
 			slog.Info("line: joined unregistered group", "group", roomID)
-			a.replyOnly(ev.ReplyToken, msgUnregistered)
+			if ev.ReplyToken != "" {
+				a.queue(a.room(roomID), outgoing{texts: []string{msgUnregistered}, token: ev.ReplyToken, notice: true})
+			}
 		}
 		return
 	}
@@ -319,12 +355,12 @@ func (a *Adapter) handleFrame(f cloudweb.Frame) {
 	switch classify(f.Content) {
 	case kindPermissionPrompt:
 		st.wait = waitPermission
-		a.deliver(roomID, st, withoutAllowAll(f.Content))
+		a.deliver(st, withoutAllowAll(f.Content))
 	case kindPermissionHint:
-		a.deliver(roomID, st, withoutAllowAll(f.Content))
+		a.deliver(st, withoutAllowAll(f.Content))
 	case kindQuestion:
 		st.wait = waitQuestion
-		a.deliver(roomID, st, f.Content)
+		a.deliver(st, f.Content)
 	case kindQueued:
 		// 順番待ちの受け付けは出さない（Reply トークンを答えのために残す）
 	case kindHelper:
@@ -333,7 +369,7 @@ func (a *Adapter) handleFrame(f cloudweb.Frame) {
 		a.flush(st)
 	default:
 		st.wait, st.busy = waitNone, false
-		a.deliver(roomID, st, f.Content)
+		a.deliver(st, f.Content)
 		a.flush(st)
 	}
 }
@@ -348,9 +384,9 @@ func (a *Adapter) flush(st *roomState) {
 }
 
 func (a *Adapter) handleDisconnect() {
-	for id, st := range a.state {
+	for _, st := range a.state {
 		if st.busy || st.wait != waitNone || len(st.held) > 0 {
-			a.deliver(id, st, msgLost)
+			a.deliver(st, msgLost)
 		}
 		st.busy, st.wait, st.held = false, waitNone, nil
 	}
@@ -367,55 +403,87 @@ func (st *roomState) takeToken(now time.Time) (string, bool) {
 	return t.token, true
 }
 
-// deliver は、使える Reply トークンがあれば Reply、なければ Push で送る。
-func (a *Adapter) deliver(roomID string, st *roomState, text string) {
-	bubbles := splitBubbles(text)
-	if len(bubbles) == 0 {
+// deliver は、返事を送信待ちに加える。使える Reply トークンがあれば Reply、なければ Push で送る。
+func (a *Adapter) deliver(st *roomState, text string) {
+	if bubbles := splitBubbles(text); len(bubbles) > 0 {
+		a.queue(st, outgoing{texts: bubbles})
+	}
+}
+
+// notify は、案内を送信待ちに加える。案内は Reply でだけ返す（通数を使わない）。
+func (a *Adapter) notify(st *roomState, text string) {
+	a.queue(st, outgoing{texts: []string{text}, notice: true})
+}
+
+func (a *Adapter) queue(st *roomState, out outgoing) {
+	if len(st.outbox) >= maxOutbox {
+		slog.Error("line: outbox full, message dropped", "room", st.id)
 		return
 	}
-	ctx := context.Background()
-	if tok, ok := st.takeToken(a.now()); ok {
-		withNotice := bubbles
-		if st.quota && len(bubbles) < maxBubbles {
-			withNotice = append([]string{msgQuota}, bubbles...)
+	st.outbox = append(st.outbox, out)
+	a.sendNext(st)
+}
+
+// sendNext は、ルームの送信待ちの先頭を送る。Reply トークンは送る直前に選ぶ（待つ間に新しいトークンが届くため）。
+func (a *Adapter) sendNext(st *roomState) {
+	for !st.sending && len(st.outbox) > 0 {
+		out := st.outbox[0]
+		st.outbox = st.outbox[1:]
+		tok := out.token
+		if tok == "" {
+			tok, _ = st.takeToken(a.now())
 		}
-		err := a.line.Reply(ctx, tok, withNotice)
+		if out.notice && tok == "" {
+			slog.Info("line: notice not sent (no reply token)", "notice", out.texts[0])
+			continue
+		}
+		withQuota := tok != "" && !out.notice && st.quota && len(out.texts) < maxBubbles
+		texts := out.texts
+		if withQuota {
+			texts = append([]string{msgQuota}, out.texts...)
+		}
+		var res sendResult
+		st.sending = true
+		a.spawn(func() {
+			res = a.send(st.id, tok, texts, out.texts, !out.notice)
+		}, func() {
+			st.sending = false
+			if withQuota && res.replied {
+				st.quota = false
+			}
+			if res.quotaExceeded {
+				// このときは使える Reply トークンがない。次に Reply で送るときに書き添える
+				st.quota = true
+			}
+			a.sendNext(st)
+		})
+	}
+}
+
+type sendResult struct {
+	replied       bool // Reply で送れた
+	quotaExceeded bool // 通数の上限で Push できなかった
+}
+
+// send は、LINE へ送る（Run の外で動く。ルームの状態には触れない）。
+// tok があれば replyTexts を Reply で送り、トークンが無効なら pushTexts を Push で送る（push が偽なら送らない）。
+func (a *Adapter) send(roomID, tok string, replyTexts, pushTexts []string, push bool) sendResult {
+	if tok != "" {
+		err := a.line.Reply(a.ctx, tok, replyTexts)
 		if err == nil {
-			st.quota = false
-			return
+			return sendResult{replied: true}
 		}
-		if ae, ok := errors.AsType[*APIError](err); !ok || !ae.InvalidReplyToken() {
+		if ae, ok := errors.AsType[*APIError](err); !ok || !ae.InvalidReplyToken() || !push {
 			// 送れたかどうか分からない場合に Push すると二重に届くので、記録だけにする
 			slog.Error("line: reply failed", "room", roomID, "error", err)
-			return
+			return sendResult{}
 		}
 	}
-	err := a.line.Push(ctx, roomID, bubbles)
+	err := a.line.Push(a.ctx, roomID, pushTexts)
 	if err == nil {
-		return
+		return sendResult{}
 	}
 	slog.Error("line: push failed", "room", roomID, "error", err)
-	if ae, ok := errors.AsType[*APIError](err); ok && ae.QuotaExceeded() {
-		// このときは使える Reply トークンがない。次に Reply で送るときに書き添える
-		st.quota = true
-	}
-}
-
-// notify は、案内を Reply でだけ返す（通数を使わない）。使えるトークンがなければ記録だけにする。
-func (a *Adapter) notify(st *roomState, text string) {
-	tok, ok := st.takeToken(a.now())
-	if !ok {
-		slog.Info("line: notice not sent (no reply token)", "notice", text)
-		return
-	}
-	a.replyOnly(tok, text)
-}
-
-func (a *Adapter) replyOnly(token, text string) {
-	if token == "" {
-		return
-	}
-	if err := a.line.Reply(context.Background(), token, []string{text}); err != nil {
-		slog.Warn("line: reply failed", "error", err)
-	}
+	ae, ok := errors.AsType[*APIError](err)
+	return sendResult{quotaExceeded: ok && ae.QuotaExceeded()}
 }
