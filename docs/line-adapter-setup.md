@@ -123,6 +123,5 @@ scripts/line.sh webhook <groupId> <userId> notes.txt --file        # ファイ�
 
 気づいた点：
 
-- 図を作る途中で、Bash の承認を 5 回求められた（使えるライブラリの確認 2 回、作成、修正、送信）。Python の画像ライブラリがなく、Claude が PNG を手で組み立てたため、手数が増えた。
-- Claude は作業場所ではなく `/tmp/feeling/` に図を作った。ほかのルームからも見える場所で、7 日での削除の対象にもならない。
-- Claude Code は、受け取った画像などを `/private/tmp/claude-<uid>/<作業場所のパス>/` にも置く。ここも削除の対象外。
+- 図を作る途中で、Bash の承認を 5 回求められた（使えるライブラリの確認 2 回、作成、修正、送信）。Python の画像ライブラリがなく、Claude が PNG を手で組み立てたため、手数が増えた。UX の問題として #5 に記録した。
+- Claude は作業場所ではなく `/tmp/feeling/` に図を作った。Claude Code も、受け取った画像などを `/private/tmp/claude-<uid>/<作業場所のパス>/` に置く。どちらも macOS では再起動で消える場所なので、そのままにする。本番を Linux で動かすときは、`/tmp` が消えるかを確かめる。
