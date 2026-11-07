@@ -504,9 +504,7 @@ func TestOutboxOverflowDrops(t *testing.T) {
 // imageMsg と fileMsg は、画像とファイルの発言イベントを作る（メンションは付けられない）。
 func (h *harness) imageMsg(group, user, id string) event {
 	ev := h.groupMsg(group, user, "", false)
-	ev.Message = &message{ID: id, Type: "image", ContentProvider: &struct {
-		Type string `json:"type"`
-	}{"line"}}
+	ev.Message = &message{ID: id, Type: "image", ContentProvider: &contentProvider{"line"}}
 	return ev
 }
 
@@ -606,7 +604,7 @@ func TestApprovalDoesNotTakeAttachments(t *testing.T) {
 }
 
 func TestImageFromCCConnect(t *testing.T) {
-	data := base64.StdEncoding.EncodeToString([]byte("png"))
+	data := []byte("png")
 	imageFrame := func(h *harness) {
 		h.a.handleFrame(cloudweb.Frame{Type: "image", SessionKey: "line:" + userA, ReplyCtx: userA, Data: data, MimeType: "image/png"})
 	}
@@ -640,5 +638,24 @@ func TestImageFromCCConnect(t *testing.T) {
 	imageFrame(h)
 	if got := h.lastSent(t); got.texts[0] != msgBadImage {
 		t.Errorf("unexpected: %+v", got)
+	}
+}
+
+// cc-connect に渡せなかった依頼の画像は預かり直し、送り直した依頼に添える。
+func TestAttachmentsKeptWhenForwardFails(t *testing.T) {
+	h := newHarness(nil)
+	h.line.contents["101"] = content{data: []byte("img"), mime: "image/png"}
+	ev := h.imageMsg(group1, userA, "101")
+	ev.Source = source{Type: "user", UserID: userA}
+	h.a.handleEvent(ev)
+	h.cc.connected = false
+	h.a.handleEvent(h.directMsg(userA, "describe"))
+	if got := h.lastSent(t); got.texts[0] != msgStopped {
+		t.Fatalf("unexpected: %+v", got)
+	}
+	h.cc.connected = true
+	h.a.handleEvent(h.directMsg(userA, "describe"))
+	if len(h.cc.msgs) != 1 || len(h.cc.msgs[0].Images) != 1 {
+		t.Errorf("image not kept: %+v", h.cc.msgs)
 	}
 }

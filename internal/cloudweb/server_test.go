@@ -79,7 +79,7 @@ func TestServer(t *testing.T) {
 	for _, want := range []string{"reply", "image"} { // card は渡さない
 		select {
 		case f := <-frames:
-			if f.Type != want || f.ReplyCtx != "C1" || (want == "reply" && f.Content != "answer") || (want == "image" && f.Data != "AAA=") {
+			if f.Type != want || f.ReplyCtx != "C1" || (want == "reply" && f.Content != "answer") || (want == "image" && len(f.Data) != 2) {
 				t.Errorf("unexpected frame: %+v", f)
 			}
 		case <-time.After(2 * time.Second):

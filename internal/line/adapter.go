@@ -3,6 +3,7 @@
 package line
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -385,14 +386,19 @@ func (a *Adapter) handleText(ev event, st *roomState, chatType string, all bool)
 		a.notify(st, msgRedelivered)
 		return
 	}
+	var atts []attachment
 	if !isApproval {
-		msg.Images, msg.Files = a.takeAttachments(st, user)
+		atts = a.takeAttachments(st, user)
+		msg.Images, msg.Files = splitAttachments(atts)
 	}
 	if hold {
 		st.held = append(st.held, msg)
 		return
 	}
-	a.forward(st, msg, !isApproval)
+	if !a.forward(st, msg, !isApproval) && len(atts) > 0 {
+		// 渡せなかったら預かり直す。送り直した依頼に添えるため
+		st.attachments[user] = append(atts, st.attachments[user]...)
+	}
 }
 
 // receiveAttachment は、画像やファイルを LINE から取得して預かる。同じ人の次の依頼に添える。
@@ -413,12 +419,16 @@ func (a *Adapter) receiveAttachment(ev event, st *roomState, user string) {
 		return
 	}
 
-	var data []byte
-	var mime string
+	var att cloudweb.Attachment
 	var err error
 	st.downloading[user]++
 	a.spawn(func() {
-		data, mime, err = a.line.Content(a.ctx, m.ID, limit)
+		var data []byte
+		data, att.MimeType, err = a.line.Content(a.ctx, m.ID, limit)
+		if err == nil {
+			att.MimeType = cmp.Or(att.MimeType, http.DetectContentType(data))
+			att.Data, att.FileName = base64.StdEncoding.EncodeToString(data), m.FileName
+		}
 	}, func() {
 		switch {
 		case errors.Is(err, ErrTooLarge):
@@ -427,12 +437,7 @@ func (a *Adapter) receiveAttachment(ev event, st *roomState, user string) {
 			slog.Warn("line: get content", "room", st.id, "error", err)
 			a.notify(st, msgFetchFailed)
 		default:
-			if mime == "" {
-				mime = http.DetectContentType(data)
-			}
-			att := attachment{at: a.now(), image: isImage,
-				data: cloudweb.Attachment{MimeType: mime, Data: base64.StdEncoding.EncodeToString(data), FileName: m.FileName}}
-			list := append(st.attachments[user], att)
+			list := append(st.attachments[user], attachment{at: a.now(), image: isImage, data: att})
 			st.attachments[user] = list[max(0, len(list)-maxAttachments):]
 			time.AfterFunc(attachmentTTL, func() { a.enqueue(func() { a.expireAttachments(st, user) }) })
 		}
@@ -449,16 +454,21 @@ func (a *Adapter) receiveAttachment(ev event, st *roomState, user string) {
 }
 
 // takeAttachments は、預かっている画像とファイルのうち期限内のものを取り出す。
-func (a *Adapter) takeAttachments(st *roomState, user string) (images, files []cloudweb.Attachment) {
+func (a *Adapter) takeAttachments(st *roomState, user string) []attachment {
 	a.expireAttachments(st, user)
-	for _, att := range st.attachments[user] {
+	atts := st.attachments[user]
+	delete(st.attachments, user)
+	return atts
+}
+
+func splitAttachments(atts []attachment) (images, files []cloudweb.Attachment) {
+	for _, att := range atts {
 		if att.image {
 			images = append(images, att.data)
 		} else {
 			files = append(files, att.data)
 		}
 	}
-	delete(st.attachments, user)
 	return images, files
 }
 
@@ -473,25 +483,26 @@ func (a *Adapter) expireAttachments(st *roomState, user string) {
 	st.attachments[user] = list
 }
 
-// forward は、割り当てを確かめてから cc-connect へ発言を渡す。
-func (a *Adapter) forward(st *roomState, msg cloudweb.Message, request bool) {
+// forward は、割り当てを確かめてから cc-connect へ発言を渡す。渡せなければ案内を返し、false を返す。
+func (a *Adapter) forward(st *roomState, msg cloudweb.Message, request bool) bool {
 	if !a.cc.Connected() {
 		a.notify(st, msgStopped)
-		return
+		return false
 	}
 	if err := a.bind.Ensure(msg.ChatID); err != nil {
 		slog.Error("line: ensure workspace", "error", err)
 		a.notify(st, msgInternal)
-		return
+		return false
 	}
 	if err := a.cc.Send(msg); err != nil {
 		slog.Warn("line: send to cc-connect", "error", err)
 		a.notify(st, msgStopped)
-		return
+		return false
 	}
 	if request {
 		st.busy = true
 	}
+	return true
 }
 
 func (a *Adapter) handleFrame(f cloudweb.Frame) {
@@ -504,12 +515,9 @@ func (a *Adapter) handleFrame(f cloudweb.Frame) {
 	}
 	st := a.room(roomID)
 	if f.Type == "image" {
-		data, err := base64.StdEncoding.DecodeString(f.Data)
-		if err != nil || len(data) == 0 {
-			slog.Warn("line: invalid image from cc-connect", "room", roomID)
-			return
+		if len(f.Data) > 0 {
+			a.queue(st, outgoing{image: f.Data})
 		}
-		a.queue(st, outgoing{image: data})
 		return
 	}
 	switch classify(f.Content) {
@@ -600,6 +608,7 @@ func (a *Adapter) sendNext(st *roomState) {
 		quota := tok != "" && !out.notice && st.quota
 		publicURL := a.publicURL
 		var res sendResult
+		var noticed bool // 通数の上限の案内を書き添えた
 		st.sending = true
 		a.spawn(func() {
 			msgs := out.msgs
@@ -608,17 +617,15 @@ func (a *Adapter) sendNext(st *roomState) {
 			}
 			replyMsgs, pushMsgs := msgs, msgs
 			if quota && len(msgs) < maxBubbles {
-				replyMsgs = append(textMessages(msgQuota), msgs...)
-				res.quotaNoticed = true
+				replyMsgs, noticed = append(textMessages(msgQuota), msgs...), true
 			}
 			if out.notice {
 				pushMsgs = nil // 案内は Push しない
 			}
-			r := a.send(st.id, tok, replyMsgs, pushMsgs)
-			res.replied, res.quotaExceeded = r.replied, r.quotaExceeded
+			res = a.send(st.id, tok, replyMsgs, pushMsgs)
 		}, func() {
 			st.sending = false
-			if res.quotaNoticed && res.replied {
+			if noticed && res.replied {
 				st.quota = false
 			}
 			if res.quotaExceeded {
@@ -650,7 +657,6 @@ func (a *Adapter) imageMessages(publicURL string, data []byte) []OutMessage {
 type sendResult struct {
 	replied       bool // Reply で送れた
 	quotaExceeded bool // 通数の上限で Push できなかった
-	quotaNoticed  bool // 通数の上限の案内を書き添えた
 }
 
 // send は、LINE へ送る（Run の外で動く。ルームの状態には触れない）。

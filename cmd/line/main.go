@@ -120,7 +120,7 @@ func parseAllowFrom(s string) (map[string]bool, error) {
 const retention = 7 * 24 * time.Hour
 
 // prune は、保存期間を過ぎた添付と公開した画像を、起動時と 1 時間ごとに消す。
-func prune(ctx context.Context, bindings *workspace.Bindings, mediaDir string) {
+func prune(ctx context.Context, bindings *workspace.Bindings, media *line.Media) {
 	tick := time.NewTicker(time.Hour)
 	defer tick.Stop()
 	for {
@@ -128,7 +128,7 @@ func prune(ctx context.Context, bindings *workspace.Bindings, mediaDir string) {
 		if err := bindings.PruneAttachments(retention, now); err != nil {
 			slog.Warn("line: prune attachments", "error", err)
 		}
-		if err := workspace.PruneOld(mediaDir, retention, now); err != nil {
+		if err := media.Prune(retention, now); err != nil {
 			slog.Warn("line: prune media", "error", err)
 		}
 		select {
@@ -158,8 +158,8 @@ func serve() error {
 	// 受け取るのはテキストと画像。ファイルは LINE へ送れないので宣言しない（ADR 0005）
 	cw := &cloudweb.Server{Token: os.Getenv("CCJ_CLOUDWEB_TOKEN"), Platform: platform, Capabilities: []string{"text", "image"}}
 	client := &line.Client{
-		BaseURL:     env("CCJ_LINE_API_BASE", "https://api.line.me"),
-		DataBaseURL: env("CCJ_LINE_DATA_API_BASE", env("CCJ_LINE_API_BASE", "https://api-data.line.me")),
+		BaseURL:     strings.TrimRight(env("CCJ_LINE_API_BASE", "https://api.line.me"), "/"),
+		DataBaseURL: strings.TrimRight(env("CCJ_LINE_DATA_API_BASE", env("CCJ_LINE_API_BASE", "https://api-data.line.me")), "/"),
 		Token:       os.Getenv("CCJ_LINE_CHANNEL_TOKEN"),
 	}
 	media := &line.Media{Dir: filepath.Join(home(), "media")}
@@ -180,7 +180,7 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go adapter.Run(ctx)
-	go prune(ctx, bindings, media.Dir)
+	go prune(ctx, bindings, media)
 
 	// トンネルで公開するのは、Webhook の受け口と、LINE へ返した画像だけ
 	webhookMux := http.NewServeMux()

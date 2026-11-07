@@ -27,6 +27,9 @@ type Bindings struct {
 	mu sync.Mutex
 }
 
+// platformDir は、この platform のルームの作業場所を置くディレクトリ。
+func (b *Bindings) platformDir() string { return filepath.Join(b.BaseDir, b.Platform) }
+
 type binding struct {
 	ChannelName string `json:"channel_name"`
 	Workspace   string `json:"workspace"`
@@ -39,7 +42,7 @@ func (b *Bindings) Ensure(roomID string) error {
 	if !safeID.MatchString(b.Platform) || !safeID.MatchString(roomID) {
 		return fmt.Errorf("workspace: invalid id %q:%q", b.Platform, roomID)
 	}
-	dir, err := filepath.Abs(filepath.Join(b.BaseDir, b.Platform, roomID))
+	dir, err := filepath.Abs(filepath.Join(b.platformDir(), roomID))
 	if err != nil {
 		return err
 	}

@@ -49,7 +49,7 @@ type Frame struct {
 	SessionKey string `json:"session_key"`
 	ReplyCtx   string `json:"reply_ctx"`
 	Content    string `json:"content"`   // reply
-	Data       string `json:"data"`      // image（Base64）
+	Data       []byte `json:"data"`      // image（JSON では Base64。受け取るときにデコードされる）
 	MimeType   string `json:"mime_type"` // image
 }
 
@@ -148,7 +148,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var f Frame
 		if err := json.Unmarshal(raw, &f); err != nil {
-			slog.Debug("cloudweb: invalid frame", "error", err)
+			slog.Warn("cloudweb: invalid frame", "error", err)
 			continue
 		}
 		if f.Type != "reply" && f.Type != "image" {

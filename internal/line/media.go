@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/jpeg"
 	_ "image/png" // PNG を読めるようにする
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/image/draw"
+
+	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/prune"
 )
 
 // LINE の画像メッセージの条件（JPEG・PNG、本体は 10MB、プレビューは 1MB まで）。
@@ -24,6 +27,9 @@ const (
 	// 読み込む画素数の上限（巨大な画像でメモリを使い切らないため）。
 	maxImagePixels = 50_000_000
 )
+
+// 送れる画像の MIME タイプと拡張子。
+var imageExt = map[string]string{"image/jpeg": ".jpg", "image/png": ".png"}
 
 // ErrUnsupportedImage は、LINE に送れない画像（形式・大きさ）のときに Publish が返す。
 var ErrUnsupportedImage = errors.New("line: unsupported image")
@@ -40,14 +46,8 @@ type Media struct {
 
 // Publish は、画像を保存し、本体とプレビューのファイル名を返す。
 func (m *Media) Publish(data []byte) (orig, preview string, err error) {
-	ext := ""
-	switch http.DetectContentType(data) {
-	case "image/jpeg":
-		ext = ".jpg"
-	case "image/png":
-		ext = ".png"
-	}
-	if ext == "" || len(data) > maxImageBytes {
+	ext, ok := imageExt[http.DetectContentType(data)]
+	if !ok || len(data) > maxImageBytes {
 		return "", "", ErrUnsupportedImage
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
@@ -110,10 +110,15 @@ func shrink(data []byte) ([]byte, error) {
 	return nil, ErrUnsupportedImage
 }
 
-// ServeHTTP は、公開した画像を返す（/media/<名前>）。名前の形に合わないものは 404 にする。
+// Prune は、公開から maxAge を過ぎた画像を消す。消した画像は LINE で開けなくなる。
+func (m *Media) Prune(maxAge time.Duration, now time.Time) error {
+	return prune.Old(m.Dir, maxAge, now)
+}
+
+// ServeHTTP は、公開した画像を返す（GET /media/{name} に登録する）。名前の形に合わないものは 404 にする。
 func (m *Media) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if (r.Method != http.MethodGet && r.Method != http.MethodHead) || !mediaName.MatchString(name) {
+	if !mediaName.MatchString(name) {
 		http.NotFound(w, r)
 		return
 	}
@@ -124,7 +129,7 @@ func (m *Media) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	h := w.Header()
-	h.Set("Content-Type", map[string]string{".jpg": "image/jpeg", ".png": "image/png"}[filepath.Ext(name)])
+	h.Set("Content-Type", mime.TypeByExtension(filepath.Ext(name)))
 	h.Set("Cache-Control", "private, max-age=604800")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Robots-Tag", "noindex")
