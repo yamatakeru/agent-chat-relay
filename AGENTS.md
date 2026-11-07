@@ -10,7 +10,7 @@ cc-connect の外部アダプター群。LINE・LINE WORKS・Chatwork のルー�
 
 ## このディレクトリの中で完結させる
 
-- ツールは `mise.toml` で版を固定し、`mise exec --` で使う。グローバルには入れない。
+- ツールは `mise.toml` で版を固定し、`mise exec --` で使う。グローバルの環境に頼らない。Go のキャッシュも `mise.toml` の `[env]` で `.local/go/` に向けている。
 - 実行時のデータ、調査用のソース、一時ファイルは `.local/`（git の無視対象）に置く。ホーム、`~/Library/Caches`、`/tmp` には作らない。設定ファイルの複製のような、不要な中間物も作らない。
 - cc-connect のソースは `.local/src/` に、`mise.toml` と同じ版のタグを clone して読む。
 - テストで Claude Code を起動すると、`~/.claude/projects/` に会話ログができる。終わったら片付ける。
