@@ -17,24 +17,18 @@ func TestEnsureWritesCCConnectFormat(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"project:other":{"x:1":{"channel_name":"x","workspace":"/w","bound_at":""}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b := &Bindings{Path: path, Project: "line", BaseDir: filepath.Join(dir, "ws")}
-
-	ws, err := b.Ensure("line", "C0123")
-	if err != nil {
-		t.Fatal(err)
+	b := &Bindings{Path: path, Project: "line", Platform: "line", BaseDir: filepath.Join(dir, "ws")}
+	for range 2 {
+		if err := b.Ensure("C0123"); err != nil {
+			t.Fatal(err)
+		}
 	}
+	ws := filepath.Join(dir, "ws", "line", "C0123")
 	if info, err := os.Stat(ws); err != nil || !info.IsDir() {
 		t.Fatalf("workspace dir not created: %v", err)
 	}
-	if _, err := b.Ensure("line", "C0123"); err != nil {
-		t.Fatal(err)
-	}
 
-	var got map[string]map[string]struct {
-		ChannelName string `json:"channel_name"`
-		Workspace   string `json:"workspace"`
-		BoundAt     string `json:"bound_at"`
-	}
+	var got map[string]map[string]binding
 	raw, _ := os.ReadFile(path)
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
@@ -43,18 +37,15 @@ func TestEnsureWritesCCConnectFormat(t *testing.T) {
 		t.Error("existing binding was lost")
 	}
 	e, ok := got["project:line"]["line:C0123"]
-	if !ok || e.Workspace != ws || e.BoundAt == "" {
-		t.Errorf("unexpected binding: %+v", got["project:line"])
-	}
-	if len(got["project:line"]) != 1 {
-		t.Errorf("duplicate bindings: %+v", got["project:line"])
+	if !ok || e.Workspace != ws || e.BoundAt == "" || len(got["project:line"]) != 1 {
+		t.Errorf("unexpected bindings: %+v", got["project:line"])
 	}
 }
 
 func TestEnsureRejectsUnsafeIDs(t *testing.T) {
-	b := &Bindings{Path: filepath.Join(t.TempDir(), "b.json"), Project: "line", BaseDir: t.TempDir()}
+	b := &Bindings{Path: filepath.Join(t.TempDir(), "b.json"), Project: "line", Platform: "line", BaseDir: t.TempDir()}
 	for _, id := range []string{"../etc", "a/b", ""} {
-		if _, err := b.Ensure("line", id); err == nil {
+		if err := b.Ensure(id); err == nil {
 			t.Errorf("accepted %q", id)
 		}
 	}

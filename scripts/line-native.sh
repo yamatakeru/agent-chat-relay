@@ -35,45 +35,29 @@ ensure_home() {
 
 cmd_run() {
   ensure_home
-  if [[ -f "$ENV_FILE" ]]; then
-    require_dotenvx
-    # .env を復号して環境変数に入れてから、自分自身を呼び直す。既存の環境変数が優先される
-    exec dotenvx run --quiet --strict -f "$ENV_FILE" -- "$0" __run-with-env
-  fi
-  cmd_run_with_env
+  reexec_with_env __run-with-env
 }
 
 cmd_run_with_env() {
-  [[ -n "${CCJ_LINE_CHANNEL_SECRET:-}" && -n "${CCJ_LINE_CHANNEL_TOKEN:-}" ]] \
-    || die "チャネルシークレットまたはアクセストークンがありません。先に '$0 secrets' を実行してください"
-  if [[ -z "${CCJ_LINE_ALLOW_FROM+x}" ]]; then
-    # 未登録のうちは誰にも一致しない値にする。debug ログで userId を確認してから allow で登録する
-    export CCJ_LINE_ALLOW_FROM=none-yet
-    echo "note: 許可する userId が未登録のため、誰の依頼にも応答しません" >&2
-  fi
-  case "$CCJ_LINE_ALLOW_FROM" in
-    "" | *"*"*) die "CCJ_LINE_ALLOW_FROM が空または '*' を含みます（全員許可になるため禁止）" ;;
-  esac
+  check_line_env  # 追加で必須の変数はない
   local bin
   bin="$(cc_connect_bin)"
   exec "$bin" -config "$REPO_ROOT/examples/line-native/config.toml"
 }
 
 cmd_webhook() {
-  local group_id="${1:-}" user_id="${2:-}" text="${3:-}" times=1 mode=""
+  local group_id="${1:-}" user_id="${2:-}" text="${3:-}" times=1 bad=0
   [[ -n "$group_id" && -n "$user_id" && -n "$text" ]] \
     || die "usage: $0 webhook <groupId> <userId> <text> [times] [--bad-signature]"
   shift 3
   for arg in "$@"; do
     case "$arg" in
-      --bad-signature) mode="$arg" ;;
+      --bad-signature) bad=1 ;;
       *[!0-9]* | "") die "times は正の整数: $arg" ;;
       *) times=$((10#$arg)); ((times > 0)) || die "times は正の整数: $arg" ;;
     esac
   done
-  local body
   make_tmp
-  body="$CCJ_TMP_FILE"
   # 再送を模すため、webhookEventId と message.id は毎回同じ値にする
   CCJ_G="$group_id" CCJ_U="$user_id" CCJ_T="$text" python3 -I -c '
 import json, os, time, uuid
@@ -84,8 +68,8 @@ print(json.dumps({"destination": "local-test", "events": [{
   "webhookEventId": "local-" + uuid.uuid4().hex, "deliveryContext": {"isRedelivery": False},
   "replyToken": "local-test",
   "message": {"id": str(now), "type": "text", "quoteToken": "local-test", "text": os.environ["CCJ_T"]}}]}))
-' >"$body"
-  post_signed_webhook "$body" "$times" "$([[ "$mode" == "--bad-signature" ]] && echo 1 || echo 0)"
+' >"$CCJ_TMP_FILE"
+  post_signed_webhook "$CCJ_TMP_FILE" "$times" "$bad"
 }
 
 case "${1:-}" in

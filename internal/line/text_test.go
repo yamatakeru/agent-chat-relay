@@ -36,6 +36,8 @@ func TestClassify(t *testing.T) {
 		"**エージェントの質問**\n\nどれ？":            kindQuestion,
 		"ふつうの答え":       kindAnswer,
 		"✅ どちら: **A**": kindAnswer,
+		"📬 メッセージを受信しました。現在のタスク完了後に処理します。":          kindQueued,
+		"📬 メッセージキューが満杯です（3 件待ち）。現在のタスク完了をお待ちください。": kindAnswer,
 	} {
 		if got := classify(in); got != want {
 			t.Errorf("classify(%q) = %v, want %v", in, got, want)

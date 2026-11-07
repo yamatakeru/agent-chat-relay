@@ -63,6 +63,33 @@ ensure_ignored() {
   done
 }
 
+# .env を復号して環境変数に入れてから、自分自身をサブコマンド付きで呼び直す。既存の環境変数が優先される。
+# .env がなければ（ダミーの値で試すとき）、そのまま呼び直す
+reexec_with_env() {
+  if [[ -f "$ENV_FILE" ]]; then
+    require_dotenvx
+    exec dotenvx run --quiet --strict -f "$ENV_FILE" -- "$0" "$@"
+  fi
+  exec "$0" "$@"
+}
+
+# 起動前に、LINE の秘密情報と送信者の許可を確かめる。引数には、ほかに必須の環境変数を渡す
+# shellcheck disable=SC2120  # 引数は任意
+check_line_env() {
+  local var
+  for var in CCJ_LINE_CHANNEL_SECRET CCJ_LINE_CHANNEL_TOKEN "$@"; do
+    [[ -n "${!var:-}" ]] || die "$var がありません。先に '$0 secrets' を実行してください"
+  done
+  if [[ -z "${CCJ_LINE_ALLOW_FROM+x}" ]]; then
+    # 未登録のうちは誰にも一致しない値にする。ログで userId を確認してから allow で登録する
+    export CCJ_LINE_ALLOW_FROM=none-yet
+    echo "note: 許可する userId が未登録のため、誰の依頼にも応答しません" >&2
+  fi
+  case "$CCJ_LINE_ALLOW_FROM" in
+    "" | *"*"*) die "CCJ_LINE_ALLOW_FROM が空または '*' を含みます（全員許可になるため禁止）" ;;
+  esac
+}
+
 cmd_secrets() {
   require_dotenvx
   ensure_ignored

@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,7 +43,7 @@ type Sender interface {
 
 // Binder は、ルームの作業場所を割り当てる口（workspace.Bindings）。
 type Binder interface {
-	Ensure(platform, roomID string) (string, error)
+	Ensure(roomID string) error
 }
 
 // Messenger は、LINE へ送る口（Client）。
@@ -185,11 +187,7 @@ func (a *Adapter) duplicate(id string) bool {
 		return true
 	}
 	if len(a.seen) >= 10000 {
-		for k, t := range a.seen {
-			if now.Sub(t) > seenTTL {
-				delete(a.seen, k)
-			}
-		}
+		maps.DeleteFunc(a.seen, func(_ string, t time.Time) bool { return now.Sub(t) > seenTTL })
 	}
 	a.seen[id] = now
 	return false
@@ -221,16 +219,14 @@ func (a *Adapter) handleEvent(ev event) {
 		slog.Info("line: message from unauthorized user", "user", user, "room", roomID)
 		return
 	}
-	mode := ModeMention
+	all := false // 受信モードが「すべて」
 	if chatType == "group" {
 		room, ok := a.rooms.Lookup(roomID)
 		if !ok {
 			slog.Info("line: message in unregistered group", "group", roomID)
 			return
 		}
-		if room.Mode == ModeAll {
-			mode = ModeAll
-		}
+		all = room.Mode == ModeAll
 	}
 
 	st := a.room(roomID)
@@ -240,11 +236,9 @@ func (a *Adapter) handleEvent(ev event) {
 
 	text := ev.Message.Text
 	mentioned := chatType == "direct" // 1 対 1 トークの発言は、すべて Bot あて
-	if ev.Message.Mention != nil {
-		for _, m := range ev.Message.Mention.Mentionees {
-			mentioned = mentioned || m.IsSelf
-		}
-		text = stripSelfMentions(text, ev.Message.Mention.Mentionees)
+	if mn := ev.Message.Mention; mn != nil {
+		mentioned = mentioned || slices.ContainsFunc(mn.Mentionees, func(m mentionee) bool { return m.IsSelf })
+		text = stripSelfMentions(text, mn.Mentionees)
 	}
 	if text == "" {
 		return
@@ -260,11 +254,11 @@ func (a *Adapter) handleEvent(ev event) {
 	case st.wait == waitPermission:
 		// cc-connect は承認待ちの間、発言の単語（ok・no なども）を承認の返事として読む。
 		// 承認の言葉以外は渡さず、待ちが終わってから渡す
-		hold = mentioned || mode == ModeAll
+		hold = mentioned || all
 	case st.wait == waitQuestion:
-		forward, hold = mentioned, !mentioned && mode == ModeAll
+		forward, hold = mentioned, !mentioned && all
 	default:
-		forward = mentioned || mode == ModeAll
+		forward = mentioned || all
 	}
 
 	msg := cloudweb.Message{
@@ -286,16 +280,16 @@ func (a *Adapter) handleEvent(ev event) {
 		st.held = append(st.held, msg)
 		return
 	}
-	a.forward(roomID, st, msg, !isApproval)
+	a.forward(st, msg, !isApproval)
 }
 
 // forward は、割り当てを確かめてから cc-connect へ発言を渡す。
-func (a *Adapter) forward(roomID string, st *roomState, msg cloudweb.Message, request bool) {
+func (a *Adapter) forward(st *roomState, msg cloudweb.Message, request bool) {
 	if !a.cc.Connected() {
 		a.notify(st, msgStopped)
 		return
 	}
-	if _, err := a.bind.Ensure(a.cfg.Platform, roomID); err != nil {
+	if err := a.bind.Ensure(msg.ChatID); err != nil {
 		slog.Error("line: ensure workspace", "error", err)
 		a.notify(st, msgInternal)
 		return
@@ -328,23 +322,25 @@ func (a *Adapter) handleFrame(f cloudweb.Frame) {
 	case kindQuestion:
 		st.wait = waitQuestion
 		a.deliver(roomID, st, f.Content)
+	case kindQueued:
+		// 順番待ちの受け付けは出さない（Reply トークンを答えのために残す）
 	case kindHelper:
 		// 「✅ 許可しました」などは出さない。承認待ちはここで終わる
 		st.wait = waitNone
-		a.flush(roomID, st)
+		a.flush(st)
 	default:
 		st.wait, st.busy = waitNone, false
 		a.deliver(roomID, st, f.Content)
-		a.flush(roomID, st)
+		a.flush(st)
 	}
 }
 
 // flush は、待ちの間に保留した発言を順に渡す。
-func (a *Adapter) flush(roomID string, st *roomState) {
+func (a *Adapter) flush(st *roomState) {
 	held := st.held
 	st.held = nil
 	for _, m := range held {
-		a.forward(roomID, st, m, true)
+		a.forward(st, m, true)
 	}
 }
 
@@ -359,18 +355,12 @@ func (a *Adapter) handleDisconnect() {
 
 // takeToken は、未使用で新しい Reply トークンを 1 つ取り出す。
 func (st *roomState) takeToken(now time.Time) (string, bool) {
-	fresh := st.tokens[:0]
-	for _, t := range st.tokens {
-		if now.Sub(t.at) < replyTokenTTL {
-			fresh = append(fresh, t)
-		}
-	}
-	st.tokens = fresh
-	if len(fresh) == 0 {
+	st.tokens = slices.DeleteFunc(st.tokens, func(t replyToken) bool { return now.Sub(t.at) >= replyTokenTTL })
+	if len(st.tokens) == 0 {
 		return "", false
 	}
-	t := fresh[len(fresh)-1]
-	st.tokens = fresh[:len(fresh)-1]
+	t := st.tokens[len(st.tokens)-1]
+	st.tokens = st.tokens[:len(st.tokens)-1]
 	return t.token, true
 }
 
@@ -389,12 +379,9 @@ func (a *Adapter) deliver(roomID string, st *roomState, text string) {
 		err := a.line.Reply(ctx, tok, withNotice)
 		if err == nil {
 			st.quota = false
-		}
-		var ae *APIError
-		if err == nil {
 			return
 		}
-		if !errors.As(err, &ae) || !ae.InvalidReplyToken() {
+		if ae, ok := errors.AsType[*APIError](err); !ok || !ae.InvalidReplyToken() {
 			// 送れたかどうか分からない場合に Push すると二重に届くので、記録だけにする
 			slog.Error("line: reply failed", "room", roomID, "error", err)
 			return
@@ -405,8 +392,7 @@ func (a *Adapter) deliver(roomID string, st *roomState, text string) {
 		return
 	}
 	slog.Error("line: push failed", "room", roomID, "error", err)
-	var ae *APIError
-	if errors.As(err, &ae) && ae.QuotaExceeded() {
+	if ae, ok := errors.AsType[*APIError](err); ok && ae.QuotaExceeded() {
 		// このときは使える Reply トークンがない。次に Reply で送るときに書き添える
 		st.quota = true
 	}

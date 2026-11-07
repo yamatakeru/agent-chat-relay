@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,9 +54,9 @@ func (f *fakeCC) Connected() bool               { return f.connected }
 
 type fakeBinder struct{ rooms []string }
 
-func (f *fakeBinder) Ensure(platform, roomID string) (string, error) {
-	f.rooms = append(f.rooms, platform+":"+roomID)
-	return "/ws/" + roomID, nil
+func (f *fakeBinder) Ensure(roomID string) error {
+	f.rooms = append(f.rooms, roomID)
+	return nil
 }
 
 type fakeRooms map[string]Room
@@ -84,16 +85,14 @@ func (h *harness) nextID(prefix string) string {
 	return fmt.Sprintf("%s%d", prefix, h.seq)
 }
 
-// groupMsg は、グループの発言イベントを作る。mention が真なら先頭に Bot へのメンションを付ける。
-func (h *harness) groupMsg(group, user, text string, mention bool) event {
+// groupMsg は、グループの発言イベントを作る。mentioned が真なら先頭に Bot へのメンションを付ける。
+func (h *harness) groupMsg(group, user, text string, mentioned bool) event {
 	ev := event{Type: "message", Mode: "active", WebhookEventID: h.nextID("ev"), ReplyToken: h.nextID("tok"),
 		Source: source{Type: "group", GroupID: group, UserID: user}}
 	m := &message{ID: h.nextID("m"), Type: "text", Text: text}
-	if mention {
+	if mentioned {
 		m.Text = "@Bot " + text
-		m.Mention = &struct {
-			Mentionees []mentionee `json:"mentionees"`
-		}{[]mentionee{{Index: 0, Length: 4, Type: "user", IsSelf: true}}}
+		m.Mention = &mention{[]mentionee{{Index: 0, Length: 4, IsSelf: true}}}
 	}
 	ev.Message = m
 	return ev
@@ -106,6 +105,18 @@ func (h *harness) directMsg(user, text string) event {
 
 func (h *harness) frame(room, content string) {
 	h.a.handleFrame(cloudweb.Frame{Type: "reply", SessionKey: "line:" + room, ReplyCtx: room, Content: content})
+}
+
+// wantForwarded は、cc-connect へ渡した発言の本文が want と一致するか確かめる。
+func (h *harness) wantForwarded(t *testing.T, want ...string) {
+	t.Helper()
+	got := make([]string, len(h.cc.msgs))
+	for i, m := range h.cc.msgs {
+		got[i] = m.Content
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("forwarded %q, want %q", got, want)
+	}
 }
 
 func (h *harness) lastSent(t *testing.T) sent {
@@ -146,18 +157,14 @@ func TestGroupForwardsOnlyMentionsFromAllowedUsersInRegisteredGroups(t *testing.
 	h.a.handleEvent(h.groupMsg(group1, userA, "no mention", false))
 	h.a.handleEvent(h.groupMsg(group1, "U99999999999999999999999999999999", "stranger", true))
 	h.a.handleEvent(h.groupMsg(group2, userA, "unregistered group", true))
-	if len(h.cc.msgs) != 0 {
-		t.Fatalf("forwarded %d messages, want 0", len(h.cc.msgs))
-	}
+	h.wantForwarded(t)
 	h.a.handleEvent(h.groupMsg(group1, userA, "hello", true))
-	if len(h.cc.msgs) != 1 {
-		t.Fatalf("forwarded %d messages, want 1", len(h.cc.msgs))
-	}
+	h.wantForwarded(t, "hello")
 	m := h.cc.msgs[0]
 	if m.Content != "hello" || m.ChatID != group1 || m.ReplyCtx != group1 || m.ChatType != "group" || !m.Mentioned || m.UserID != userA {
 		t.Errorf("unexpected message: %+v", m)
 	}
-	if len(h.bind.rooms) != 1 || h.bind.rooms[0] != "line:"+group1 {
+	if !slices.Equal(h.bind.rooms, []string{group1}) {
 		t.Errorf("workspace not ensured before forwarding: %v", h.bind.rooms)
 	}
 }
@@ -184,27 +191,21 @@ func TestDuplicateWebhookEventIsIgnored(t *testing.T) {
 	ev := h.directMsg(userA, "hi")
 	h.a.handleEvent(ev)
 	h.a.handleEvent(ev)
-	if len(h.cc.msgs) != 1 {
-		t.Fatalf("forwarded %d, want 1", len(h.cc.msgs))
-	}
+	h.wantForwarded(t, "hi")
 }
 
 func TestApprovalWordsOnlyWhilePending(t *testing.T) {
 	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
 	h.a.handleEvent(h.groupMsg(group1, userA, "allow", false))
 	h.a.handleEvent(h.groupMsg(group1, userA, "allow", true))
-	if len(h.cc.msgs) != 0 {
-		t.Fatalf("approval outside pending forwarded: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t)
 
 	h.frame(group1, permissionPrompt)
 	if got := h.lastSent(t).texts[0]; strings.Contains(got, "allow all") {
 		t.Errorf("prompt still offers allow all: %q", got)
 	}
 	h.a.handleEvent(h.groupMsg(group1, userB, " 許可 ", false))
-	if len(h.cc.msgs) != 1 || h.cc.msgs[0].Content != "allow" {
-		t.Fatalf("approval not forwarded as allow: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t, "allow")
 
 	// 補助的な発言は出さず、承認待ちを終える
 	before := len(h.line.sent)
@@ -213,9 +214,7 @@ func TestApprovalWordsOnlyWhilePending(t *testing.T) {
 		t.Errorf("helper message was sent to LINE")
 	}
 	h.a.handleEvent(h.groupMsg(group1, userA, "deny", false))
-	if len(h.cc.msgs) != 1 {
-		t.Errorf("approval after pending ended was forwarded")
-	}
+	h.wantForwarded(t, "allow")
 }
 
 func TestMentionedTextIsHeldWhilePending(t *testing.T) {
@@ -223,14 +222,10 @@ func TestMentionedTextIsHeldWhilePending(t *testing.T) {
 	h.frame(group1, permissionPrompt)
 	h.a.handleEvent(h.groupMsg(group1, userA, "ok, but explain first", true))
 	h.a.handleEvent(h.groupMsg(group1, userA, "not for the bot", false))
-	if len(h.cc.msgs) != 0 {
-		t.Fatalf("free-form text forwarded while pending: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t)
 	h.a.handleEvent(h.groupMsg(group1, userA, "deny", false))
 	h.frame(group1, "❌ 拒否しました。エージェントはこのツールの使用を中止します。")
-	if len(h.cc.msgs) != 2 || h.cc.msgs[0].Content != "deny" || h.cc.msgs[1].Content != "ok, but explain first" {
-		t.Fatalf("unexpected forwarding: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t, "deny", "ok, but explain first")
 }
 
 func TestApproveAllIsBlocked(t *testing.T) {
@@ -238,9 +233,7 @@ func TestApproveAllIsBlocked(t *testing.T) {
 	h.frame(group1, permissionPrompt)
 	h.a.handleEvent(h.groupMsg(group1, userA, "allow all", true))
 	h.a.handleEvent(h.groupMsg(group1, userA, "ok, approve all please", true))
-	if len(h.cc.msgs) != 0 {
-		t.Fatalf("allow all forwarded: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t)
 	if got := h.lastSent(t); got.kind != "reply" || got.texts[0] != msgApproveAll {
 		t.Errorf("unexpected notice: %+v", got)
 	}
@@ -279,9 +272,7 @@ func TestStoppedAndRedeliveredAreNotForwarded(t *testing.T) {
 	ev := h.directMsg(userA, "hi")
 	ev.DeliveryContext.IsRedelivery = true
 	h.a.handleEvent(ev)
-	if len(h.cc.msgs) != 0 {
-		t.Fatal("redelivered message was forwarded")
-	}
+	h.wantForwarded(t)
 	if got := h.lastSent(t); got.kind != "reply" || got.texts[0] != msgRedelivered {
 		t.Errorf("unexpected: %+v", got)
 	}
@@ -290,28 +281,20 @@ func TestStoppedAndRedeliveredAreNotForwarded(t *testing.T) {
 func TestModeAllHoldsUnrelatedMessagesWhileWaiting(t *testing.T) {
 	h := newHarness(fakeRooms{group1: {Mode: ModeAll}})
 	h.a.handleEvent(h.groupMsg(group1, userA, "chat 1", false))
-	if len(h.cc.msgs) != 1 {
-		t.Fatalf("mode all should forward everything")
-	}
+	h.wantForwarded(t, "chat 1")
 	h.frame(group1, permissionPrompt)
 	h.a.handleEvent(h.groupMsg(group1, userB, "ok", false)) // 雑談の ok を承認にしない
 	h.a.handleEvent(h.groupMsg(group1, userA, "allow", false))
-	if len(h.cc.msgs) != 2 || h.cc.msgs[1].Content != "allow" {
-		t.Fatalf("unexpected forwarding while pending: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t, "chat 1", "allow")
 	h.frame(group1, "✅ 許可しました。続行中...")
-	if len(h.cc.msgs) != 3 || h.cc.msgs[2].Content != "ok" {
-		t.Fatalf("held message not flushed after pending: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t, "chat 1", "allow", "ok")
 }
 
 func TestQuestionWaitInDirectChatForwardsAnswer(t *testing.T) {
 	h := newHarness(nil)
 	h.frame(userA, "**エージェントの質問**\n\nどちらにしますか？\n1. A\n2. B")
 	h.a.handleEvent(h.directMsg(userA, "1"))
-	if len(h.cc.msgs) != 1 || h.cc.msgs[0].Content != "1" {
-		t.Fatalf("answer not forwarded: %+v", h.cc.msgs)
-	}
+	h.wantForwarded(t, "1")
 }
 
 func TestDisconnectNotifiesBusyRooms(t *testing.T) {

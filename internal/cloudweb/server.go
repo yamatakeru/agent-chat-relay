@@ -27,7 +27,6 @@ type Message struct {
 	MsgID     string `json:"msg_id"`
 	ChatID    string `json:"chat_id"`
 	UserID    string `json:"user_id"`
-	UserName  string `json:"user_name,omitempty"`
 	Content   string `json:"content"`
 	ReplyCtx  string `json:"reply_ctx"`
 	ChatType  string `json:"chat_type"`
@@ -49,7 +48,6 @@ type Server struct {
 	Platform string // cc-connect の cloud_web の name（例："line"）
 
 	OnFrame      func(Frame)
-	OnConnect    func()
 	OnDisconnect func()
 
 	mu      sync.Mutex
@@ -108,9 +106,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.conn = conn
 	s.mu.Unlock()
 	slog.Info("cloudweb: cc-connect connected", "project", reg.Project)
-	if s.OnConnect != nil {
-		s.OnConnect()
-	}
 
 	defer func() {
 		s.mu.Lock()
@@ -138,14 +133,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("cloudweb: invalid frame", "error", err)
 			continue
 		}
-		switch f.Type {
-		case "reply":
-			if s.OnFrame != nil {
-				s.OnFrame(f)
-			}
-		case "pong", "typing_start", "typing_stop":
-		default:
+		if f.Type != "reply" {
 			slog.Debug("cloudweb: ignored frame", "type", f.Type)
+			continue
+		}
+		if s.OnFrame != nil {
+			s.OnFrame(f)
 		}
 	}
 }

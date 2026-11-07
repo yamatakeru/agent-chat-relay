@@ -23,7 +23,6 @@ type webhookBody struct {
 type event struct {
 	Type            string `json:"type"`
 	Mode            string `json:"mode"`
-	Timestamp       int64  `json:"timestamp"`
 	WebhookEventID  string `json:"webhookEventId"`
 	ReplyToken      string `json:"replyToken"`
 	DeliveryContext struct {
@@ -41,19 +40,20 @@ type source struct {
 }
 
 type message struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	Mention *struct {
-		Mentionees []mentionee `json:"mentionees"`
-	} `json:"mention"`
+	ID      string   `json:"id"`
+	Type    string   `json:"type"`
+	Text    string   `json:"text"`
+	Mention *mention `json:"mention"`
+}
+
+type mention struct {
+	Mentionees []mentionee `json:"mentionees"`
 }
 
 type mentionee struct {
-	Index  int    `json:"index"`
-	Length int    `json:"length"`
-	Type   string `json:"type"`
-	IsSelf bool   `json:"isSelf"`
+	Index  int  `json:"index"`
+	Length int  `json:"length"`
+	IsSelf bool `json:"isSelf"`
 }
 
 // verifySignature は、X-Line-Signature（本文の HMAC-SHA256 を Base64 にしたもの）を確かめる。
@@ -94,7 +94,6 @@ func (e *APIError) InvalidReplyToken() bool {
 type Client struct {
 	BaseURL string // 既定は https://api.line.me。テストではモックを指す
 	Token   string // チャネルアクセストークン
-	HTTP    *http.Client
 }
 
 type textMessage struct {
@@ -133,11 +132,7 @@ func (c *Client) post(ctx context.Context, path string, payload any) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token)
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

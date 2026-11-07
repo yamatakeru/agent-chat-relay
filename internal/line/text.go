@@ -1,6 +1,7 @@
 package line
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -31,26 +32,12 @@ func isApproveAll(text string) bool {
 	tokens := permissionTokens(text)
 	for _, ph := range approveAllPhrases {
 		for i := 0; i+len(ph) <= len(tokens); i++ {
-			match := true
-			for j := range ph {
-				if tokens[i+j] != ph[j] {
-					match = false
-					break
-				}
-			}
-			if match {
+			if slices.Equal(tokens[i:i+len(ph)], ph) {
 				return true
 			}
 		}
 	}
-	for _, tok := range tokens {
-		for _, w := range approveAllTokens {
-			if tok == w {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.ContainsFunc(tokens, func(t string) bool { return slices.Contains(approveAllTokens, t) })
 }
 
 // permissionTokens は、文字・数字以外で区切り、小文字にする。cc-connect の splitPermissionTokens は
@@ -70,35 +57,39 @@ const (
 	kindQuestion                             // Claude からの質問（AskUserQuestion）
 	kindPermissionHint                       // 承認待ちの間の案内
 	kindHelper                               // 「✅ 許可しました」などの補助的な発言
+	kindQueued                               // 「📬 メッセージを受信しました」（順番待ちの受け付け）
 )
 
-// classify は、cc-connect から届いた文面の種類を見分ける。
+// classify は、cc-connect から届いた文面の種類を見分ける（日本語と英語の文面）。
 func classify(content string) outgoingKind {
 	c := strings.TrimSpace(content)
+	hasPrefix := func(prefixes ...string) bool {
+		return slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(c, p) })
+	}
 	switch {
-	case strings.HasPrefix(c, "⚠️ **権限リクエスト**"), strings.HasPrefix(c, "⚠️ **Permission Request**"):
+	case hasPrefix("⚠️ **権限リクエスト**", "⚠️ **Permission Request**"):
 		return kindPermissionPrompt
-	case strings.HasPrefix(c, "⚠️ 権限の応答を待っています"), strings.HasPrefix(c, "⚠️ Waiting for permission response"):
+	case hasPrefix("⚠️ 権限の応答を待っています", "⚠️ Waiting for permission response"):
 		return kindPermissionHint
-	case strings.HasPrefix(c, "✅ 許可しました"), strings.HasPrefix(c, "✅ Allowed, continuing"),
-		strings.HasPrefix(c, "❌ 拒否しました"), strings.HasPrefix(c, "❌ Denied."),
-		strings.HasPrefix(c, "✅ このセッションの全ての権限を自動承認"), strings.HasPrefix(c, "✅ All permissions auto-approved"):
+	case hasPrefix("✅ 許可しました", "✅ Allowed, continuing", "❌ 拒否しました", "❌ Denied.",
+		"✅ このセッションの全ての権限を自動承認", "✅ All permissions auto-approved"):
 		return kindHelper
+	case hasPrefix("📬 メッセージを受信しました", "📬 Message received"):
+		return kindQueued
 	case strings.Contains(c, "エージェントの質問"), strings.Contains(c, "Agent Question"):
 		return kindQuestion
 	}
 	return kindAnswer
 }
 
+var allowAllRemover = strings.NewReplacer(
+	" / **allow all**（このセッション中は全て自動許可）", "",
+	" / **allow all** (skip all future prompts this session)", "",
+	" / **allow all**", "",
+)
+
 // withoutAllowAll は、承認依頼と案内の文面から allow all の選択肢を消す（このルームでは使えないため）。
-func withoutAllowAll(content string) string {
-	r := strings.NewReplacer(
-		" / **allow all**（このセッション中は全て自動許可）", "",
-		" / **allow all** (skip all future prompts this session)", "",
-		" / **allow all**", "",
-	)
-	return r.Replace(content)
-}
+func withoutAllowAll(content string) string { return allowAllRemover.Replace(content) }
 
 // stripSelfMentions は、本文から Bot へのメンション部分を取り除く。
 // LINE の index と length は UTF-16 の単位で数える。
@@ -128,6 +119,8 @@ const (
 	truncatedNote  = "\n\n（長すぎるため、ここから先は省略しました）"
 )
 
+var truncatedNoteLen = len(utf16.Encode([]rune(truncatedNote)))
+
 // splitBubbles は、本文を最大 5 つの吹き出しに分ける。入りきらない分は切り、省略したことを書き添える。
 func splitBubbles(text string) []string {
 	text = strings.TrimSpace(text)
@@ -143,8 +136,7 @@ func splitBubbles(text string) []string {
 	}
 	if len(runes) > 0 {
 		last := []rune(out[len(out)-1])
-		noteLen := len(utf16.Encode([]rune(truncatedNote)))
-		n := fitUTF16(last, maxBubbleChars-noteLen)
+		n := fitUTF16(last, maxBubbleChars-truncatedNoteLen)
 		out[len(out)-1] = string(last[:n]) + truncatedNote
 	}
 	return out

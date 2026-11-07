@@ -9,15 +9,18 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -36,7 +39,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: line serve | line room add|remove|list")
+		return errors.New(usage)
 	}
 	switch args[0] {
 	case "serve":
@@ -47,12 +50,12 @@ func run(args []string) error {
 	return fmt.Errorf("unknown command %q", args[0])
 }
 
-func env(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
+const (
+	usage     = "usage: line serve | line room add|remove|list"
+	roomUsage = "usage: line room add <groupId> [mention|all] | remove <groupId> | list"
+)
+
+func env(key, def string) string { return cmp.Or(os.Getenv(key), def) }
 
 func requireEnv(keys ...string) error {
 	var missing []string
@@ -73,7 +76,7 @@ func roomsPath() string { return filepath.Join(home(), "rooms.json") }
 
 func room(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: line room add <groupId> [mention|all] | remove <groupId> | list")
+		return errors.New(roomUsage)
 	}
 	switch {
 	case args[0] == "add" && (len(args) == 2 || len(args) == 3):
@@ -85,16 +88,32 @@ func room(args []string) error {
 	case args[0] == "remove" && len(args) == 2:
 		return line.SetRoom(roomsPath(), args[1], "")
 	case args[0] == "list" && len(args) == 1:
-		ids, rooms, err := line.ListRooms(roomsPath())
+		rooms, err := line.ReadRooms(roomsPath())
 		if err != nil {
 			return err
 		}
-		for _, id := range ids {
+		for _, id := range slices.Sorted(maps.Keys(rooms)) {
 			fmt.Printf("%s %s\n", id, rooms[id].Mode)
 		}
 		return nil
 	}
-	return errors.New("usage: line room add <groupId> [mention|all] | remove <groupId> | list")
+	return errors.New(roomUsage)
+}
+
+// parseAllowFrom は、送信者の許可（カンマ区切りの userId）を読む。
+// 「*」は全員許可になるため受け付けない（cc-connect の allow_from と同じ値を使う）。
+func parseAllowFrom(s string) (map[string]bool, error) {
+	allow := map[string]bool{}
+	for id := range strings.SplitSeq(s, ",") {
+		switch id = strings.TrimSpace(id); id {
+		case "":
+		case "*":
+			return nil, errors.New("CCJ_LINE_ALLOW_FROM に「*」は使えません（全員許可になるため）")
+		default:
+			allow[id] = true
+		}
+	}
+	return allow, nil
 }
 
 func serve() error {
@@ -107,11 +126,9 @@ func serve() error {
 	if err := requireEnv("CCJ_LINE_CHANNEL_SECRET", "CCJ_LINE_CHANNEL_TOKEN", "CCJ_LINE_ALLOW_FROM", "CCJ_CLOUDWEB_TOKEN"); err != nil {
 		return err
 	}
-	allow := map[string]bool{}
-	for _, id := range strings.Split(os.Getenv("CCJ_LINE_ALLOW_FROM"), ",") {
-		if id = strings.TrimSpace(id); id != "" && id != "*" {
-			allow[id] = true
-		}
+	allow, err := parseAllowFrom(os.Getenv("CCJ_LINE_ALLOW_FROM"))
+	if err != nil {
+		return err
 	}
 
 	const platform = "line"
@@ -119,15 +136,12 @@ func serve() error {
 	client := &line.Client{
 		BaseURL: env("CCJ_LINE_API_BASE", "https://api.line.me"),
 		Token:   os.Getenv("CCJ_LINE_CHANNEL_TOKEN"),
-		HTTP:    &http.Client{Timeout: 20 * time.Second},
 	}
 	bindings := &workspace.Bindings{
-		Path:    filepath.Join(home(), "data", "workspace_bindings.json"),
-		Project: env("CCJ_CC_PROJECT", "line"),
-		BaseDir: filepath.Join(home(), "workspaces"),
-	}
-	if abs, err := filepath.Abs(bindings.BaseDir); err == nil {
-		bindings.BaseDir = abs
+		Path:     filepath.Join(home(), "data", "workspace_bindings.json"),
+		Project:  env("CCJ_CC_PROJECT", "line"),
+		Platform: platform,
+		BaseDir:  filepath.Join(home(), "workspaces"),
 	}
 	adapter := line.New(
 		line.Config{ChannelSecret: os.Getenv("CCJ_LINE_CHANNEL_SECRET"), AllowFrom: allow, Platform: platform},

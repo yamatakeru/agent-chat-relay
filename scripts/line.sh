@@ -33,41 +33,20 @@ build_adapter() {
   (cd "$REPO_ROOT" && mise exec -- go build -o "$REPO_ROOT/.local/bin/line" ./cmd/line) || die "ビルドに失敗しました"
 }
 
-# cc-connect とアダプターが共有する token。なければ作って .env に暗号化して保存する
-ensure_cloudweb_token() {
-  require_dotenvx
-  ensure_ignored
-  if ! dotenvx get CCJ_CLOUDWEB_TOKEN -f "$ENV_FILE" --strict >/dev/null 2>&1; then
+# cc-connect とアダプターが共有する token。.env になければ作って暗号化して保存する。
+# 有無は復号せずに確かめる（復号に失敗したときに作り直して上書きしないため）
+with_env() {
+  if [[ -f "$ENV_FILE" ]] && ! grep -q '^CCJ_CLOUDWEB_TOKEN=' "$ENV_FILE"; then
+    require_dotenvx
+    ensure_ignored
     store_value CCJ_CLOUDWEB_TOKEN "$(openssl rand -hex 32)"
     echo "cc-connect とアダプターの間の token を作り、保存しました"
   fi
-}
-
-# .env を復号して環境変数に入れてから、自分自身を呼び直す。既存の環境変数が優先される
-with_env() {
-  if [[ -f "$ENV_FILE" ]]; then
-    ensure_cloudweb_token
-    exec dotenvx run --quiet --strict -f "$ENV_FILE" -- "$0" "$@"
-  fi
-  "$0" "$@"
-}
-
-check_env() {
-  [[ -n "${CCJ_LINE_CHANNEL_SECRET:-}" && -n "${CCJ_LINE_CHANNEL_TOKEN:-}" ]] \
-    || die "チャネルシークレットまたはアクセストークンがありません。先に '$0 secrets' を実行してください"
-  [[ -n "${CCJ_CLOUDWEB_TOKEN:-}" ]] || die "CCJ_CLOUDWEB_TOKEN がありません。先に '$0 secrets' を実行してください"
-  if [[ -z "${CCJ_LINE_ALLOW_FROM+x}" ]]; then
-    # 未登録のうちは誰にも一致しない値にする。ログで userId を確認してから allow で登録する
-    export CCJ_LINE_ALLOW_FROM=none-yet
-    echo "note: 許可する userId が未登録のため、誰の依頼にも応答しません" >&2
-  fi
-  case "$CCJ_LINE_ALLOW_FROM" in
-    "" | *"*"*) die "CCJ_LINE_ALLOW_FROM が空または '*' を含みます（全員許可になるため禁止）" ;;
-  esac
+  reexec_with_env "$@"
 }
 
 cmd_cc_with_env() {
-  check_env
+  check_line_env CCJ_CLOUDWEB_TOKEN
   mkdir -p "$CCJ_LINE_HOME/data" "$CCJ_LINE_HOME/workspaces"
   local bin
   bin="$(cc_connect_bin)"
@@ -75,7 +54,7 @@ cmd_cc_with_env() {
 }
 
 cmd_adapter_with_env() {
-  check_env
+  check_line_env CCJ_CLOUDWEB_TOKEN
   export CCJ_LINE_WEBHOOK_ADDR="127.0.0.1:$CCJ_LINE_PORT"
   export CCJ_CLOUDWEB_ADDR="127.0.0.1:$CCJ_CLOUDWEB_PORT"
   build_adapter

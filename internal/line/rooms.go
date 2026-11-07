@@ -1,17 +1,16 @@
 package line
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"sync"
 	"time"
+
+	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/jsonfile"
 )
 
 // 受信モード（GLOSSARY.md）。
@@ -20,8 +19,8 @@ const (
 	ModeAll     = "all"     // すべての発言を渡す
 )
 
-// RoomIDPattern は、LINE のグループ ID（C…）と複数人トーク ID（R…）の形式。
-var RoomIDPattern = regexp.MustCompile(`^[CR][0-9a-f]{32}$`)
+// LINE のグループ ID（C…）と複数人トーク ID（R…）の形式。
+var roomIDPattern = regexp.MustCompile(`^[CR][0-9a-f]{32}$`)
 
 // Room は、登録したグループの設定。
 type Room struct {
@@ -64,73 +63,42 @@ func (r *Rooms) refreshLocked() {
 	if r.rooms != nil && info.ModTime().Equal(r.modTime) && info.Size() == r.size {
 		return
 	}
-	f, err := readRooms(r.Path)
+	rooms, err := ReadRooms(r.Path)
 	if err != nil {
 		slog.Error("line: read rooms file", "error", err)
 		return
 	}
-	r.rooms, r.modTime, r.size = f.Rooms, info.ModTime(), info.Size()
+	r.rooms, r.modTime, r.size = rooms, info.ModTime(), info.Size()
 }
 
-func readRooms(path string) (roomsFile, error) {
-	f := roomsFile{Rooms: map[string]Room{}}
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return f, nil
-	}
-	if err != nil {
-		return f, err
-	}
-	if err := json.Unmarshal(raw, &f); err != nil {
-		return f, fmt.Errorf("parse %s: %w", path, err)
+// ReadRooms は、登録したグループを返す。ファイルがなければ空にする。
+func ReadRooms(path string) (map[string]Room, error) {
+	var f roomsFile
+	if err := jsonfile.Read(path, &f); err != nil {
+		return nil, err
 	}
 	if f.Rooms == nil {
 		f.Rooms = map[string]Room{}
 	}
-	return f, nil
+	return f.Rooms, nil
 }
 
 // SetRoom は、グループを登録する（mode が空なら登録を外す）。登録用のコマンドから使う。
 func SetRoom(path, id, mode string) error {
-	if !RoomIDPattern.MatchString(id) {
+	if !roomIDPattern.MatchString(id) {
 		return fmt.Errorf("グループ ID の形式ではありません")
 	}
 	if mode != "" && mode != ModeMention && mode != ModeAll {
 		return fmt.Errorf("受信モードは %s か %s です", ModeMention, ModeAll)
 	}
-	f, err := readRooms(path)
+	rooms, err := ReadRooms(path)
 	if err != nil {
 		return err
 	}
 	if mode == "" {
-		delete(f.Rooms, id)
+		delete(rooms, id)
 	} else {
-		f.Rooms[id] = Room{Mode: mode}
+		rooms[id] = Room{Mode: mode}
 	}
-	out, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// ListRooms は、登録したグループを ID の順に返す。
-func ListRooms(path string) ([]string, map[string]Room, error) {
-	f, err := readRooms(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	ids := make([]string, 0, len(f.Rooms))
-	for id := range f.Rooms {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids, f.Rooms, nil
+	return jsonfile.WriteAtomic(path, roomsFile{Rooms: rooms})
 }
