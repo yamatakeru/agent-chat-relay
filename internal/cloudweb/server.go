@@ -23,29 +23,43 @@ var ErrNotConnected = errors.New("cloudweb: cc-connect is not connected")
 
 // Message は、ゲートウェイから cc-connect へ渡す発言（CWIP の message）。
 type Message struct {
-	Type      string `json:"type"`
-	MsgID     string `json:"msg_id"`
-	ChatID    string `json:"chat_id"`
-	UserID    string `json:"user_id"`
-	Content   string `json:"content"`
-	ReplyCtx  string `json:"reply_ctx"`
-	ChatType  string `json:"chat_type"`
-	Mentioned bool   `json:"mentioned"`
+	Type      string       `json:"type"`
+	MsgID     string       `json:"msg_id"`
+	ChatID    string       `json:"chat_id"`
+	UserID    string       `json:"user_id"`
+	Content   string       `json:"content"`
+	ReplyCtx  string       `json:"reply_ctx"`
+	ChatType  string       `json:"chat_type"`
+	Mentioned bool         `json:"mentioned"`
+	Images    []Attachment `json:"images,omitempty"`
+	Files     []Attachment `json:"files,omitempty"`
 }
 
-// Frame は、cc-connect から届いた 1 フレーム。テキストの機能しか宣言しないので、
-// 実際に使うのは reply だけになる（カードやボタンは cc-connect がテキストに直す）。
+// Attachment は、発言に添える画像やファイル。Data は Base64。
+type Attachment struct {
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+	FileName string `json:"file_name,omitempty"`
+}
+
+// Frame は、cc-connect から届いた 1 フレーム。reply（テキスト）と image を使う。
+// カードやボタンは、宣言しなければ cc-connect がテキストに直す。
 type Frame struct {
 	Type       string `json:"type"`
 	SessionKey string `json:"session_key"`
 	ReplyCtx   string `json:"reply_ctx"`
-	Content    string `json:"content"`
+	Content    string `json:"content"`   // reply
+	Data       string `json:"data"`      // image（Base64）
+	MimeType   string `json:"mime_type"` // image
 }
 
 // Server は cc-connect からの接続を 1 本だけ受け付ける。新しい接続が来たら古い接続を閉じる。
 type Server struct {
 	Token    string // cc-connect の cloud_web の token と同じ値
 	Platform string // cc-connect の cloud_web の name（例："line"）
+	// Capabilities は、cc-connect から受け取れるもの（例：text, image）。
+	// 宣言しないものを cc-connect は送らない（カードなどはテキストに直す）
+	Capabilities []string
 
 	OnFrame      func(Frame)
 	OnDisconnect func()
@@ -89,7 +103,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// capabilities を省略すると、cc-connect はすべての機能に対応しているものとして扱う。必ず明示する。
-	if err := conn.WriteJSON(map[string]any{"type": "register_ack", "ok": true, "capabilities": []string{"text"}}); err != nil {
+	caps := s.Capabilities
+	if len(caps) == 0 {
+		caps = []string{"text"}
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "register_ack", "ok": true, "capabilities": caps}); err != nil {
 		return
 	}
 	conn.SetPingHandler(func(data string) error {
@@ -133,7 +151,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("cloudweb: invalid frame", "error", err)
 			continue
 		}
-		if f.Type != "reply" {
+		if f.Type != "reply" && f.Type != "image" {
 			slog.Debug("cloudweb: ignored frame", "type", f.Type)
 			continue
 		}

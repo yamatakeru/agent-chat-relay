@@ -30,9 +30,9 @@ func dial(t *testing.T, url, token string) (*websocket.Conn, map[string]any) {
 }
 
 func TestServer(t *testing.T) {
-	frames := make(chan Frame, 1)
+	frames := make(chan Frame, 2)
 	disconnected := make(chan struct{}, 1)
-	s := &Server{Token: "tok", Platform: "line",
+	s := &Server{Token: "tok", Platform: "line", Capabilities: []string{"text", "image"},
 		OnFrame:      func(f Frame) { frames <- f },
 		OnDisconnect: func() { disconnected <- struct{}{} },
 	}
@@ -49,32 +49,42 @@ func TestServer(t *testing.T) {
 
 	conn, ack := dial(t, url, "tok")
 	caps, _ := ack["capabilities"].([]any)
-	if ack["ok"] != true || len(caps) != 1 || caps[0] != "text" {
+	if ack["ok"] != true || len(caps) != 2 || caps[0] != "text" || caps[1] != "image" {
 		t.Fatalf("unexpected ack: %v", ack)
 	}
 	waitFor(t, s.Connected)
 
-	if err := s.Send(Message{MsgID: "m1", ChatID: "C1", UserID: "U1", Content: "hi", ReplyCtx: "C1", ChatType: "group", Mentioned: true}); err != nil {
+	img := []Attachment{{MimeType: "image/png", Data: "AAA="}}
+	if err := s.Send(Message{MsgID: "m1", ChatID: "C1", UserID: "U1", Content: "hi", ReplyCtx: "C1", ChatType: "group", Mentioned: true, Images: img}); err != nil {
 		t.Fatal(err)
 	}
 	var got map[string]any
 	if err := conn.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got["type"] != "message" || got["content"] != "hi" || got["mentioned"] != true {
+	images, _ := got["images"].([]any)
+	if got["type"] != "message" || got["content"] != "hi" || got["mentioned"] != true || len(images) != 1 || got["files"] != nil {
 		t.Errorf("unexpected message: %v", got)
 	}
 
 	if err := conn.WriteJSON(map[string]any{"type": "reply", "session_key": "line:C1", "reply_ctx": "C1", "content": "answer"}); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case f := <-frames:
-		if f.Content != "answer" || f.ReplyCtx != "C1" {
-			t.Errorf("unexpected frame: %+v", f)
+	if err := conn.WriteJSON(map[string]any{"type": "card", "session_key": "line:C1", "reply_ctx": "C1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "image", "session_key": "line:C1", "reply_ctx": "C1", "data": "AAA=", "mime_type": "image/png"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"reply", "image"} { // card は渡さない
+		select {
+		case f := <-frames:
+			if f.Type != want || f.ReplyCtx != "C1" || (want == "reply" && f.Content != "answer") || (want == "image" && f.Data != "AAA=") {
+				t.Errorf("unexpected frame: %+v", f)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no frame")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no frame")
 	}
 
 	conn.Close()

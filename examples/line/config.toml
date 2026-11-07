@@ -47,6 +47,13 @@ cmd = [
   "claude", "--setting-sources", "project,local",
   "--settings", '{"claudeMdExcludes":["**/AGENTS.md","**/CLAUDE.md"],"autoMemoryEnabled":false}',
 ]
+# Claude の既定のシステムプロンプトと cc-connect の案内に、LINE での画像とファイルの扱いを書き足す（docs/line-adapter.md）。
+# 実行承認には関わらない
+append_system_prompt = '''
+このセッションは LINE のルームにつながっている。
+- 利用者から受け取った画像とファイルは .cc-connect/attachments/ に保存され、7 日たつと消える。あとで使うものは、作業場所の別の場所へ写すこと。
+- LINE へ返せるのは画像（JPEG か PNG、10MB まで）だけで、cc-connect send --image で送る。ファイルは LINE へ返せないので、作ったファイルは作業場所のどこに置いたかを文章で伝えること。
+'''
 
 [[projects.platforms]]
 type = "cloud_web"

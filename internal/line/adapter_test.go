@@ -27,22 +27,59 @@ type sent struct {
 	kind  string // reply / push
 	to    string // token or room
 	texts []string
+	msgs  []OutMessage
+}
+
+// texts は、吹き出しの文面を返す（画像は "[image]"）。
+func texts(msgs []OutMessage) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Text
+		if m.Type == "image" {
+			out[i] = "[image]"
+		}
+	}
+	return out
+}
+
+type content struct {
+	data []byte
+	mime string
+	err  error
 }
 
 type fakeLine struct {
-	sent    []sent
-	pushErr error
+	sent     []sent
+	pushErr  error
+	contents map[string]content // メッセージ ID ごとの画像・ファイル
+	fetched  []string
 }
 
-func (f *fakeLine) Reply(_ context.Context, token string, texts []string) error {
-	f.sent = append(f.sent, sent{"reply", token, texts})
+func (f *fakeLine) Reply(_ context.Context, token string, msgs []OutMessage) error {
+	f.sent = append(f.sent, sent{"reply", token, texts(msgs), msgs})
 	return nil
 }
 
-func (f *fakeLine) Push(_ context.Context, to string, texts []string) error {
-	f.sent = append(f.sent, sent{"push", to, texts})
+func (f *fakeLine) Push(_ context.Context, to string, msgs []OutMessage) error {
+	f.sent = append(f.sent, sent{"push", to, texts(msgs), msgs})
 	return f.pushErr
 }
+
+func (f *fakeLine) Content(_ context.Context, id string, max int64) ([]byte, string, error) {
+	f.fetched = append(f.fetched, id)
+	c, ok := f.contents[id]
+	if !ok {
+		return nil, "", &APIError{Status: 404}
+	}
+	if c.err == nil && int64(len(c.data)) > max {
+		return nil, "", ErrTooLarge
+	}
+	return c.data, c.mime, c.err
+}
+
+type fakeMedia struct{ err error }
+
+func (f fakeMedia) Publish([]byte) (string, string, error) { return "o.png", "p.jpg", f.err }
 
 type fakeCC struct {
 	connected bool
@@ -73,9 +110,9 @@ type harness struct {
 }
 
 func newHarness(rooms fakeRooms) *harness {
-	h := &harness{line: &fakeLine{}, cc: &fakeCC{connected: true}, bind: &fakeBinder{}, now: time.Unix(1_800_000_000, 0)}
+	h := &harness{line: &fakeLine{contents: map[string]content{}}, cc: &fakeCC{connected: true}, bind: &fakeBinder{}, now: time.Unix(1_800_000_000, 0)}
 	h.a = New(Config{ChannelSecret: "secret", AllowFrom: map[string]bool{userA: true, userB: true}, Platform: "line"},
-		h.line, h.cc, h.bind, rooms)
+		h.line, h.cc, h.bind, rooms, fakeMedia{})
 	h.a.now = func() time.Time { return h.now }
 	h.a.spawn = func(io, done func()) { io(); done() } // 送信を同期的に行う
 	return h
@@ -364,20 +401,20 @@ func (f *blockingLine) wait(to string) {
 	}
 }
 
-func (f *blockingLine) record(kind, to string, texts []string) {
-	f.done <- sent{kind, to, texts}
-}
-
-func (f *blockingLine) Reply(_ context.Context, token string, texts []string) error {
+func (f *blockingLine) Reply(_ context.Context, token string, msgs []OutMessage) error {
 	f.wait(token)
-	f.record("reply", token, texts)
+	f.done <- sent{"reply", token, texts(msgs), msgs}
 	return nil
 }
 
-func (f *blockingLine) Push(_ context.Context, to string, texts []string) error {
+func (f *blockingLine) Push(_ context.Context, to string, msgs []OutMessage) error {
 	f.wait(to)
-	f.record("push", to, texts)
+	f.done <- sent{"push", to, texts(msgs), msgs}
 	return nil
+}
+
+func (f *blockingLine) Content(context.Context, string, int64) ([]byte, string, error) {
+	return nil, "", ErrTooLarge
 }
 
 type syncCC struct{ msgs chan cloudweb.Message }
@@ -402,7 +439,7 @@ func TestSlowLineDoesNotBlockOtherRooms(t *testing.T) {
 	ln := &blockingLine{gate: map[string]chan struct{}{group1: make(chan struct{})}, start: make(chan string, 16), done: make(chan sent, 16)}
 	cc := &syncCC{msgs: make(chan cloudweb.Message, 16)}
 	a := New(Config{ChannelSecret: "secret", AllowFrom: map[string]bool{userA: true}, Platform: "line"},
-		ln, cc, &fakeBinder{}, fakeRooms{group1: {Mode: ModeMention}, group2: {Mode: ModeMention}})
+		ln, cc, &fakeBinder{}, fakeRooms{group1: {Mode: ModeMention}, group2: {Mode: ModeMention}}, fakeMedia{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)
@@ -461,5 +498,147 @@ func TestOutboxOverflowDrops(t *testing.T) {
 	}
 	if len(h.line.sent) != maxOutbox+1 {
 		t.Errorf("sent %d", len(h.line.sent))
+	}
+}
+
+// imageMsg と fileMsg は、画像とファイルの発言イベントを作る（メンションは付けられない）。
+func (h *harness) imageMsg(group, user, id string) event {
+	ev := h.groupMsg(group, user, "", false)
+	ev.Message = &message{ID: id, Type: "image", ContentProvider: &struct {
+		Type string `json:"type"`
+	}{"line"}}
+	return ev
+}
+
+func (h *harness) fileMsg(group, user, id, name string, size int64) event {
+	ev := h.groupMsg(group, user, "", false)
+	ev.Message = &message{ID: id, Type: "file", FileName: name, FileSize: size}
+	return ev
+}
+
+func TestAttachmentsGoWithSameUsersNextRequest(t *testing.T) {
+	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
+	h.line.contents["101"] = content{data: []byte("img"), mime: "image/jpeg"}
+	h.line.contents["102"] = content{data: []byte("doc"), mime: "application/pdf"}
+	h.a.handleEvent(h.imageMsg(group1, userA, "101"))
+	h.a.handleEvent(h.fileMsg(group1, userA, "102", "a.pdf", 3))
+	h.wantForwarded(t) // 画像やファイルだけでは渡さない
+
+	h.a.handleEvent(h.groupMsg(group1, userB, "other user", true))
+	h.a.handleEvent(h.groupMsg(group1, userA, "これを見て", true))
+	h.a.handleEvent(h.groupMsg(group1, userA, "next", true))
+	h.wantForwarded(t, "other user", "これを見て", "next")
+	m := h.cc.msgs
+	if len(m[0].Images)+len(m[0].Files) != 0 || len(m[2].Images)+len(m[2].Files) != 0 {
+		t.Errorf("attachments went to the wrong message: %+v", m)
+	}
+	img, file := m[1].Images, m[1].Files
+	if len(img) != 1 || img[0].MimeType != "image/jpeg" || img[0].Data != base64.StdEncoding.EncodeToString([]byte("img")) {
+		t.Errorf("image: %+v", img)
+	}
+	if len(file) != 1 || file[0].FileName != "a.pdf" || file[0].MimeType != "application/pdf" {
+		t.Errorf("file: %+v", file)
+	}
+}
+
+func TestAttachmentsExpire(t *testing.T) {
+	h := newHarness(nil)
+	h.line.contents["101"] = content{data: []byte("img"), mime: "image/jpeg"}
+	ev := h.imageMsg(group1, userA, "101")
+	ev.Source = source{Type: "user", UserID: userA}
+	h.a.handleEvent(ev)
+	h.now = h.now.Add(attachmentTTL)
+	h.a.handleEvent(h.directMsg(userA, "late"))
+	if len(h.cc.msgs) != 1 || len(h.cc.msgs[0].Images) != 0 {
+		t.Errorf("expired attachment was sent: %+v", h.cc.msgs)
+	}
+}
+
+func TestTooLargeAttachmentsAreRefused(t *testing.T) {
+	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
+	h.a.handleEvent(h.fileMsg(group1, userA, "201", "big.zip", maxInFileBytes+1))
+	if len(h.line.fetched) != 0 {
+		t.Error("too large file was fetched")
+	}
+	if got := h.lastSent(t); got.kind != "reply" || got.texts[0] != msgTooLarge {
+		t.Errorf("unexpected: %+v", got)
+	}
+	h.line.contents["202"] = content{data: make([]byte, maxInImageBytes+1), mime: "image/jpeg"}
+	h.a.handleEvent(h.imageMsg(group1, userA, "202"))
+	if got := h.lastSent(t); got.texts[0] != msgTooLarge {
+		t.Errorf("unexpected: %+v", got)
+	}
+	h.a.handleEvent(h.groupMsg(group1, userA, "hi", true))
+	if len(h.cc.msgs[0].Images) != 0 {
+		t.Error("too large image was attached")
+	}
+}
+
+// 画像の取得が終わる前に届いた依頼は、取得を待ってから画像を添えて渡す。
+func TestRequestWaitsForDownload(t *testing.T) {
+	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
+	var pending []func()
+	h.a.spawn = func(io, done func()) { pending = append(pending, func() { io(); done() }) }
+	h.line.contents["101"] = content{data: []byte("img"), mime: "image/png"}
+	h.a.handleEvent(h.imageMsg(group1, userA, "101"))
+	h.a.handleEvent(h.groupMsg(group1, userB, "not waiting", true))
+	h.a.handleEvent(h.groupMsg(group1, userA, "describe it", true))
+	h.wantForwarded(t, "not waiting")
+	pending[0]()
+	h.wantForwarded(t, "not waiting", "describe it")
+	if len(h.cc.msgs[1].Images) != 1 {
+		t.Errorf("image not attached: %+v", h.cc.msgs[1])
+	}
+}
+
+func TestApprovalDoesNotTakeAttachments(t *testing.T) {
+	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
+	h.line.contents["101"] = content{data: []byte("img"), mime: "image/png"}
+	h.frame(group1, permissionPrompt)
+	h.a.handleEvent(h.imageMsg(group1, userA, "101"))
+	h.a.handleEvent(h.groupMsg(group1, userA, "allow", false))
+	h.frame(group1, "✅ 許可しました。続行中...")
+	h.a.handleEvent(h.groupMsg(group1, userA, "now this", true))
+	h.wantForwarded(t, "allow", "now this")
+	if len(h.cc.msgs[0].Images) != 0 || len(h.cc.msgs[1].Images) != 1 {
+		t.Errorf("unexpected attachments: %+v", h.cc.msgs)
+	}
+}
+
+func TestImageFromCCConnect(t *testing.T) {
+	data := base64.StdEncoding.EncodeToString([]byte("png"))
+	imageFrame := func(h *harness) {
+		h.a.handleFrame(cloudweb.Frame{Type: "image", SessionKey: "line:" + userA, ReplyCtx: userA, Data: data, MimeType: "image/png"})
+	}
+
+	// 公開する URL が分からなければ、理由を知らせる
+	h := newHarness(nil)
+	imageFrame(h)
+	if got := h.lastSent(t); got.texts[0] != msgNoPublicURL {
+		t.Errorf("unexpected: %+v", got)
+	}
+
+	// 署名を確かめた Webhook がトンネル（https）を通って届いたら、そのホスト名を使う
+	body := `{"events":[]}`
+	req := httptest.NewRequest(http.MethodPost, "https://example.trycloudflare.com/callback", strings.NewReader(body))
+	req.Header.Set("X-Line-Signature", sign("secret", body))
+	req.Header.Set("X-Forwarded-Proto", "https")
+	h.a.ServeHTTP(httptest.NewRecorder(), req)
+	for len(h.a.events) > 0 {
+		(<-h.a.events)()
+	}
+	imageFrame(h)
+	got := h.lastSent(t)
+	if got.kind != "push" || len(got.msgs) != 1 || got.msgs[0].Type != "image" ||
+		got.msgs[0].OriginalContentURL != "https://example.trycloudflare.com/media/o.png" ||
+		got.msgs[0].PreviewImageURL != "https://example.trycloudflare.com/media/p.jpg" {
+		t.Errorf("unexpected: %+v", got)
+	}
+
+	// LINE に送れない画像なら、理由を知らせる
+	h.a.media = fakeMedia{err: ErrUnsupportedImage}
+	imageFrame(h)
+	if got := h.lastSent(t); got.texts[0] != msgBadImage {
+		t.Errorf("unexpected: %+v", got)
 	}
 }
