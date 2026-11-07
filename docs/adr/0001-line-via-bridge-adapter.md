@@ -4,6 +4,8 @@ status: accepted
 
 # LINE も cc-connect 標準の LINE platform ではなく、Bridge 経由の自作アダプターで接続する
 
+> cc-connect へのつなぎ方（Bridge）は ADR 0003 で cloud_web に置き換えた。自作アダプターにするという判断は変わらない。
+
 本番ではグループでメンションされたときだけ反応させたい。しかし cc-connect v1.5.0 の LINE platform には、Feishu・Slack・Discord などにある `group_reply_all = false` に相当する設定がなく、グループの全発言に反応する。本体へ PR を出しても、未処理の PR が 300 件を超え、LINE の改善 PR #854 も半年間取り込まれていないため、早期の取り込みは見込めない。fork を保守し続けることも避けたい。そのため、LINE WORKS・Chatwork と同じ Bridge 基盤の上に LINE アダプターを自作する。標準の LINE platform は、まず検証で実際の挙動を測るために使う。測定で別の致命的な問題が見つかった場合は、この判断を見直す。
 
 ## Considered Options

@@ -4,7 +4,7 @@ cc-connect の外部アダプター群。LINE・LINE WORKS・Chatwork のルー�
 
 ## 方針
 
-- 実現手段の優先順は「cc-connect の既存機能 → Bridge につなぐ外部アダプター → cc-connect 本体の改修」。fork はしない。
+- 実現手段の優先順は「cc-connect の既存機能 → 外部アダプター（cloud_web でつなぐ。ADR 0003） → cc-connect 本体の改修」。fork はしない。
 - 作業の前に、`GLOSSARY.md`（用語）、`docs/adr/`（確定した判断）、GitHub の統括 issue（進捗と未決事項）を読む。
 - cc-connect の挙動は、ドキュメントよりソースとテストを信じる。
 
