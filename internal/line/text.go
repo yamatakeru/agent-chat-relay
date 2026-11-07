@@ -40,6 +40,13 @@ func isApproveAll(text string) bool {
 	return slices.ContainsFunc(tokens, func(t string) bool { return slices.Contains(approveAllTokens, t) })
 }
 
+// isApproveAllWord は、発言の全体が「allow all」の言い方かを返す（メンションなしの発言に使う）。
+func isApproveAllWord(text string) bool {
+	tokens := permissionTokens(text)
+	return slices.ContainsFunc(approveAllPhrases, func(ph []string) bool { return slices.Equal(tokens, ph) }) ||
+		len(tokens) == 1 && slices.Contains(approveAllTokens, tokens[0])
+}
+
 // permissionTokens は、文字・数字以外で区切り、小文字にする。cc-connect の splitPermissionTokens は
 // 空白と一部の記号だけで区切る。こちらはその上位集合で区切るので、cc-connect が allow all とみなす
 // 発言は必ず検出できる（多めに検出することはある）。

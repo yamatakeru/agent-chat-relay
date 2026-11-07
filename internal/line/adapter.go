@@ -265,12 +265,15 @@ func (a *Adapter) handleEvent(ev event) {
 		MsgID: ev.Message.ID, ChatID: roomID, UserID: user, Content: text,
 		ReplyCtx: roomID, ChatType: chatType, Mentioned: true,
 	}
+	// cc-connect は承認待ちの間に allow all を受け取ると、以降の承認をすべて省く。
+	// 承認の言葉と同じく、承認待ちの間はメンションなしの「allow all」だけの発言にも断りを返す
+	blockAll := (forward || hold) && isApproveAll(text) ||
+		st.wait == waitPermission && isApproveAllWord(text)
 	switch {
-	case !forward && !hold:
-		return
-	case isApproveAll(text):
-		// cc-connect は承認待ちの間に allow all を受け取ると、以降の承認をすべて省く
+	case blockAll:
 		a.notify(st, msgApproveAll)
+		return
+	case !forward && !hold:
 		return
 	case ev.DeliveryContext.IsRedelivery:
 		// アダプターが止まっている間に届き、あとで再送された依頼は実行しない

@@ -18,7 +18,7 @@
 - 承認の言葉は、メンションがなくても渡す。ただし、承認待ちのときに限る。承認待ちでなければ無視する。
 - 承認待ちは、cc-connect から承認依頼の文面が届いたときに始まり、そのルームへの次の送信で終わる。
 - 承認できるのは、許可した人なら誰でもよい。将来、承認者のホワイトリストを足せるようにしておく。
-- `allow all` は原則禁止。cc-connect が `allow all` とみなす言い方（`allow all`・`approve all`・`yes all`・`allowall` と中国語の 6 語。`core/engine.go` の `approveAllPhrases`・`approveAllSingleTokens`）は渡さず、「このルームでは使えない」と返す。将来、特権ユーザーには許可するかもしれない。
+- `allow all` は原則禁止。cc-connect が `allow all` とみなす言い方（`allow all`・`approve all`・`yes all`・`allowall` と中国語の 6 語。`core/engine.go` の `approveAllPhrases`・`approveAllSingleTokens`）は渡さず、「このルームでは使えない」と返す。承認待ちの間は、メンションのない発言でも、発言の全体が `allow all` の言い方なら同じく返す。将来、特権ユーザーには許可するかもしれない。
 - 承認待ちの間は、承認の言葉以外の発言（メンション付きも含む）を保留し、待ちが終わってから渡す。cc-connect は、承認待ちの間の発言を単語単位で承認の返事として解釈する（`ok`・`no` なども含む）ため、「@Bot ok, but explain first」でも承認されてしまう。
 - 受信モードが「すべて」のグループでは、Claude からの質問（AskUserQuestion）への回答待ちの間も、メンションのない発言を保留し、待ちが終わってから渡す。質問への回答待ちの間、cc-connect は次の発言をそのまま回答にする。
 

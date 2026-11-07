@@ -27,6 +27,17 @@ func TestIsApproveAll(t *testing.T) {
 	}
 }
 
+func TestIsApproveAllWord(t *testing.T) {
+	for in, want := range map[string]bool{
+		"allow all": true, " Allow All! ": true, "approve all": true, "allowall": true, "全部允许": true,
+		"please approve all now": false, "allow": false, "all": false,
+	} {
+		if got := isApproveAllWord(in); got != want {
+			t.Errorf("isApproveAllWord(%q) = %v", in, got)
+		}
+	}
+}
+
 func TestClassify(t *testing.T) {
 	for in, want := range map[string]outgoingKind{
 		permissionPrompt: kindPermissionPrompt,

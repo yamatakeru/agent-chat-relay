@@ -239,6 +239,29 @@ func TestApproveAllIsBlocked(t *testing.T) {
 	}
 }
 
+// 承認の言葉と同じく、メンションなしの「allow all」にも断りを返す。雑談には返さない
+func TestUnmentionedApproveAllIsBlocked(t *testing.T) {
+	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
+	h.frame(group1, permissionPrompt)
+	before := len(h.line.sent)
+	h.a.handleEvent(h.groupMsg(group1, userA, "we should not allow all of them", false))
+	if len(h.line.sent) != before {
+		t.Fatalf("notice for unmentioned chat: %+v", h.line.sent[before:])
+	}
+	h.a.handleEvent(h.groupMsg(group1, userA, "Allow All", false))
+	h.wantForwarded(t)
+	if got := h.lastSent(t); got.kind != "reply" || got.texts[0] != msgApproveAll {
+		t.Errorf("unexpected notice: %+v", got)
+	}
+	// 承認待ちでなければ反応しない
+	h.frame(group1, "❌ 拒否しました。")
+	before = len(h.line.sent)
+	h.a.handleEvent(h.groupMsg(group1, userA, "allow all", false))
+	if len(h.line.sent) != before {
+		t.Errorf("notice outside pending: %+v", h.line.sent[before:])
+	}
+}
+
 func TestReplyTokenReuseAndPushFallback(t *testing.T) {
 	h := newHarness(fakeRooms{group1: {Mode: ModeMention}})
 	ev := h.groupMsg(group1, userA, "question", true)
