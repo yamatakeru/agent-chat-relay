@@ -77,6 +77,7 @@ func newHarness(rooms fakeRooms) *harness {
 	h.a = New(Config{ChannelSecret: "secret", AllowFrom: map[string]bool{userA: true, userB: true}, Platform: "line"},
 		h.line, h.cc, h.bind, rooms)
 	h.a.now = func() time.Time { return h.now }
+	h.a.spawn = func(io, done func()) { io(); done() } // 送信を同期的に行う
 	return h
 }
 
@@ -346,5 +347,119 @@ func TestQuotaNoticeIsAddedToNextReply(t *testing.T) {
 	got := h.lastSent(t)
 	if got.kind != "reply" || len(got.texts) != 2 || got.texts[0] != msgQuota {
 		t.Errorf("quota notice not prepended: %+v", got)
+	}
+}
+
+// blockingLine は、gate が閉じている間、指定した宛先への送信を止める（並行に呼ばれる）。
+type blockingLine struct {
+	gate  map[string]chan struct{} // 宛先（トークンかルーム）ごとの関門。作ったあとは書き換えない
+	start chan string              // 送信を始めた宛先
+	done  chan sent                // 送り終えたもの
+}
+
+func (f *blockingLine) wait(to string) {
+	f.start <- to
+	if g := f.gate[to]; g != nil {
+		<-g
+	}
+}
+
+func (f *blockingLine) record(kind, to string, texts []string) {
+	f.done <- sent{kind, to, texts}
+}
+
+func (f *blockingLine) Reply(_ context.Context, token string, texts []string) error {
+	f.wait(token)
+	f.record("reply", token, texts)
+	return nil
+}
+
+func (f *blockingLine) Push(_ context.Context, to string, texts []string) error {
+	f.wait(to)
+	f.record("push", to, texts)
+	return nil
+}
+
+type syncCC struct{ msgs chan cloudweb.Message }
+
+func (f *syncCC) Send(m cloudweb.Message) error { f.msgs <- m; return nil }
+func (f *syncCC) Connected() bool               { return true }
+
+func recv[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out")
+	}
+	var zero T
+	return zero
+}
+
+// LINE への送信が詰まっても、ほかのルームの処理と送信は進む。同じルームの送信は順に行う。
+func TestSlowLineDoesNotBlockOtherRooms(t *testing.T) {
+	ln := &blockingLine{gate: map[string]chan struct{}{group1: make(chan struct{})}, start: make(chan string, 16), done: make(chan sent, 16)}
+	cc := &syncCC{msgs: make(chan cloudweb.Message, 16)}
+	a := New(Config{ChannelSecret: "secret", AllowFrom: map[string]bool{userA: true}, Platform: "line"},
+		ln, cc, &fakeBinder{}, fakeRooms{group1: {Mode: ModeMention}, group2: {Mode: ModeMention}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx)
+
+	frame := func(room, content string) {
+		a.OnFrame(cloudweb.Frame{Type: "reply", SessionKey: "line:" + room, ReplyCtx: room, Content: content})
+	}
+	// group1 への Push が詰まる
+	frame(group1, "answer 1")
+	if got := recv(t, ln.start); got != group1 {
+		t.Fatalf("first send to %q", got)
+	}
+	frame(group1, "answer 2") // answer 1 が終わるまで送らない
+
+	// その間も、group2 の発言は cc-connect に渡り、返事も送られる
+	h := &harness{now: time.Now()}
+	a.enqueue(func() { a.handleEvent(h.groupMsg(group2, userA, "hello", true)) })
+	if m := recv(t, cc.msgs); m.ChatID != group2 {
+		t.Fatalf("forwarded %+v", m)
+	}
+	frame(group2, "answer to group2")
+	if got := recv(t, ln.start); got == group1 {
+		t.Fatal("answer 2 was sent before answer 1 finished")
+	}
+
+	close(ln.gate[group1])
+	if got := recv(t, ln.start); got != group1 {
+		t.Fatalf("answer 2 sent to %q", got)
+	}
+	var order []string
+	for range 3 {
+		if s := recv(t, ln.done); s.to == group1 {
+			order = append(order, s.texts[0])
+		}
+	}
+	if !slices.Equal(order, []string{"answer 1", "answer 2"}) {
+		t.Errorf("group1 order %q", order)
+	}
+}
+
+func TestOutboxOverflowDrops(t *testing.T) {
+	h := newHarness(nil)
+	var pending []func()
+	h.a.spawn = func(io, done func()) { pending = append(pending, func() { io(); done() }) }
+	for i := range maxOutbox + 5 {
+		h.frame(userA, fmt.Sprintf("answer %d", i))
+	}
+	st := h.a.state[userA]
+	if len(st.outbox) != maxOutbox || !st.sending {
+		t.Fatalf("outbox %d sending %v", len(st.outbox), st.sending)
+	}
+	for len(pending) > 0 {
+		f := pending[0]
+		pending = pending[1:]
+		f()
+	}
+	if len(h.line.sent) != maxOutbox+1 {
+		t.Errorf("sent %d", len(h.line.sent))
 	}
 }
