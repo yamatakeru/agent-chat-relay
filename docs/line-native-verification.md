@@ -181,6 +181,7 @@ userId を登録する前（手順 5）は、`note: 許可する userId が未�
 
 - `cmd` の `--setting-sources project,local`：`~/.claude/settings.json` の allow ルール（例：`Bash(find:*)` や `Bash(uv:*)`。どちらも任意のコードを実行できる）を、グループからの依頼で承認なしに使わせないため。
 - `cmd` の `claudeMdExcludes`：あなたの `~/.claude/CLAUDE.md` や上位ディレクトリの `AGENTS.md` を、グループからの依頼で動く Claude に読ませないため。`--setting-sources` を指定しても、`~/.claude/CLAUDE.md` は読み込まれる（2.1.318 で確認）。
+- `cmd` の `autoMemoryEnabled: false`：自動メモリを無効にする。メモリは承認なしで `~/.claude/projects/<作業場所>/memory/` に書き込まれ、同じ作業場所で動くすべてのルームに読み込まれる。ユーザー設定で無効にしていても、`--setting-sources` で外れる。
 - `disabled_commands`：`/mode` や `/allow` のように実行承認を迂回できるコマンドと、設定を変えるコマンドを無効にする。
 - `admin_from` を設定しない：`/shell` や `/dir` などの特権コマンドは、誰も使えない。
 - `reply_footer = false`：作業ディレクトリの絶対パスなどを、ルームに出さないため。

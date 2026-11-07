@@ -41,9 +41,11 @@ mode = "default"
 # 読み込むと、find や uv のような任意のコードを実行できるコマンドが、承認なしで通ってしまう
 # claudeMdExcludes：AGENTS.md・CLAUDE.md を読み込ませない。--setting-sources を指定しても、
 # ユーザーの ~/.claude/CLAUDE.md は読み込まれる（2.1.318 で確認）。上位ディレクトリの AGENTS.md も対象
+# autoMemoryEnabled：自動メモリを無効にする。メモリは承認なしで書き込まれ、同じ work_dir の
+# すべてのルームに読み込まれる。ユーザー設定で無効にしていても、--setting-sources で外れる
 cmd = [
   "claude", "--setting-sources", "project,local",
-  "--settings", '{"claudeMdExcludes":["**/AGENTS.md","**/CLAUDE.md"]}',
+  "--settings", '{"claudeMdExcludes":["**/AGENTS.md","**/CLAUDE.md"],"autoMemoryEnabled":false}',
 ]
 
 [[projects.platforms]]
