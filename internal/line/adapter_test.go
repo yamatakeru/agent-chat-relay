@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -353,26 +352,20 @@ func TestQuotaNoticeIsAddedToNextReply(t *testing.T) {
 
 // blockingLine は、gate が閉じている間、指定した宛先への送信を止める（並行に呼ばれる）。
 type blockingLine struct {
-	mu    sync.Mutex
-	gate  map[string]chan struct{} // 宛先（トークンかルーム）ごとの関門
-	sent  []sent
-	start chan string // 送信を始めた宛先
+	gate  map[string]chan struct{} // 宛先（トークンかルーム）ごとの関門。作ったあとは書き換えない
+	start chan string              // 送信を始めた宛先
+	done  chan sent                // 送り終えたもの
 }
 
 func (f *blockingLine) wait(to string) {
 	f.start <- to
-	f.mu.Lock()
-	g := f.gate[to]
-	f.mu.Unlock()
-	if g != nil {
+	if g := f.gate[to]; g != nil {
 		<-g
 	}
 }
 
 func (f *blockingLine) record(kind, to string, texts []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sent = append(f.sent, sent{kind, to, texts})
+	f.done <- sent{kind, to, texts}
 }
 
 func (f *blockingLine) Reply(_ context.Context, token string, texts []string) error {
@@ -392,10 +385,6 @@ type syncCC struct{ msgs chan cloudweb.Message }
 func (f *syncCC) Send(m cloudweb.Message) error { f.msgs <- m; return nil }
 func (f *syncCC) Connected() bool               { return true }
 
-type syncBinder struct{}
-
-func (syncBinder) Ensure(string) error { return nil }
-
 func recv[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
 	select {
@@ -410,10 +399,10 @@ func recv[T any](t *testing.T, ch <-chan T) T {
 
 // LINE への送信が詰まっても、ほかのルームの処理と送信は進む。同じルームの送信は順に行う。
 func TestSlowLineDoesNotBlockOtherRooms(t *testing.T) {
-	ln := &blockingLine{gate: map[string]chan struct{}{group1: make(chan struct{})}, start: make(chan string, 16)}
+	ln := &blockingLine{gate: map[string]chan struct{}{group1: make(chan struct{})}, start: make(chan string, 16), done: make(chan sent, 16)}
 	cc := &syncCC{msgs: make(chan cloudweb.Message, 16)}
 	a := New(Config{ChannelSecret: "secret", AllowFrom: map[string]bool{userA: true}, Platform: "line"},
-		ln, cc, syncBinder{}, fakeRooms{group1: {Mode: ModeMention}, group2: {Mode: ModeMention}})
+		ln, cc, &fakeBinder{}, fakeRooms{group1: {Mode: ModeMention}, group2: {Mode: ModeMention}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)
@@ -443,28 +432,14 @@ func TestSlowLineDoesNotBlockOtherRooms(t *testing.T) {
 	if got := recv(t, ln.start); got != group1 {
 		t.Fatalf("answer 2 sent to %q", got)
 	}
-	// 3 通の記録を待ってから、group1 の順序を確かめる
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		ln.mu.Lock()
-		var order []string
-		for _, s := range ln.sent {
-			if s.to == group1 {
-				order = append(order, s.texts[0])
-			}
+	var order []string
+	for range 3 {
+		if s := recv(t, ln.done); s.to == group1 {
+			order = append(order, s.texts[0])
 		}
-		n := len(ln.sent)
-		ln.mu.Unlock()
-		if n == 3 {
-			if !slices.Equal(order, []string{"answer 1", "answer 2"}) {
-				t.Errorf("group1 order %q", order)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("sent %d, want 3", n)
-		}
-		time.Sleep(time.Millisecond)
+	}
+	if !slices.Equal(order, []string{"answer 1", "answer 2"}) {
+		t.Errorf("group1 order %q", order)
 	}
 }
 

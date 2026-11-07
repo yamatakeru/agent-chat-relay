@@ -442,10 +442,14 @@ func (a *Adapter) sendNext(st *roomState) {
 		if withQuota {
 			texts = append([]string{msgQuota}, out.texts...)
 		}
+		pushTexts := out.texts
+		if out.notice {
+			pushTexts = nil // 案内は Push しない
+		}
 		var res sendResult
 		st.sending = true
 		a.spawn(func() {
-			res = a.send(st.id, tok, texts, out.texts, !out.notice)
+			res = a.send(st.id, tok, texts, pushTexts)
 		}, func() {
 			st.sending = false
 			if withQuota && res.replied {
@@ -466,14 +470,14 @@ type sendResult struct {
 }
 
 // send は、LINE へ送る（Run の外で動く。ルームの状態には触れない）。
-// tok があれば replyTexts を Reply で送り、トークンが無効なら pushTexts を Push で送る（push が偽なら送らない）。
-func (a *Adapter) send(roomID, tok string, replyTexts, pushTexts []string, push bool) sendResult {
+// tok があれば replyTexts を Reply で送り、トークンがないか無効なら pushTexts を Push で送る（nil なら送らない）。
+func (a *Adapter) send(roomID, tok string, replyTexts, pushTexts []string) sendResult {
 	if tok != "" {
 		err := a.line.Reply(a.ctx, tok, replyTexts)
 		if err == nil {
 			return sendResult{replied: true}
 		}
-		if ae, ok := errors.AsType[*APIError](err); !ok || !ae.InvalidReplyToken() || !push {
+		if ae, ok := errors.AsType[*APIError](err); !ok || !ae.InvalidReplyToken() || pushTexts == nil {
 			// 送れたかどうか分からない場合に Push すると二重に届くので、記録だけにする
 			slog.Error("line: reply failed", "room", roomID, "error", err)
 			return sendResult{}
