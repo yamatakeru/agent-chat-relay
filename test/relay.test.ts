@@ -1,18 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { AccessStore } from "../src/access.ts"
-import { splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
+import { sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
 import { type Connector, type Incoming, Relay } from "../src/relay.ts"
-import { createHmac } from "node:crypto"
+import { withoutRelaySecrets } from "../src/harness.ts"
 
 let dir: string
 let access: AccessStore
 let now = 1_000_000
 
 beforeEach(() => {
-  // テストの一時ファイルもリポジトリ内（.local/）に作る
-  dir = mkdtempSync(join(import.meta.dir, "../.local/test-"))
+  // /tmp は使わない（AGENTS.md）
+  const base = join(import.meta.dir, "../.local")
+  mkdirSync(base, { recursive: true })
+  dir = mkdtempSync(join(base, "test-"))
   access = new AccessStore(join(dir, "access.json"), () => now)
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
@@ -146,9 +148,14 @@ describe("relay", () => {
   })
 })
 
+test("ハーネスには中継の秘密情報を渡さない", () => {
+  const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", CCJ_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
+  expect(env).toEqual({ PATH: "/bin" })
+})
+
 describe("line", () => {
   test("署名を確かめる", () => {
-    const sig = createHmac("sha256", "secret").update("body").digest("base64")
+    const sig = sign("secret", "body")
     expect(verifySignature("secret", "body", sig)).toBe(true)
     expect(verifySignature("other", "body", sig)).toBe(false)
     expect(verifySignature("secret", "body", "")).toBe(false)

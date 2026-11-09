@@ -33,7 +33,7 @@ function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Ha
       const claude = Bun.which("claude")
       if (!claude) throw new Error("claude が見つかりません")
       return {
-        // claude-agent-acp は Node 向けだが、Bun でも動く。同梱の CLI は入れず、インストール済みの claude を使う
+        // Agent SDK に同梱の CLI は入れていない（bunfig.toml）。インストール済みの claude を使う
         command: [process.execPath, resolve("node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js")],
         env: { CLAUDE_CODE_EXECUTABLE: claude },
         cwd,
@@ -44,13 +44,12 @@ function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Ha
             options: {
               // ユーザー設定（~/.claude/settings.json）の allow ルールや hooks を読み込ませない
               settingSources: ["project", "local"],
-              // ユーザーや上位ディレクトリの CLAUDE.md・AGENTS.md と、自動メモリを読み込ませない。
-              // 権限モードは default（ツールを実行するたびに承認を求める）。指定しないと、
-              // claude-agent-acp は auto モード（分類器による自動承認）で始める
               settings: {
+                // ユーザーや上位ディレクトリの CLAUDE.md・AGENTS.md と、自動メモリを読み込ませない
                 claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"],
                 autoMemoryEnabled: false,
-                // チャット用ツール（mcp__chat）だけは承認なしで使える。送り先は中継が、登録したルームと許可した DM に限る
+                // ツールを実行するたびに承認を求める。指定しないと、claude-agent-acp は auto モード（分類器による自動承認）で始める。
+                // mcp__chat だけは承認なし（送り先は中継が、登録したルームと許可した DM に限る。ADR 0008）
                 permissions: { defaultMode: "default", allow: ["mcp__chat"] },
               },
             },
@@ -59,10 +58,12 @@ function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Ha
       }
     }
     case "opencode": {
-      // OpenCode v2 は環境変数（OPENCODE_CONFIG_CONTENT）の設定を読まない。作業場所のプロジェクト設定に書く。
-      // 既定では、ほぼすべてを承認なしで実行する（.env の読み取りだけ尋ねる）。組み込みの build エージェントの
-      // 規則（* を許可）より後に効くよう、エージェントの規則として書く（後の規則ほど優先される）。
-      // Claude Code の default モードに合わせ、すべて尋ねたうえで、読み取りとチャット用ツールだけを許す
+      // 今は実行承認が働かない（#6）。安全境界を割るので、明示しない限り起動しない
+      if (process.env.RELAY_ALLOW_UNSAFE_HARNESS !== "1") {
+        throw new Error("opencode では実行承認が働かない（#6）ため、RELAY_ALLOW_UNSAFE_HARNESS=1 がないと起動しません")
+      }
+      // 既定ではほぼすべてを承認なしで実行するので、すべて尋ねたうえで、読み取りとチャット用ツールだけを許す。
+      // 組み込みの build エージェントの規則（* を許可）より後に効くよう、エージェントの規則として書く（後の規則ほど優先される）
       const config = {
         $schema: "https://opencode.ai/config.json",
         ...(process.env.RELAY_OPENCODE_MODEL ? { model: process.env.RELAY_OPENCODE_MODEL } : {}),
@@ -88,7 +89,7 @@ function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Ha
   }
 }
 
-async function serve(): Promise<void> {
+async function serve(access: AccessStore): Promise<void> {
   const workspace = join(home, "workspace")
   if (!existsSync(join(workspace, ".git"))) {
     // 作業場所を独立した git リポジトリにして、上位（このリポジトリ）の設定や AGENTS.md を拾わせない
@@ -97,7 +98,7 @@ async function serve(): Promise<void> {
   }
   const inbox = join(workspace, ".relay", "inbox")
 
-  const relay = new Relay(new AccessStore(accessPath), log)
+  const relay = new Relay(access, log)
   const line = new LineConnector(
     {
       channelSecret: required("RELAY_LINE_CHANNEL_SECRET"),
@@ -138,8 +139,6 @@ async function serve(): Promise<void> {
   const stop = () => {
     log("停止します")
     harness.stop()
-    void webhook.stop()
-    void mcp.stop()
   }
   process.on("SIGINT", stop)
   process.on("SIGTERM", stop)
@@ -159,7 +158,7 @@ async function main(): Promise<void> {
   const access = new AccessStore(accessPath)
   switch (cmd) {
     case "serve":
-      return serve()
+      return serve(access)
     case "pair": {
       if (!arg) throw new Error("usage: relay pair <code>")
       const p = access.approve(arg)

@@ -1,10 +1,10 @@
 // LINE の接続部。Webhook の受信と、Messaging API での送信を受け持つ。
-// 仕様の判断は old/docs/line-adapter.md を引き継ぐ（Reply トークンを優先する送信、吹き出しの分割など）。
 
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { extname, join } from "node:path"
-import type { Attachment, Connector, Relay } from "./relay.ts"
+import { localId } from "./access.ts"
+import type { Attachment, Connector, Relay, Verdict } from "./relay.ts"
 
 const SERVICE = "line"
 const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンは 1 分で切れる。余裕を見て 50 秒
@@ -12,7 +12,8 @@ const MAX_BUBBLES = 5 // 1 回の送信に入れられる吹き出しの数
 const MAX_BUBBLE_UNITS = 5000 // 吹き出し 1 つの最大文字数（UTF-16 の単位）
 const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略しました）"
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
-const SENT_IDS_CAP = 200
+const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
+const CACHE_CAP = 1000
 
 type Source = { type: "user" | "group" | "room"; userId?: string; groupId?: string; roomId?: string }
 type Mentionee = { index: number; length: number; isSelf?: boolean }
@@ -37,7 +38,7 @@ type LineEvent = {
   postback?: { data: string }
 }
 
-export type LineConfig = {
+type LineConfig = {
   channelSecret: string
   channelToken: string
   apiBase?: string
@@ -53,7 +54,7 @@ export class LineConnector implements Connector {
   private readonly sentIds = new Set<string>()
   private readonly seenEvents = new Set<string>()
   private readonly names = new Map<string, string>()
-  /** ファイルの発言の元の名前（拡張子を保つため） */
+  /** ファイルの元の名前。取得したファイルの拡張子に使う */
   private readonly fileNames = new Map<string, string>()
 
   constructor(
@@ -65,7 +66,7 @@ export class LineConnector implements Connector {
     this.dataApi = (cfg.dataApiBase ?? cfg.apiBase ?? "https://api-data.line.me").replace(/\/$/, "")
   }
 
-  /** Webhook の受け口。署名を確かめ、すぐ 200 を返して、イベントは後で処理する */
+  /** 署名を確かめ、すぐ 200 を返す。イベントはその後で処理する */
   async handleWebhook(req: Request): Promise<Response> {
     const body = await req.text()
     if (!verifySignature(this.cfg.channelSecret, body, req.headers.get("x-line-signature") ?? "")) {
@@ -88,36 +89,29 @@ export class LineConnector implements Connector {
   async handleEvent(ev: LineEvent): Promise<void> {
     if (ev.webhookEventId) {
       if (this.seenEvents.has(ev.webhookEventId)) return
-      this.seenEvents.add(ev.webhookEventId)
-      if (this.seenEvents.size > 1000) this.seenEvents.delete(this.seenEvents.values().next().value!)
+      remember(this.seenEvents, ev.webhookEventId)
     }
     const room = roomOf(ev.source)
     if (!room) return
     if (ev.replyToken && !ev.deliveryContext?.isRedelivery) this.addToken(room, ev.replyToken)
+    const sender = ev.source.userId ? `${SERVICE}:${ev.source.userId}` : undefined
 
-    switch (ev.type) {
-      case "join":
-        this.relay.joined(room)
-        return
-      case "postback": {
-        const m = /^perm:(allow|deny):([a-km-z]{5})$/.exec(ev.postback?.data ?? "")
-        const sender = ev.source.userId ? `${SERVICE}:${ev.source.userId}` : undefined
-        if (m && sender) {
-          const ok = this.relay.answer(sender, m[2]!, m[1] === "allow" ? "allow" : "deny")
-          await this.notice(room, ok ? (m[1] === "allow" ? "✅ 許可しました" : "❌ 拒否しました") : "その依頼は見つからないか、すでに答えが出ています")
-        }
-        return
-      }
-      case "message":
-        break
-      default:
-        return
+    if (ev.type === "join") {
+      this.relay.joined(room)
+      return
+    }
+    if (ev.type === "postback") {
+      const m = /^perm:(allow|deny):([a-km-z]{5})$/.exec(ev.postback?.data ?? "")
+      if (!m || !sender) return
+      const verdict = m[1] as Verdict
+      const ok = this.relay.answer(sender, m[2]!, verdict)
+      await this.notice(room, ok ? (verdict === "allow" ? "✅ 許可しました" : "❌ 拒否しました") : "その依頼は見つからないか、すでに答えが出ています")
+      return
     }
     const msg = ev.message
-    if (!msg || !ev.source.userId) return
-    const sender = `${SERVICE}:${ev.source.userId}`
+    if (ev.type !== "message" || !msg || !sender) return
     const isDM = ev.source.type === "user"
-    if (msg.quoteToken) this.rememberQuoteToken(msg.id, msg.quoteToken)
+    if (msg.quoteToken) remember(this.quoteTokens, msg.id, msg.quoteToken)
 
     let text = ""
     const attachments: Attachment[] = []
@@ -130,18 +124,18 @@ export class LineConnector implements Connector {
         break
       }
       case "image":
-        // 外部の URL にある画像（contentProvider が line 以外）は取得できない
+        // 外部の URL にある画像（contentProvider が line 以外）は、LINE から取得できない
         if (msg.contentProvider?.type !== "line") return
         attachments.push({ name: `image-${msg.id}`, type: "image" })
         text = "（画像）"
         break
       case "file":
-        if (msg.fileName) this.fileNames.set(msg.id, msg.fileName)
+        if (msg.fileName) remember(this.fileNames, msg.id, msg.fileName)
         attachments.push({ name: msg.fileName ?? `file-${msg.id}`, type: "file", size: msg.fileSize })
         text = "（ファイル）"
         break
       default:
-        return // 音声・動画・スタンプなどは扱わない
+        return
     }
     const result = this.relay.receive({
       id: msg.id,
@@ -154,7 +148,7 @@ export class LineConnector implements Connector {
       isDM,
       mentioned,
     })
-    if (result.action === "deliver" && isDM) void this.loading(ev.source.userId)
+    if (result.action === "deliver" && isDM) void this.loading(localId(sender))
   }
 
   async send(room: string, text: string, opts?: { replyTo?: string }): Promise<string[]> {
@@ -166,7 +160,7 @@ export class LineConnector implements Connector {
   }
 
   async sendApproval(user: string, text: string, requestId: string): Promise<void> {
-    // 承認者の DM へ送る（Push。承認者 1 人につき 1 通）。ボタンでも文字でも答えられる
+    // 承認者の DM へ Push で送る。ボタンでも、yes/no の文字でも答えられる
     const items = [
       { label: "許可", data: `perm:allow:${requestId}` },
       { label: "拒否", data: `perm:deny:${requestId}` },
@@ -178,7 +172,7 @@ export class LineConnector implements Connector {
   }
 
   async notice(room: string, text: string): Promise<void> {
-    // 案内は Reply トークンがあるときだけ送る（Push の通数を使わない）
+    // 案内は Reply でだけ送り、Push の通数を使わない
     const token = this.takeToken(room)
     if (!token) return
     await this.post("/v2/bot/message/reply", { replyToken: token, messages: [{ type: "text", text }] })
@@ -191,10 +185,9 @@ export class LineConnector implements Connector {
       signal: AbortSignal.timeout(120_000),
     })
     if (!res.ok) throw new Error(`LINE から取得できませんでした（HTTP ${res.status}）`)
-    const length = Number(res.headers.get("content-length") ?? 0)
-    if (length > MAX_DOWNLOAD_BYTES) throw new Error("大きすぎるため取得しません（25MB まで）")
+    if (Number(res.headers.get("content-length") ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error(TOO_LARGE)
     const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.length > MAX_DOWNLOAD_BYTES) throw new Error("大きすぎるため取得しません（25MB まで）")
+    if (buf.length > MAX_DOWNLOAD_BYTES) throw new Error(TOO_LARGE)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const ext = extname(this.fileNames.get(messageId) ?? "").replace(/[^.a-zA-Z0-9]/g, "") || extension(res.headers.get("content-type") ?? "")
     const path = join(dir, `${this.now()}-${messageId}${ext}`)
@@ -204,16 +197,13 @@ export class LineConnector implements Connector {
 
   async roomName(room: string): Promise<string | undefined> {
     const id = localId(room)
-    if (!/^C/.test(id)) return undefined
+    if (!id.startsWith("C")) return undefined
     const cached = this.names.get(room)
     if (cached) return cached
-    const res = await this.get(`/v2/bot/group/${id}/summary`)
-    const name = (res as { groupName?: string }).groupName
-    if (name) this.names.set(room, name)
+    const name = ((await this.get(`/v2/bot/group/${id}/summary`)) as { groupName?: string }).groupName
+    if (name) remember(this.names, room, name)
     return name
   }
-
-  // ---- 内部 ----
 
   private async memberName(source: Source): Promise<string | undefined> {
     const user = source.userId
@@ -227,11 +217,11 @@ export class LineConnector implements Connector {
         ? `/v2/bot/room/${source.roomId}/member/${user}`
         : `/v2/bot/profile/${user}`
     const name = ((await this.get(path)) as { displayName?: string }).displayName
-    if (name) this.names.set(key, name)
+    if (name) remember(this.names, key, name)
     return name
   }
 
-  /** Reply トークンがあれば Reply、なければ Push で送る */
+  /** Reply は通数に数えないので優先する。トークンがないか無効なら Push で送る */
   private async deliver(room: string, messages: object[]): Promise<string[]> {
     const token = this.takeToken(room)
     let res: unknown
@@ -240,48 +230,34 @@ export class LineConnector implements Connector {
         res = await this.post("/v2/bot/message/reply", { replyToken: token, messages })
       } catch (err) {
         if (!(err instanceof LineApiError && err.invalidReplyToken)) throw err
-        res = undefined
       }
     }
-    if (res === undefined) {
-      try {
-        res = await this.post("/v2/bot/message/push", { to: localId(room), messages })
-      } catch (err) {
-        if (err instanceof LineApiError && err.quotaExceeded) {
-          throw new Error("LINE の今月の送信数の上限に達したため、送れませんでした。次に発言があれば、その返事として送れます")
-        }
-        throw err
+    res ??= await this.post("/v2/bot/message/push", { to: localId(room), messages }).catch((err) => {
+      if (err instanceof LineApiError && err.quotaExceeded) {
+        throw new Error("LINE の今月の送信数の上限に達したため、送れませんでした。次に発言があれば、その返事として送れます")
       }
-    }
-    const ids = ((res as { sentMessages?: { id: string; quoteToken?: string }[] }).sentMessages ?? []).map((s) => {
-      this.noteSent(s.id)
-      if (s.quoteToken) this.rememberQuoteToken(s.id, s.quoteToken)
+      throw err
+    })
+    return ((res as { sentMessages?: { id: string; quoteToken?: string }[] }).sentMessages ?? []).map((s) => {
+      remember(this.sentIds, s.id)
+      if (s.quoteToken) remember(this.quoteTokens, s.id, s.quoteToken)
       return s.id
     })
-    return ids
+  }
+
+  private liveTokens(room: string): { token: string; at: number }[] {
+    return (this.tokens.get(room) ?? []).filter((t) => this.now() - t.at < REPLY_TOKEN_TTL_MS)
   }
 
   private addToken(room: string, token: string): void {
-    const list = (this.tokens.get(room) ?? []).filter((t) => this.now() - t.at < REPLY_TOKEN_TTL_MS)
-    list.push({ token, at: this.now() })
-    this.tokens.set(room, list)
+    this.tokens.set(room, [...this.liveTokens(room), { token, at: this.now() }])
   }
 
   private takeToken(room: string): string | undefined {
-    const list = (this.tokens.get(room) ?? []).filter((t) => this.now() - t.at < REPLY_TOKEN_TTL_MS)
-    const t = list.pop() // いちばん新しいもの
+    const list = this.liveTokens(room)
+    const t = list.pop()
     this.tokens.set(room, list)
     return t?.token
-  }
-
-  private noteSent(id: string): void {
-    this.sentIds.add(id)
-    if (this.sentIds.size > SENT_IDS_CAP) this.sentIds.delete(this.sentIds.values().next().value!)
-  }
-
-  private rememberQuoteToken(id: string, token: string): void {
-    this.quoteTokens.set(id, token)
-    if (this.quoteTokens.size > 1000) this.quoteTokens.delete(this.quoteTokens.keys().next().value!)
   }
 
   private async loading(userId: string): Promise<void> {
@@ -303,9 +279,7 @@ export class LineConnector implements Connector {
       signal: AbortSignal.timeout(15_000),
     })
     const raw = await res.text()
-    if (!res.ok) {
-      throw new LineApiError(res.status, apiMessage(raw))
-    }
+    if (!res.ok) throw new LineApiError(res.status, apiMessage(raw))
     try {
       return raw ? JSON.parse(raw) : {}
     } catch {
@@ -314,7 +288,7 @@ export class LineConnector implements Connector {
   }
 }
 
-export class LineApiError extends Error {
+class LineApiError extends Error {
   constructor(
     readonly status: number,
     readonly apiMessage: string,
@@ -329,22 +303,31 @@ export class LineApiError extends Error {
   }
 }
 
+/** X-Line-Signature の値（本文の HMAC-SHA256 を Base64 にしたもの） */
+export function sign(secret: string, body: string): string {
+  return createHmac("sha256", secret).update(body).digest("base64")
+}
+
 export function verifySignature(secret: string, body: string, signature: string): boolean {
-  const expected = createHmac("sha256", secret).update(body).digest()
-  let given: Buffer
-  try {
-    given = Buffer.from(signature, "base64")
-  } catch {
-    return false
-  }
+  const expected = Buffer.from(sign(secret, body), "base64")
+  const given = Buffer.from(signature, "base64")
   return given.length === expected.length && timingSafeEqual(given, expected)
+}
+
+/** 入れて、上限を超えたら最も古いものを捨てる */
+function remember(c: Set<string>, key: string): void
+function remember(c: Map<string, string>, key: string, value: string): void
+function remember(c: Set<string> | Map<string, string>, key: string, value?: string): void {
+  if (c instanceof Set) c.add(key)
+  else c.set(key, value!)
+  if (c.size > CACHE_CAP) c.delete(c.keys().next().value!)
 }
 
 function apiMessage(raw: string): string {
   try {
     return (JSON.parse(raw) as { message?: string }).message ?? ""
   } catch {
-    return raw.slice(0, 200) // JSON でない応答は、先頭だけを残す
+    return raw.slice(0, 200)
   }
 }
 
@@ -353,22 +336,22 @@ function roomOf(s: Source): string | undefined {
   return id ? `${SERVICE}:${id}` : undefined
 }
 
-function localId(id: string): string {
-  return id.slice(id.indexOf(":") + 1)
-}
-
 /** 本文から Bot へのメンションを取り除く。LINE の index と length は UTF-16 の単位 */
 export function stripSelfMentions(text: string, mentionees: Mentionee[]): string {
-  const units = Array.from({ length: text.length }, (_, i) => text.charCodeAt(i))
-  const remove = new Array<boolean>(units.length).fill(false)
+  const remove = new Array<boolean>(text.length).fill(false)
   for (const m of mentionees) {
-    if (!m.isSelf || m.index < 0 || m.length <= 0 || m.index + m.length > units.length) continue
-    for (let i = m.index; i < m.index + m.length; i++) remove[i] = true
+    if (!m.isSelf || m.index < 0 || m.length <= 0 || m.index + m.length > text.length) continue
+    remove.fill(true, m.index, m.index + m.length)
   }
-  return String.fromCharCode(...units.filter((_, i) => !remove[i])).trim()
+  // split("") は UTF-16 の単位で分ける
+  return text
+    .split("")
+    .filter((_, i) => !remove[i])
+    .join("")
+    .trim()
 }
 
-/** 本文を最大 5 つの吹き出しに分ける。入りきらない分は切り、省略したことを書き添える */
+/** LINE の上限（吹き出し 5 つ）に収める。あふれた分は切り、省略したことを書き添える */
 export function splitBubbles(text: string): string[] {
   let rest = text.trim()
   const out: string[] = []

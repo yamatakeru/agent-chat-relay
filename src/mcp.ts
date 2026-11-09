@@ -1,5 +1,4 @@
-// エージェントに渡すチャット用ツール（MCP）。どのハーネスにも同じものを渡す（ADR 0006）。
-// ツールの名前と形は、公式の Claude Code Discord プラグインに揃えた。
+// エージェントに渡すチャット用ツール（MCP）。ツールの名前と形は、公式の Claude Code Discord プラグインに揃えた。
 // ハーネスとは 127.0.0.1 の HTTP でつなぎ、起動ごとに作る token で守る。
 
 import { timingSafeEqual } from "node:crypto"
@@ -22,7 +21,7 @@ async function run(name: string, op: () => Promise<string>): Promise<ToolResult>
   }
 }
 
-export function buildTools(relay: Relay, inboxDir: string): McpServer {
+function buildTools(relay: Relay, inboxDir: string): McpServer {
   const server = new McpServer({ name: "chat", version: "0.1.0" }, { instructions: INSTRUCTIONS })
 
   server.registerTool(
@@ -50,13 +49,13 @@ export function buildTools(relay: Relay, inboxDir: string): McpServer {
     },
     ({ chat_id, limit }) =>
       run("fetch_messages", async () => {
-        const msgs = relay.fetchMessages(chat_id, limit ?? 20)
+        const msgs = relay.fetchMessages(chat_id, limit)
         if (msgs.length === 0) return "(no messages)"
         return msgs
           .map((m) => {
             const who = m.fromMe ? "me" : (m.senderName ?? m.sender)
             const atts = m.attachments.length > 0 ? ` +${m.attachments.length}att` : ""
-            // 改行で行を偽装されないよう、1 行にまとめる（公式と同じ）
+            // 改行で行を偽装されないよう、1 行にまとめる
             return `[${new Date(m.ts).toISOString()}] ${who}: ${m.text.replace(/[\r\n]+/g, " ⏎ ")}  (id: ${m.id}${atts})`
           })
           .join("\n")

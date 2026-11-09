@@ -1,5 +1,5 @@
 // ルームの登録・送信者の許可・ペアリング（docs/relay.md）。
-// 公式の Claude Code Discord プラグインの access.json を手本に、複数のチャットサービスを扱えるようにした。
+// 公式の Claude Code Discord プラグインの access.json を手本にした。
 // ID はすべて「サービス名:サービス内の ID」（例：line:C0123…）で持つ。
 
 import { randomBytes } from "node:crypto"
@@ -19,19 +19,18 @@ export type Pending = {
   target: string
   createdAt: number
   expiresAt: number
-  /** コードを返した回数。2 回で打ち切る（公式と同じ） */
+  /** コードを返した回数。2 回で打ち切る */
   replies: number
 }
 
 export type Access = {
-  /** DM で話せる人。実行承認の依頼もこの人たちの DM へ送る */
+  /** DM で話せる人。実行承認の依頼も、この人たちの DM へ送る */
   allowFrom: string[]
   rooms: Record<string, RoomPolicy>
   pending: Record<string, Pending>
 }
 
 export type Inbound = {
-  /** ルーム（1 対 1 のトークでは相手との DM） */
   room: string
   sender: string
   isDM: boolean
@@ -48,12 +47,15 @@ export type GateResult =
 const PAIRING_TTL_MS = 60 * 60 * 1000
 const MAX_PENDING = 3
 
-export function emptyAccess(): Access {
+function emptyAccess(): Access {
   return { allowFrom: [], rooms: {}, pending: {} }
 }
 
 export class AccessStore {
-  constructor(readonly path: string, private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly path: string,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   /** 受信のたびに読み直すので、登録や許可の変更に再起動は要らない */
   load(): Access {
@@ -68,7 +70,7 @@ export class AccessStore {
       const a = JSON.parse(raw) as Partial<Access>
       return { allowFrom: a.allowFrom ?? [], rooms: a.rooms ?? {}, pending: a.pending ?? {} }
     } catch {
-      // 壊れたファイルは脇へ移して、空から始める（公式と同じ）。誰の発言も渡さない側に倒れる
+      // 壊れたファイルは脇へ移して、空から始める。誰の発言も渡さない側に倒れる
       renameSync(this.path, `${this.path}.corrupt-${this.now()}`)
       console.error(`relay: ${this.path} が壊れていたため脇へ移しました`)
       return emptyAccess()
@@ -95,9 +97,7 @@ export class AccessStore {
       if (!policy) {
         // 未登録のルームでは、Bot に話しかけられたときだけコードを返す
         result = m.mentioned ? this.pair(a, "room", m.room) : { action: "drop" }
-      } else if (policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) {
-        result = { action: "record" }
-      } else if (policy.requireMention && !m.mentioned) {
+      } else if ((policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) || (policy.requireMention && !m.mentioned)) {
         result = { action: "record" }
       } else {
         result = { action: "deliver" }
@@ -122,14 +122,15 @@ export class AccessStore {
   approve(code: string): Pending {
     const a = this.load()
     this.pruneExpired(a)
-    const p = a.pending[code.trim().toLowerCase()]
+    const key = code.trim().toLowerCase()
+    const p = a.pending[key]
     if (!p) throw new Error("コードが見つからないか、期限（1 時間）が切れています")
     if (p.kind === "user") {
       if (!a.allowFrom.includes(p.target)) a.allowFrom.push(p.target)
     } else {
       a.rooms[p.target] ??= { requireMention: true, allowFrom: [] }
     }
-    delete a.pending[code.trim().toLowerCase()]
+    delete a.pending[key]
     this.save(a)
     return p
   }
@@ -160,8 +161,15 @@ export class AccessStore {
   }
 }
 
-/** 送信先の制限：受信を許したルームと、許可した人の DM にだけ送れる（公式の fetchAllowedChannel）。
- *  1 対 1 のトークでは、相手の ID がそのままルームになる */
+/** 送信先の制限：登録したルームと、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる */
 export function canSendTo(a: Access, room: string): boolean {
   return room in a.rooms || a.allowFrom.includes(room)
+}
+
+export function serviceOf(id: string): string {
+  return id.slice(0, id.indexOf(":"))
+}
+
+export function localId(id: string): string {
+  return id.slice(id.indexOf(":") + 1)
 }

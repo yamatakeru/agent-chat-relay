@@ -18,7 +18,7 @@
 
 ターミナルを 2 つ使う。
 
-1. `scripts/relay.sh serve`（ハーネスは Claude Code。`serve opencode` で OpenCode）
+1. `scripts/relay.sh serve`（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しない。試すときも、信頼できる人だけのルームに限る
 2. `scripts/relay.sh tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの Webhook URL に登録し、［検証］を押す。旧構成の `/callback` からパスが変わった。
 
 止めるときは、両方を Ctrl+C で止め、［Webhook の利用］をオフにする。

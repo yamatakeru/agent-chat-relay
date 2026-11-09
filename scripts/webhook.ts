@@ -6,7 +6,7 @@
 //   join <room>                             Bot がグループに追加された
 //   postback <user> <data>                  ボタン（承認など）の操作
 
-import { createHmac } from "node:crypto"
+import { sign } from "../src/line.ts"
 
 const [kind, ...args] = process.argv.slice(2)
 const secret = process.env.RELAY_LINE_CHANNEL_SECRET
@@ -44,6 +44,5 @@ switch (kind) {
     throw new Error("usage: webhook text|image|file|join|postback ...")
 }
 const body = JSON.stringify({ destination: "Ubot", events: [event] })
-const signature = createHmac("sha256", secret).update(body).digest("base64")
-const res = await fetch(`http://127.0.0.1:${port}/line/webhook`, { method: "POST", headers: { "Content-Type": "application/json", "X-Line-Signature": signature }, body })
+const res = await fetch(`http://127.0.0.1:${port}/line/webhook`, { method: "POST", headers: { "Content-Type": "application/json", "X-Line-Signature": sign(secret, body) }, body })
 console.log(`webhook ${kind}: HTTP ${res.status} (message id ${id})`)

@@ -2,10 +2,9 @@
 // セッションは 1 つ。チャット用ツールの MCP サーバーを session/new で渡し、発言は session/prompt で入れる。
 
 import * as acp from "@agentclientprotocol/sdk"
-import type { PermissionRequest, Session, Verdict } from "./relay.ts"
+import type { Log, PermissionRequest, Session, Verdict } from "./relay.ts"
 
 export type HarnessConfig = {
-  /** ハーネスを ACP で起動するコマンド */
   command: string[]
   env?: Record<string, string>
   /** セッションの作業場所（絶対パス） */
@@ -17,8 +16,6 @@ export type HarnessConfig = {
   mode?: string
 }
 
-type Log = (msg: string, extra?: Record<string, unknown>) => void
-
 export async function startHarness(
   cfg: HarnessConfig,
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
@@ -26,12 +23,13 @@ export async function startHarness(
 ): Promise<{ session: Session; exited: Promise<number>; stop: () => void }> {
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
-    env: { ...process.env, ...cfg.env },
+    // 中継の秘密情報（LINE のトークンなど）をハーネスへ渡さない。渡すと、エージェントが送信先の制限を迂回できる
+    env: { ...withoutRelaySecrets(process.env), ...cfg.env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "inherit",
   })
-  const input = new WritableStream<Uint8Array>({
+  const stdin = new WritableStream<Uint8Array>({
     write(chunk) {
       proc.stdin.write(chunk)
       proc.stdin.flush()
@@ -40,7 +38,7 @@ export async function startHarness(
       proc.stdin.end()
     },
   })
-  const stream = acp.ndJsonStream(input, proc.stdout as ReadableStream<Uint8Array>)
+  const stream = acp.ndJsonStream(stdin, proc.stdout as ReadableStream<Uint8Array>)
 
   let turnText = ""
   const app = acp
@@ -108,4 +106,8 @@ export async function startHarness(
     return code
   })
   return { session: await ready.promise, exited, stop: () => proc.kill() }
+}
+
+export function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|CCJ_|DOTENV_)/.test(k)))
 }

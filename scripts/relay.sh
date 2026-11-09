@@ -106,5 +106,5 @@ case "$cmd" in
     with_env webhook "$@"
     exec mise exec -- bun scripts/webhook.ts "$@"
     ;;
-  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

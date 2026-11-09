@@ -50,7 +50,8 @@ agent-chat-relay が従う仕様。2026-11-09 にユーザーと決めた。構�
 - `scripts/relay.sh serve claude`：`claude-agent-acp`（Agent SDK の ACP アダプター）で、インストール済みの `claude` を動かす。
   - ユーザー設定と CLAUDE.md・AGENTS.md・自動メモリを読ませない（旧構成の `--setting-sources project,local` などと同じ）。
   - 権限モードは `default`。`claude-agent-acp` は、指定しないと auto モード（分類器による自動承認）で始めるので、設定で指定し、始まったモードを確かめて違えば切り替える。
-- `scripts/relay.sh serve opencode`：`opencode acp`。作業場所に `opencode.json` を書く。ただし、実行承認が働かないことが分かっている（#6）。
+- `scripts/relay.sh serve opencode`：`opencode acp`。作業場所に `opencode.json` を書く。ただし、実行承認が働かないことが分かっている（#6）ので、`RELAY_ALLOW_UNSAFE_HARNESS=1` がないと起動しない。
+- ハーネスには、中継の秘密情報（`RELAY_*`・旧構成の `CCJ_*`・`DOTENV_*` の環境変数）を渡さない。渡すと、エージェントが LINE の API を直接呼び、送信先の制限を迂回できる。
 - pi は、ACP アダプター（pi-acp）がチャット用ツールを渡さず、実行承認もないため、まだ使えない（#6）。
 
 ## LINE

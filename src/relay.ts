@@ -2,20 +2,20 @@
 // セッションへまとめて入れる。チャット用ツール（MCP）からの送信と、実行承認の中継も受け持つ。
 
 import { randomInt } from "node:crypto"
-import { AccessStore, canSendTo, type GateResult } from "./access.ts"
+import { AccessStore, canSendTo, serviceOf, type GateResult } from "./access.ts"
+
+export type Log = (msg: string, extra?: Record<string, unknown>) => void
 
 export type Attachment = { name: string; type: string; size?: number }
 
 export type ChatMessage = {
   id: string
-  /** ルーム（1 対 1 のトークでは、相手の ID がそのままルームになる） */
   room: string
   sender: string
   senderName?: string
   text: string
   ts: number
   attachments: Attachment[]
-  /** Bot（エージェント）自身の発言 */
   fromMe?: boolean
 }
 
@@ -45,8 +45,8 @@ export interface Session {
 export type PermissionRequest = { title: string; input: string }
 export type Verdict = "allow" | "deny"
 
-// 公式と同じ形の承認の返事（y/yes/n/no と 5 文字の ID。l は使わない）
-export const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
+// 承認の返事。ID は 5 文字で、l（1 と紛らわしい）は使わない
+const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 const PERMISSION_TIMEOUT_MS = 30 * 60 * 1000
 const HISTORY_LIMIT = 200
 
@@ -74,8 +74,8 @@ export class Relay {
   private introduced = false
 
   constructor(
-    readonly access: AccessStore,
-    private readonly log: (msg: string, extra?: Record<string, unknown>) => void = (m, e) => console.error(`relay: ${m}`, e ?? ""),
+    private readonly access: AccessStore,
+    private readonly log: Log = (m, e) => console.error(`relay: ${m}`, e ?? ""),
   ) {}
 
   addConnector(c: Connector): void {
@@ -87,40 +87,30 @@ export class Relay {
     this.kick()
   }
 
-  /** 接続部が受けた発言。登録・許可で絞り、渡すものはセッションの待ち行列に入れる */
+  /** 接続部が受けた発言 */
   receive(m: Incoming): GateResult {
-    const r = this.access.gate({ room: m.room, sender: m.sender, isDM: m.isDM, mentioned: m.mentioned })
-    switch (r.action) {
-      case "pair":
-        void this.pairingNotice(m.room, r.code, r.isResend)
-        return r
-      case "drop":
-        return r
-      case "record":
-        this.record(m)
-        return r
-      case "deliver": {
-        const p = PERMISSION_REPLY_RE.exec(m.text)
-        if (m.isDM && p) {
-          const ok = this.answer(m.sender, p[2]!.toLowerCase(), p[1]!.toLowerCase().startsWith("y") ? "allow" : "deny")
-          void this.connector(m.room)?.notice(m.room, ok ? "受け付けました" : "その依頼は見つからないか、すでに答えが出ています")
-          return r
-        }
-        this.record(m)
-        this.queue.push(m)
-        this.kick()
-        return r
-      }
+    const r = this.access.gate(m)
+    if (r.action === "pair") void this.pairingNotice(m.room, r.code, r.isResend)
+    if (r.action === "record") this.record(m)
+    if (r.action !== "deliver") return r
+    const p = PERMISSION_REPLY_RE.exec(m.text)
+    if (m.isDM && p) {
+      const ok = this.answer(m.sender, p[2]!.toLowerCase(), p[1]!.toLowerCase().startsWith("y") ? "allow" : "deny")
+      void this.connector(m.room)?.notice(m.room, ok ? "受け付けました" : "その依頼は見つからないか、すでに答えが出ています")
+      return r
     }
+    this.record(m)
+    this.queue.push(m)
+    this.kick()
+    return r
   }
 
-  /** Bot がルームに追加された */
   joined(room: string): void {
     const r = this.access.joined(room)
     if (r.action === "pair") void this.pairingNotice(room, r.code, r.isResend)
   }
 
-  // ---- 実行承認の中継（承認者の DM へ送る。docs/relay.md） ----
+  // ---- 実行承認の中継 ----
 
   requestPermission(req: PermissionRequest): Promise<Verdict> {
     const approvers = this.access.load().allowFrom
@@ -190,13 +180,11 @@ export class Relay {
 
   async listRooms(): Promise<{ chat_id: string; name?: string; kind: "room" | "dm" }[]> {
     const a = this.access.load()
-    const out: { chat_id: string; name?: string; kind: "room" | "dm" }[] = []
-    for (const room of Object.keys(a.rooms)) out.push({ chat_id: room, name: await this.connector(room)?.roomName(room).catch(() => undefined), kind: "room" })
-    for (const user of a.allowFrom) out.push({ chat_id: user, kind: "dm" })
-    return out
+    const rooms = await Promise.all(
+      Object.keys(a.rooms).map(async (room) => ({ chat_id: room, name: await this.roomName(room), kind: "room" as const })),
+    )
+    return [...rooms, ...a.allowFrom.map((user) => ({ chat_id: user, kind: "dm" as const }))]
   }
-
-  // ---- 内部 ----
 
   private kick(): void {
     if (this.running || !this.session || this.queue.length === 0) return
@@ -227,8 +215,9 @@ export class Relay {
       parts.push(INSTRUCTIONS, "")
       this.introduced = true
     }
+    const names = new Map(await Promise.all([...new Set(batch.map((m) => m.room))].map(async (r) => [r, await this.roomName(r)] as const)))
     for (const m of batch) {
-      const name = await this.connector(m.room)?.roomName(m.room).catch(() => undefined)
+      const name = names.get(m.room)
       const attrs: Record<string, string> = {
         chat_id: m.room,
         ...(name ? { chat: name } : {}),
@@ -261,10 +250,13 @@ export class Relay {
   }
 
   private connector(id: string): Connector | undefined {
-    return this.connectors.get(id.slice(0, id.indexOf(":")))
+    return this.connectors.get(serviceOf(id))
   }
 
-  /** 送信先の制限：受信を許したルームと、許可した人の DM にだけ送れる */
+  private roomName(room: string): Promise<string | undefined> {
+    return this.connector(room)?.roomName(room).catch(() => undefined) ?? Promise.resolve(undefined)
+  }
+
   private allowedConnector(room: string): Connector {
     const c = this.connector(room)
     if (!c) throw new Error(`知らないチャットサービスです: ${room}`)
@@ -278,12 +270,12 @@ function permissionId(): string {
   return Array.from({ length: 5 }, () => letters[randomInt(letters.length)]).join("")
 }
 
-export function escapeXml(s: string): string {
+function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 }
 
 function describeAttachment(a: Attachment): string {
-  // 名前は送り主が決められる。区切り文字で枠を壊されないよう置き換える（公式の safeAttName）
+  // 名前は送り主が決められる。区切り文字で枠を壊されないよう置き換える
   const name = a.name.replace(/[[\]\r\n;]/g, "_")
   return a.size === undefined ? `${name} (${a.type})` : `${name} (${a.type}, ${Math.ceil(a.size / 1024)}KB)`
 }
