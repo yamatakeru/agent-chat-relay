@@ -14,7 +14,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${RELAY_ENV_FILE:-$REPO_ROOT/.env}"
 KEYS_FILE="$(dirname "$ENV_FILE")/.env.keys"
-RELAY_LINE_PORT="${RELAY_LINE_PORT:-18080}"
+RELAY_HTTP_PORT="${RELAY_HTTP_PORT:-18080}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -91,7 +91,7 @@ case "$cmd" in
     RELAY_HARNESS="${1:-${RELAY_HARNESS:-claude}}" exec mise exec -- bun src/main.ts serve
     ;;
   pair | access) exec mise exec -- bun src/main.ts "$cmd" "$@" ;;
-  line-tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_LINE_PORT" ;;
+  line-tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_HTTP_PORT" ;;
   line-quota)
     with_env line-quota
     for path in quota quota/consumption; do

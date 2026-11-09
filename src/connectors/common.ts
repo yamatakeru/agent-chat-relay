@@ -29,6 +29,29 @@ export function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, fitUnits(text, max - TRUNCATED_NOTE.length)) + TRUNCATED_NOTE
 }
 
+/**
+ * 本文を、1 通 max 単位で parts 通までに分ける。段落、行、空白の切れ目で分ける（前半にしかなければ、そのまま切る）。
+ * 入りきらない分は、最後の 1 通を切って省略を書き添える
+ */
+export function splitText(text: string, max: number, parts: number): string[] {
+  const out: string[] = []
+  let rest = text.trim()
+  while (rest.length > max && out.length < parts - 1) {
+    let cut = fitUnits(rest, max)
+    for (const sep of ["\n\n", "\n", " "]) {
+      const i = rest.lastIndexOf(sep, cut - sep.length)
+      if (i > max / 2) {
+        cut = i
+        break
+      }
+    }
+    out.push(rest.slice(0, cut).trimEnd())
+    rest = rest.slice(cut).trimStart()
+  }
+  if (rest) out.push(truncate(rest, max))
+  return out
+}
+
 /** 取得した添付を dir に保存する（25MB まで）。名前は <stem><ext>。ext は記号を除いてから使う */
 export async function saveDownload(res: Response, dir: string, stem: string, ext: string): Promise<string> {
   if (Number(res.headers.get("content-length") ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error(TOO_LARGE)

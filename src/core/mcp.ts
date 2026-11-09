@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import { z } from "zod"
-import { INSTRUCTIONS, type Relay } from "./relay.ts"
+import type { Relay } from "./relay.ts"
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean }
 
@@ -22,18 +22,18 @@ async function run(name: string, op: () => Promise<string>): Promise<ToolResult>
 }
 
 function buildTools(relay: Relay, inboxDir: string): McpServer {
-  const server = new McpServer({ name: "chat", version: "0.1.0" }, { instructions: INSTRUCTIONS })
+  const server = new McpServer({ name: "chat", version: "0.1.0" }, { instructions: relay.instructions() })
 
   server.registerTool(
     "reply",
     {
       description:
-        "チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。files で、作業場所の中のファイルを添えられる（送れる種類はチャットサービスによる。LINE は JPEG・PNG の画像だけ、Chatwork は種類を問わず 5MB まで）。",
+        `チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。files で、作業場所の中のファイルを添えられる。送れるものと本文の長さは、チャットサービス（chat_id の先頭）による：\n${relay.sendingGuide()}`,
       inputSchema: {
         chat_id: z.string(),
         text: z.string().describe("本文。files があれば空でもよい"),
         reply_to: z.string().optional().describe("引用して返す発言の message_id"),
-        files: z.array(z.string()).optional().describe("添えるファイルのパス（作業場所の中だけ。相対パスは作業場所から。最大 10 個）"),
+        files: z.array(z.string()).optional().describe("添えるファイルのパス（作業場所の中だけ。相対パスは作業場所から）"),
       },
     },
     ({ chat_id, text, reply_to, files }) =>
@@ -46,12 +46,12 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
   server.registerTool(
     "fetch_messages",
     {
-      description: "ルームの最近の発言を、古い順に取得する。Bot に向けられていない発言も含む。中継が起動してからの分だけを持っている。",
+      description: "ルームの最近の発言を、古い順に取得する。Bot に向けられていない発言も含む。サービスによっては、中継が起動してからの分だけ。",
       inputSchema: { chat_id: z.string(), limit: z.number().int().optional().describe("最大件数（既定 20、最大 100）") },
     },
     ({ chat_id, limit }) =>
       run("fetch_messages", async () => {
-        const msgs = relay.fetchMessages(chat_id, limit)
+        const msgs = await relay.fetchMessages(chat_id, limit)
         if (msgs.length === 0) return "(no messages)"
         return msgs
           .map((m) => {

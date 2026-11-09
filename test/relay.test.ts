@@ -3,10 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { join } from "node:path"
 import { AccessStore } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
-import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/connectors/line.ts"
+import { splitText } from "../src/connectors/common.ts"
+import { ApiClient, sign, verifySignature } from "../src/connectors/http.ts"
+import { LineConnector, stripSelfMentions } from "../src/connectors/line.ts"
 import { MediaStore } from "../src/connectors/line-media.ts"
+import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { png } from "./fixtures/png.ts"
-import { type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
 import { withoutRelaySecrets } from "../src/harness/harness.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
@@ -35,6 +38,11 @@ function msg(over: Partial<Incoming> = {}): Incoming {
 
 class FakeConnector implements Connector {
   readonly service = "line"
+  readonly label = "LINE"
+  capabilities: Capabilities = { files: { kinds: "画像", maxBytes: 4, maxCount: 1 }, text: { max: 5000, parts: 5 } }
+  history?: (room: string, limit: number) => Promise<ChatMessage[]>
+  async start() {}
+  stop() {}
   sent: { room: string; text: string }[] = []
   notices: { room: string; text: string }[] = []
   approvals: { user: string; text: string; id: string }[] = []
@@ -155,7 +163,7 @@ describe("relay", () => {
     await Bun.sleep(0)
     expect(prompts).toHaveLength(0)
     expect(conn.notices).toHaveLength(0)
-    expect(relay.fetchMessages(ROOM).map((m) => m.text)).toEqual(["old"])
+    expect((await relay.fetchMessages(ROOM)).map((m) => m.text)).toEqual(["old"])
   })
 
   test("登録していないルームへは送れない", async () => {
@@ -163,7 +171,96 @@ describe("relay", () => {
     await expect(relay.reply("line:C0000000000000000000000000000000f", "x")).rejects.toThrow("登録されていません")
     await relay.reply(ROOM, "ok")
     expect(conn.sent).toEqual([{ room: ROOM, text: "ok" }])
-    expect(relay.fetchMessages(ROOM).at(-1)).toMatchObject({ fromMe: true, text: "ok" })
+    expect((await relay.fetchMessages(ROOM)).at(-1)).toMatchObject({ fromMe: true, text: "ok" })
+  })
+
+  test("送るファイルは、接続部が申告した数と大きさで確かめる", async () => {
+    access.save({ allowFrom: [], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    const ws = join(dir, "ws")
+    mkdirSync(ws)
+    writeFileSync(join(ws, "a.png"), "1234")
+    writeFileSync(join(ws, "big.png"), "12345")
+    const relay = new Relay(access, quiet, ws)
+    const conn = new FakeConnector()
+    relay.addConnector(conn)
+    await expect(relay.reply(ROOM, "x", undefined, ["a.png", "a.png"])).rejects.toThrow("1 個まで")
+    await expect(relay.reply(ROOM, "x", undefined, ["big.png"])).rejects.toThrow("0MB までです: big.png")
+    conn.capabilities = { text: { max: 10, parts: 1 } }
+    await expect(relay.reply(ROOM, "x", undefined, ["a.png"])).rejects.toThrow("LINE ではファイルを送れません")
+    expect(conn.sent).toHaveLength(0)
+  })
+
+  test("案内には、つながっているサービスの送れるものだけを書く", async () => {
+    const { relay } = setup()
+    const text = relay.instructions()
+    expect(text).toContain("- LINE（line:）：ファイルは 画像だけ、1 個 0MB・1 回 1 個まで。本文は 1 通 5000 字までで、超えると 5 通まで分けて送る")
+    expect(text).not.toContain("Chatwork")
+    expect(text).not.toContain("{sending}")
+  })
+
+  test("履歴を読める接続部なら、fetch_messages はそちらを使う", async () => {
+    const { relay, conn } = setup()
+    relay.receive(msg({ text: "記録" }))
+    expect((await relay.fetchMessages(ROOM)).map((m) => m.text)).toEqual(["記録"])
+    conn.history = async (_room, limit) => [{ id: "h1", room: ROOM, sender: BOB, text: `履歴 ${limit}`, ts: 0, attachments: [] }]
+    expect((await relay.fetchMessages(ROOM, 500)).map((m) => m.text)).toEqual(["履歴 100"])
+  })
+})
+
+describe("接続部の共通の部分", () => {
+  test("長い本文は、段落の切れ目で分け、入りきらない分は省略を書き添える", () => {
+    const para = "あ".repeat(60)
+    expect(splitText(`${para}\n\n${para}`, 100, 3)).toEqual([para, para])
+    // 前半に切れ目がなければ、そのまま切る
+    expect(splitText(`あ\n${"い".repeat(150)}`, 100, 3).map((p) => p.length)).toEqual([100, 52])
+    const out = splitText("う".repeat(1000), 100, 3)
+    expect(out).toHaveLength(3)
+    expect(out.every((p) => p.length <= 100)).toBe(true)
+    expect(out[2]).toEndWith("省略しました）")
+    // サロゲートペアの途中では切らない
+    expect(splitText("😀".repeat(60), 101, 2)[0]).toHaveLength(100)
+  })
+
+  test("全体の回数制限なら解除まで止め、添付の取得では転送先へ認証を付けるかを選べる", async () => {
+    let hits = 0
+    const seen: { path: string; auth: string | null }[] = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname
+        seen.push({ path, auth: req.headers.get("authorization") })
+        if (path === "/limited") return hits++ === 0 ? Response.json({ code: "TOO_MANY_REQUESTS" }, { status: 429, headers: { "RateLimit-Reset": "30" } }) : Response.json({})
+        if (path === "/file") return new Response(null, { status: 302, headers: { Location: "/storage" } })
+        if (path === "/storage") return new Response("data")
+        return new Response(null, { status: 204 })
+      },
+    })
+    try {
+      let t = 0
+      const api = new ApiClient({
+        label: "Svc",
+        base: server.url.href,
+        auth: () => ({ Authorization: "Bearer t" }),
+        errorMessage: (raw) => raw,
+        rateLimited: (res, _msg, now) => ({ resumeAt: now + Number(res.headers.get("ratelimit-reset")) * 1000, message: "回数制限" }),
+        now: () => t,
+      })
+      expect(await api.call("GET", "/empty")).toBeNull()
+      await expect(api.call("GET", "/limited")).rejects.toThrow("回数制限")
+      expect(api.paused).toBe(true)
+      await expect(api.call("GET", "/limited")).rejects.toThrow("30 秒後")
+      t = 30_000
+      expect(await api.call("GET", "/limited")).toEqual({})
+      seen.length = 0
+      expect(await (await api.download(`${server.url.origin}/file`, "all")).text()).toBe("data")
+      await api.download(`${server.url.origin}/file`, "first")
+      expect(seen.map((s) => s.auth)).toEqual(["Bearer t", "Bearer t", "Bearer t", null])
+      // https でも API と同じ origin でもない URL は取りに行かない
+      await expect(api.download("http://example.test/x", "none")).rejects.toThrow("URL が使えません")
+    } finally {
+      void server.stop()
+    }
   })
 })
 
@@ -185,11 +282,25 @@ describe("line", () => {
     expect(stripSelfMentions(text, [{ index: 2, length: 4, isSelf: true }, { index: 13, length: 6 }])).toBe("😀 こんにちは @alice")
   })
 
-  test("長い本文は 5 つの吹き出しに分け、入りきらない分は省略を書き添える", () => {
-    const out = splitBubbles("あ".repeat(26000))
-    expect(out).toHaveLength(5)
-    expect(out.every((b) => b.length <= 5000)).toBe(true)
-    expect(out[4]).toEndWith("省略しました）")
+  test("Reply が本文なしで成功しても、Push で送り直さない", async () => {
+    const paths: string[] = []
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        paths.push(new URL(req.url).pathname)
+        return new Response(null, { status: 200 })
+      },
+    })
+    try {
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href }, new Relay(access, quiet), quiet)
+      await line.handleEvent({ type: "join", timestamp: 0, replyToken: "rt", source: { type: "group", groupId: ROOM.slice(5) } })
+      paths.length = 0
+      await line.send(ROOM, "どうぞ")
+      expect(paths).toEqual(["/v2/bot/message/reply"])
+    } finally {
+      void api.stop()
+    }
   })
 })
 
@@ -253,16 +364,13 @@ describe("返すファイル", () => {
       writeFileSync(join(dir, "a.png"), png(16, 16, [0, 0, 0]))
       const relay = new Relay(access, quiet)
       const media = new MediaStore(join(dir, "media"))
-      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay)
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay, quiet)
       await line.send(ROOM, "どうぞ", { files: [join(dir, "a.png")] })
       const msgs = posted[0]!.body.messages
       expect(msgs.map((m) => m.type)).toEqual(["text", "image"])
       expect(msgs[1]!.originalContentUrl).toMatch(/^https:\/\/example\.test\/media\/[A-Za-z0-9_-]{43}\.png$/)
-      // 本文と合わせて 5 件を超えるときは、何も送らずにエラーにする
-      await expect(line.send(ROOM, "x", { files: Array(5).fill(join(dir, "a.png")) })).rejects.toThrow("4 枚")
-      expect(posted).toHaveLength(1)
       // 公開 URL が分からなければ送らない
-      const noUrl = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media }, relay)
+      const noUrl = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media }, relay, quiet)
       await expect(noUrl.send(ROOM, "", { files: [join(dir, "a.png")] })).rejects.toThrow("URL が分からない")
     } finally {
       void api.stop()
@@ -271,68 +379,24 @@ describe("返すファイル", () => {
 })
 
 describe("chatwork", () => {
-  const BOT = { id: 100, name: "AI係" }
+  const ME = { id: BOT.account_id, name: BOT.name }
   const CW_ROOM = 7000
   const CW_DM = 7001
 
   test("Bot へのメンションと返信だけを取り除き、添付を取り出す", () => {
-    expect(parseBody("[To:100]AI係さん\n調べて", BOT)).toMatchObject({ text: "調べて", mentioned: true })
-    expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", BOT)).toMatchObject({ text: "ありがとう", mentioned: true })
+    expect(parseBody("[To:100]AI係さん\n調べて", ME)).toMatchObject({ text: "調べて", mentioned: true })
+    expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", ME)).toMatchObject({ text: "ありがとう", mentioned: true })
     // ほかの人宛ての To と、全員宛て（[toall]）はメンションに数えない
-    expect(parseBody("[To:200]ボブさん\n確認して", BOT)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
-    expect(parseBody("[toall]お知らせ", BOT).mentioned).toBe(false)
-    const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", BOT)
+    expect(parseBody("[To:200]ボブさん\n確認して", ME)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
+    expect(parseBody("[toall]お知らせ", ME).mentioned).toBe(false)
+    const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", ME)
     expect(file).toEqual({ text: "（画像）", attachments: [{ name: "図 1.png", type: "image" }], mentioned: false })
-    expect(parseBody("見て[info][title][dtext:file_uploaded][/title][download:8]a.pdf (1 MB)[/download][/info]", BOT).attachments).toEqual([{ name: "a.pdf", type: "file" }])
+    expect(parseBody("見て[info][title][dtext:file_uploaded][/title][download:8]a.pdf (1 MB)[/download][/info]", ME).attachments).toEqual([{ name: "a.pdf", type: "file" }])
   })
 
-  /** Chatwork の API のモック。force=0 の差分は、queue に積んだ発言を一度だけ返す */
-  function fakeApi() {
-    const rooms = [
-      { room_id: CW_ROOM, name: "開発チーム", type: "group", last_update_time: 10 },
-      { room_id: CW_DM, name: "アリス", type: "direct", last_update_time: 10 },
-    ]
-    const queue = new Map<number, object[]>()
-    const posted: { path: string; body: string; file?: string }[] = []
-    let gets = 0
-    const server: Bun.Server<undefined> = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(req) {
-        const url = new URL(req.url)
-        const p = url.pathname
-        if (req.method === "GET") {
-          if (p === "/me") return Response.json({ account_id: BOT.id, name: BOT.name })
-          if (p === "/rooms") return Response.json(rooms)
-          if (p === "/contacts") return Response.json([{ account_id: 1, room_id: CW_DM }])
-          const m = /^\/rooms\/(\d+)\/messages$/.exec(p)
-          if (m) {
-            gets++
-            const list = queue.get(Number(m[1])) ?? []
-            queue.delete(Number(m[1]))
-            return list.length ? Response.json(list) : new Response(null, { status: 204 })
-          }
-          if (/^\/rooms\/\d+\/files\/\d+$/.test(p)) return Response.json({ filename: "a.txt", filesize: 2, download_url: `${server.url.origin}/dl/a` })
-          if (p === "/dl/a") return new Response("hi")
-        }
-        if (p.endsWith("/files")) {
-          const form = await req.formData()
-          posted.push({ path: p, body: String(form.get("message") ?? ""), file: (form.get("file") as File).name })
-          return Response.json({ file_id: 1 })
-        }
-        posted.push({ path: p, body: new URLSearchParams(await req.text()).get("body") ?? "" })
-        return Response.json({ message_id: String(900 + posted.length) })
-      },
-    })
-    const say = (room: number, id: string, account: number, body: string, t: number) => {
-      queue.set(room, [...(queue.get(room) ?? []), { message_id: id, account: { account_id: account, name: account === 1 ? "アリス" : "ボブ" }, body, send_time: t, update_time: 0 }])
-      rooms.find((r) => r.room_id === room)!.last_update_time = t
-    }
-    return { server, rooms, posted, say, gets: () => gets }
-  }
-
   async function setup() {
-    const api = fakeApi()
+    const api = chatworkApi()
+    for (const r of api.rooms) r.last_update_time = 10
     access.save({ allowFrom: ["chatwork:u1"], rooms: { "chatwork:r7000": { requireMention: true, allowFrom: [] } }, pending: {} })
     const relay = new Relay(access, quiet, dir)
     const prompts: string[] = []
@@ -350,9 +414,9 @@ describe("chatwork", () => {
     try {
       await cw.poll()
       expect(api.gets()).toBe(0) // 起動時のルームの状態を起点にする
-      api.say(CW_ROOM, "1", 2, "停止中の依頼 [To:100]", 999)
-      api.say(CW_ROOM, "2", 2, "[To:100]AI係さん\n今の依頼", 1001)
-      api.say(CW_ROOM, "3", 100, "Bot の発言", 1001)
+      const old = api.say(CW_ROOM, 2, "停止中の依頼 [To:100]", 999)
+      const now = api.say(CW_ROOM, 2, "[To:100]AI係さん\n今の依頼", 1001)
+      api.say(CW_ROOM, 100, "Bot の発言", 1001)
       await cw.poll()
       await cw.poll() // 同じ秒に届いた発言を取りこぼさないよう、もう一度だけ取る
       await cw.poll()
@@ -361,18 +425,18 @@ describe("chatwork", () => {
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).toContain("今の依頼")
       expect(prompts[0]).not.toContain("停止中の依頼")
-      expect(relay.fetchMessages("chatwork:r7000").map((m) => m.id)).toEqual(["1", "2"])
+      expect((await relay.fetchMessages("chatwork:r7000")).map((m) => m.id)).toEqual([old, now])
       // DM は相手の ID をルームとし、メンションなしで渡す
-      api.say(CW_DM, "4", 1, "こんにちは", 1002)
+      api.say(CW_DM, 1, "こんにちは", 1002)
       await cw.poll()
       await Bun.sleep(0)
-      expect(relay.fetchMessages("chatwork:u1").map((m) => m.text)).toEqual(["こんにちは"])
+      expect((await relay.fetchMessages("chatwork:u1")).map((m) => m.text)).toEqual(["こんにちは"])
       expect(prompts[1]).toContain('chat_id="chatwork:u1"')
       // 起動後に現れたグループチャットは、Bot が追加されたもの。ペアリングのコードを投稿する
-      api.rooms.push({ room_id: 7002, name: "新しいルーム", type: "group", last_update_time: 1003 })
+      api.join(7002, "新しいルーム")
       await cw.poll()
       await Bun.sleep(50)
-      expect(api.posted.at(-1)).toMatchObject({ path: "/rooms/7002/messages", body: expect.stringContaining("relay pair") })
+      expect(api.sent.at(-1)).toMatchObject({ kind: "message", room: 7002, body: expect.stringContaining("relay pair") })
     } finally {
       void api.server.stop()
     }
@@ -381,13 +445,13 @@ describe("chatwork", () => {
   test("返信の記法を付けて送り、DM はコンタクトからルームを探す", async () => {
     const { api, cw } = await setup()
     try {
-      api.say(CW_ROOM, "2", 2, "[To:100] 依頼", 1001)
+      const id = api.say(CW_ROOM, 2, "[To:100] 依頼", 1001)
       await cw.poll()
-      await cw.send("chatwork:r7000", "どうぞ", { replyTo: "2" })
+      await cw.send("chatwork:r7000", "どうぞ", { replyTo: id })
       await cw.sendApproval("chatwork:u1", "許可：yes abcde", "abcde")
-      expect(api.posted).toEqual([
-        { path: "/rooms/7000/messages", body: "[rp aid=2 to=7000-2]\nどうぞ" },
-        { path: "/rooms/7001/messages", body: "許可：yes abcde" },
+      expect(api.sent).toEqual([
+        { kind: "message", room: 7000, body: `[rp aid=2 to=7000-${id}]\nどうぞ` },
+        { kind: "message", room: 7001, body: "許可：yes abcde" },
       ])
       await expect(cw.send("chatwork:u9", "x")).rejects.toThrow("ダイレクトチャットが見つかりません")
     } finally {
@@ -395,22 +459,23 @@ describe("chatwork", () => {
     }
   })
 
-  test("ファイルは種類を問わず 5MB まで送り、本文は 1 つ目に添える。添付は取得用の URL から取る", async () => {
+  test("ファイルには本文を添え、長い本文は分けて送る。添付は取得用の URL から取る", async () => {
     const { api, cw } = await setup()
     try {
       writeFileSync(join(dir, "a.pdf"), "x")
       writeFileSync(join(dir, "b.csv"), "y")
-      writeFileSync(join(dir, "big.bin"), Buffer.alloc(5 * 1024 * 1024 + 1))
-      await expect(cw.send("chatwork:r7000", "x", { files: [join(dir, "a.pdf"), join(dir, "big.bin")] })).rejects.toThrow("5MB")
-      expect(api.posted).toHaveLength(0)
       await cw.send("chatwork:r7000", "資料です", { files: [join(dir, "a.pdf"), join(dir, "b.csv")] })
-      expect(api.posted).toEqual([
-        { path: "/rooms/7000/files", body: "資料です", file: "a.pdf" },
-        { path: "/rooms/7000/files", body: "", file: "b.csv" },
+      expect(api.sent).toMatchObject([
+        { kind: "file", room: 7000, body: "資料です", file: "a.pdf" },
+        { kind: "file", room: 7000, body: "", file: "b.csv" },
       ])
-      api.say(CW_ROOM, "5", 2, "[info][title][dtext:file_uploaded][/title][download:9]a.txt (2 B)[/download][/info]", 1003)
+      const long = `${"あ".repeat(60000)}\n\n${"い".repeat(10000)}`
+      expect(await cw.send("chatwork:r7000", long)).toHaveLength(2)
+      expect(api.sent.slice(2).map((s) => s.body.length)).toEqual([60000, 10000])
+      api.addFile("9", "a.txt", "hi")
+      const id = api.say(CW_ROOM, 2, "[info][title][dtext:file_uploaded][/title][download:9]a.txt (2 B)[/download][/info]", 1003)
       await cw.poll()
-      const [path] = await cw.download("chatwork:r7000", "5", join(dir, "inbox"))
+      const [path] = await cw.download("chatwork:r7000", id, join(dir, "inbox"))
       expect(readFileSync(path!, "utf8")).toBe("hi")
       expect(path).toEndWith(".txt")
     } finally {

@@ -6,12 +6,12 @@
 //   join <room>                             Bot がグループに追加された
 //   postback <user> <data>                  ボタン（承認など）の操作
 
-import { sign } from "../src/connectors/line.ts"
+import { sign } from "../src/connectors/http.ts"
 
 const [kind, ...args] = process.argv.slice(2)
 const secret = process.env.RELAY_LINE_CHANNEL_SECRET
 if (!secret) throw new Error("RELAY_LINE_CHANNEL_SECRET がありません")
-const port = process.env.RELAY_LINE_PORT ?? "18080"
+const port = process.env.RELAY_HTTP_PORT ?? "18080"
 
 function source(room: string, user?: string) {
   if (room.startsWith("U")) return { type: "user", userId: room }

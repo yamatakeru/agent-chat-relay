@@ -8,13 +8,15 @@ import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { AccessStore, localId, serviceOf } from "./core/access.ts"
-import { ChatworkConnector } from "./connectors/chatwork.ts"
+import { chatworkFromEnv } from "./connectors/chatwork.ts"
+import { lineFromEnv } from "./connectors/line.ts"
 import { startHarness, type HarnessConfig } from "./harness/harness.ts"
-import { LineConnector } from "./connectors/line.ts"
-import { MediaStore } from "./connectors/line-media.ts"
-import { pruneOld, RETENTION_MS } from "./core/retention.ts"
+import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
-import { type Log, Relay } from "./core/relay.ts"
+import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
+
+/** 接続部の一覧。秘密情報のあるものだけを動かす */
+const CONNECTORS: ConnectorFactory[] = [lineFromEnv, chatworkFromEnv]
 
 const home = resolve(process.env.RELAY_HOME ?? ".local/relay")
 const accessPath = join(home, "access.json")
@@ -96,30 +98,21 @@ async function serve(access: AccessStore): Promise<void> {
     Bun.spawnSync(["git", "init", "-q", workspace])
   }
   const inbox = join(workspace, ".relay", "inbox")
-  // LINE へ返す画像の公開場所。作業場所の外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
-  const mediaDir = join(home, "media")
 
-  // 受け取った添付と公開した画像は 7 日で消す（起動時と 1 時間ごと。ADR 0005）
-  const prune = () => {
-    const removed = pruneOld(inbox, RETENTION_MS) + pruneOld(mediaDir, RETENTION_MS)
-    if (removed > 0) log.info("7 日を過ぎた添付と画像を消しました", { removed })
-  }
-  prune()
-  setInterval(prune, 60 * 60 * 1000).unref()
+  // 受け取った添付は 7 日で消す（ADR 0005）
+  schedulePrune(inbox, "受け取った添付", log)
 
   const relay = new Relay(access, log, workspace)
-  const lineSecret = process.env.RELAY_LINE_CHANNEL_SECRET
-  const lineToken = process.env.RELAY_LINE_CHANNEL_TOKEN
-  const chatworkToken = process.env.RELAY_CHATWORK_API_TOKEN
-  if (!(lineSecret && lineToken) && !chatworkToken) {
+  const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
+  if (connectors.length === 0) {
     throw new Error("チャットサービスの秘密情報がありません。scripts/relay.sh secrets line か secrets chatwork を実行してください")
   }
+  for (const c of connectors) relay.addConnector(c)
 
-  const mcpPort = Number(process.env.RELAY_MCP_PORT ?? 18090)
   const token = randomBytes(32).toString("base64url")
   const mcp = Bun.serve({
     hostname: "127.0.0.1",
-    port: mcpPort,
+    port: Number(process.env.RELAY_MCP_PORT ?? 18090),
     idleTimeout: 0,
     routes: { "/mcp": mcpHandler(relay, inbox, token) },
     fetch: () => new Response("not found", { status: 404 }),
@@ -128,45 +121,26 @@ async function serve(access: AccessStore): Promise<void> {
   const closers: (() => void)[] = [() => void mcp.stop()]
   log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
 
-  if (lineSecret && lineToken) {
-    const media = new MediaStore(mediaDir)
-    const line = new LineConnector(
-      {
-        channelSecret: lineSecret,
-        channelToken: lineToken,
-        apiBase: process.env.RELAY_LINE_API_BASE,
-        dataApiBase: process.env.RELAY_LINE_DATA_API_BASE,
-        media,
-        publicUrl: process.env.RELAY_PUBLIC_URL,
-      },
-      relay,
-    )
-    relay.addConnector(line)
-    const webhook = Bun.serve({
+  // 接続部の受け口（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じ道を 2 つの接続部が出したら起動しない
+  const routes: Routes = {}
+  for (const c of connectors) {
+    for (const [path, route] of Object.entries(c.routes ?? {})) {
+      if (path in routes) throw new Error(`受け口の道が重なっています: ${path}（${c.label}）`)
+      routes[path] = route
+    }
+  }
+  if (Object.keys(routes).length > 0) {
+    const http = Bun.serve({
       hostname: "127.0.0.1",
-      port: Number(process.env.RELAY_LINE_PORT ?? 18080),
-      routes: {
-        "/line/webhook": { POST: (req) => line.handleWebhook(req) },
-        // 返した画像（ADR 0005）。トンネルで外へ公開される
-        "/media/:name": { GET: (req) => media.serve(req.params.name) },
-      },
+      port: Number(process.env.RELAY_HTTP_PORT ?? 18080),
+      routes,
       fetch: () => new Response("not found", { status: 404 }),
     })
-    closers.push(() => void webhook.stop())
-    log.info("LINE の受け口を開きました", { webhook: `${webhook.url}line/webhook` })
+    closers.push(() => void http.stop())
+    log.info("接続部の受け口を開きました", { url: http.url.href, routes: Object.keys(routes) })
   }
-
-  if (chatworkToken) {
-    const chatwork = new ChatworkConnector(
-      { apiToken: chatworkToken, apiBase: process.env.RELAY_CHATWORK_API_BASE, pollMs: Number(process.env.RELAY_CHATWORK_POLL_SEC) * 1000 || undefined },
-      relay,
-      log,
-    )
-    relay.addConnector(chatwork)
-    await chatwork.start()
-    closers.push(() => chatwork.stop())
-    log.info("Chatwork の定期取得を始めました")
-  }
+  await Promise.all(connectors.map((c) => c.start()))
+  for (const c of connectors) closers.push(() => c.stop())
 
   const harnessName = process.env.RELAY_HARNESS ?? "claude"
   const harnessLog = join(home, "harness.log")
