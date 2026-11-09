@@ -2,12 +2,12 @@
 # agent-chat-relay の操作。秘密情報は dotenvx で暗号化したリポジトリ直下の .env に置き、
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
-#   scripts/relay.sh secrets            LINE のチャネルシークレットとアクセストークンを保存する
+#   scripts/relay.sh secrets [line|chatwork]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン）
 #   scripts/relay.sh migrate-secrets    旧構成の CCJ_LINE_* を RELAY_LINE_* へ写す（一度だけ）
 #   scripts/relay.sh serve [harness]    中継を起動する（harness：claude（既定）か opencode）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
-#   scripts/relay.sh tunnel             LINE の Webhook を Cloudflare Quick Tunnel で公開する
+#   scripts/relay.sh tunnel             LINE の Webhook を Cloudflare Quick Tunnel で公開する（Chatwork には要らない）
 #   scripts/relay.sh quota              LINE の今月の送信数
 #   scripts/relay.sh webhook <種類> ... 署名付きの Webhook をローカルへ送る（開発用。scripts/webhook.ts）
 set -euo pipefail
@@ -51,6 +51,17 @@ cmd_secrets() {
   require_dotenvx
   ensure_ignored
   local secret token
+  case "${1:-line}" in
+    line) ;;
+    chatwork)
+      echo "Bot の Chatwork アカウントの API トークンを入力します。入力内容は画面に表示されません。"
+      read -rsp "API トークン: " token; echo
+      store_value RELAY_CHATWORK_API_TOKEN "$token"
+      echo "保存しました: ${ENV_FILE}"
+      return
+      ;;
+    *) die "secrets の対象は line か chatwork です" ;;
+  esac
   echo "LINE Developers コンソールの値を入力します。入力内容は画面に表示されません。"
   read -rsp "[1/2] チャネルシークレット: " secret; echo
   store_value RELAY_LINE_CHANNEL_SECRET "$secret"
@@ -85,7 +96,7 @@ cd "$REPO_ROOT"
 cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
-  secrets) cmd_secrets ;;
+  secrets) cmd_secrets "$@" ;;
   migrate-secrets) cmd_migrate_secrets ;;
   serve)
     with_env serve "$@"

@@ -28,7 +28,7 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
     "reply",
     {
       description:
-        "チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。files で、作業場所の中のファイルを添えられる（送れる種類はチャットサービスによる。LINE は JPEG・PNG の画像だけ）。",
+        "チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。files で、作業場所の中のファイルを添えられる（送れる種類はチャットサービスによる。LINE は JPEG・PNG の画像だけ、Chatwork は種類を問わず 5MB まで）。",
       inputSchema: {
         chat_id: z.string(),
         text: z.string().describe("本文。files があれば空でもよい"),

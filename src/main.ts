@@ -1,6 +1,6 @@
 // agent-chat-relay の入口。scripts/relay.sh から、秘密情報を環境変数に入れた状態で呼ばれる。
 //
-//   serve          中継を起動する（LINE の Webhook、チャット用ツールの MCP、ハーネス）
+//   serve          中継を起動する（チャットサービスの接続部、チャット用ツールの MCP、ハーネス）
 //   pair <code>    ペアリングのコードを承認する（ルームの登録、DM の相手の許可）
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
 
@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { AccessStore } from "./access.ts"
+import { ChatworkConnector } from "./chatwork.ts"
 import { startHarness, type HarnessConfig } from "./harness.ts"
 import { LineConnector } from "./line.ts"
 import { MediaStore, pruneOld, RETENTION_MS } from "./media.ts"
@@ -23,11 +24,6 @@ const log: Log = {
   error: (msg, extra) => console.error(format(msg, extra)),
 }
 
-function required(name: string): string {
-  const v = process.env[name]
-  if (!v) throw new Error(`${name} がありません。scripts/relay.sh secrets を実行してください`)
-  return v
-}
 
 /** ハーネスごとの起動方法。実行承認と設定の読み込みに関わる部分は安全境界（AGENTS.md） */
 function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Omit<HarnessConfig, "stderrPath"> {
@@ -112,32 +108,15 @@ async function serve(access: AccessStore): Promise<void> {
   setInterval(prune, 60 * 60 * 1000).unref()
 
   const relay = new Relay(access, log, workspace)
-  const line = new LineConnector(
-    {
-      channelSecret: required("RELAY_LINE_CHANNEL_SECRET"),
-      channelToken: required("RELAY_LINE_CHANNEL_TOKEN"),
-      apiBase: process.env.RELAY_LINE_API_BASE,
-      dataApiBase: process.env.RELAY_LINE_DATA_API_BASE,
-      media,
-      publicUrl: process.env.RELAY_PUBLIC_URL,
-    },
-    relay,
-  )
-  relay.addConnector(line)
+  const lineSecret = process.env.RELAY_LINE_CHANNEL_SECRET
+  const lineToken = process.env.RELAY_LINE_CHANNEL_TOKEN
+  const chatworkToken = process.env.RELAY_CHATWORK_API_TOKEN
+  if (!(lineSecret && lineToken) && !chatworkToken) {
+    throw new Error("チャットサービスの秘密情報がありません。scripts/relay.sh secrets line か secrets chatwork を実行してください")
+  }
 
-  const linePort = Number(process.env.RELAY_LINE_PORT ?? 18080)
   const mcpPort = Number(process.env.RELAY_MCP_PORT ?? 18090)
   const token = randomBytes(32).toString("base64url")
-  const webhook = Bun.serve({
-    hostname: "127.0.0.1",
-    port: linePort,
-    routes: {
-      "/line/webhook": { POST: (req) => line.handleWebhook(req) },
-      // 返した画像（ADR 0005）。トンネルで外へ公開される
-      "/media/:name": { GET: (req) => media.serve(req.params.name) },
-    },
-    fetch: () => new Response("not found", { status: 404 }),
-  })
   const mcp = Bun.serve({
     hostname: "127.0.0.1",
     port: mcpPort,
@@ -145,7 +124,47 @@ async function serve(access: AccessStore): Promise<void> {
     routes: { "/mcp": mcpHandler(relay, inbox, token) },
     fetch: () => new Response("not found", { status: 404 }),
   })
-  log.info("受け口を開きました", { webhook: `${webhook.url}line/webhook`, mcp: `${mcp.url}mcp` })
+  const servers = [mcp]
+  log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
+
+  if (lineSecret && lineToken) {
+    const line = new LineConnector(
+      {
+        channelSecret: lineSecret,
+        channelToken: lineToken,
+        apiBase: process.env.RELAY_LINE_API_BASE,
+        dataApiBase: process.env.RELAY_LINE_DATA_API_BASE,
+        media,
+        publicUrl: process.env.RELAY_PUBLIC_URL,
+      },
+      relay,
+    )
+    relay.addConnector(line)
+    const webhook = Bun.serve({
+      hostname: "127.0.0.1",
+      port: Number(process.env.RELAY_LINE_PORT ?? 18080),
+      routes: {
+        "/line/webhook": { POST: (req) => line.handleWebhook(req) },
+        // 返した画像（ADR 0005）。トンネルで外へ公開される
+        "/media/:name": { GET: (req) => media.serve(req.params.name) },
+      },
+      fetch: () => new Response("not found", { status: 404 }),
+    })
+    servers.push(webhook)
+    log.info("LINE の受け口を開きました", { webhook: `${webhook.url}line/webhook` })
+  }
+
+  let chatwork: ChatworkConnector | undefined
+  if (chatworkToken) {
+    chatwork = new ChatworkConnector(
+      { apiToken: chatworkToken, apiBase: process.env.RELAY_CHATWORK_API_BASE, pollMs: Math.max(2, Number(process.env.RELAY_CHATWORK_POLL_SEC) || 5) * 1000 },
+      relay,
+      log,
+    )
+    relay.addConnector(chatwork)
+    await chatwork.start()
+    log.info("Chatwork の定期取得を始めました")
+  }
 
   const harnessName = process.env.RELAY_HARNESS ?? "claude"
   const harnessLog = join(home, "harness.log")
@@ -162,6 +181,7 @@ async function serve(access: AccessStore): Promise<void> {
     if (stopping) return
     stopping = true
     log.info("停止します")
+    chatwork?.stop()
     harness.stop()
   }
   process.on("SIGINT", stop)
@@ -174,13 +194,13 @@ async function serve(access: AccessStore): Promise<void> {
     log.error(`ハーネスが異常終了したため、中継も止めます。ハーネスのログ：${harnessLog}（最後の 20 行を下に出す）`, { harness: harnessName, code })
     console.error(tail)
   }
-  void webhook.stop()
-  void mcp.stop()
+  chatwork?.stop()
+  for (const s of servers) void s.stop()
   process.exit(code === 0 ? 0 : 1)
 }
 
 function mask(id: string): string {
-  return id.replace(/([CRU])[0-9a-f]{32}/g, "$1…")
+  return id.replace(/([CRU])[0-9a-f]{32}/g, "$1…").replace(/^(chatwork:[ru])\d+$/, "$1…")
 }
 
 async function main(): Promise<void> {
