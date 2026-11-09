@@ -25,7 +25,7 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 
 - `mise install` と `mise exec -- bun install`。Agent SDK に同梱の Claude CLI（約 320MB）は入れない（`bunfig.toml`）。
 - Claude Code（`claude`）がインストールされ、ログインしていること。中継は、このコマンドを `claude-agent-acp` 経由で動かす。
-- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork` で入力する。どちらか片方だけでも動く。旧構成の値があるなら、`scripts/relay.sh migrate-secrets` で写せる。
+- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork` で入力する。どちらか片方だけでも動く。
 
 | 場所 | 中身 |
 |---|---|

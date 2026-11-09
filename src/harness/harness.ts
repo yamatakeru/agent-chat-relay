@@ -133,5 +133,5 @@ export async function startHarness(
 }
 
 export function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|CCJ_|DOTENV_)/.test(k)))
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|DOTENV_)/.test(k)))
 }

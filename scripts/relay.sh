@@ -3,7 +3,6 @@
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
 #   scripts/relay.sh secrets [line|chatwork]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン）
-#   scripts/relay.sh migrate-secrets    旧構成の CCJ_LINE_* を RELAY_LINE_* へ写す（一度だけ）
 #   scripts/relay.sh serve [harness]    中継を起動する（harness：claude（既定）か opencode）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
@@ -74,20 +73,6 @@ secrets_line() {
   store_value RELAY_LINE_CHANNEL_TOKEN "$token"
 }
 
-# 旧構成（cc-connect）のキーの値を、新しいキーへ写す。値は変数の中だけを通り、コマンド引数に載らない
-cmd_migrate_secrets() {
-  require_dotenvx
-  ensure_ignored
-  local old new value
-  for old in CCJ_LINE_CHANNEL_SECRET CCJ_LINE_CHANNEL_TOKEN; do
-    new="RELAY_${old#CCJ_}"
-    value="$(dotenvx get "$old" -f "$ENV_FILE" --strict 2>/dev/null)" || die "$ENV_FILE に $old がありません"
-    store_value "$new" "$value"
-    echo "$old → $new"
-  done
-  echo "写しました。旧キー（CCJ_*）は使わないので、不要なら .env から行ごと消してください。"
-}
-
 # .env を復号して環境変数に入れてから、自分自身を呼び直す。既存の環境変数が優先される
 with_env() {
   if [[ -z "${RELAY_ENV_LOADED:-}" && -f "$ENV_FILE" ]]; then
@@ -101,7 +86,6 @@ cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
   secrets) cmd_secrets "$@" ;;
-  migrate-secrets) cmd_migrate_secrets ;;
   serve)
     with_env serve "$@"
     RELAY_HARNESS="${1:-${RELAY_HARNESS:-claude}}" exec mise exec -- bun src/main.ts serve

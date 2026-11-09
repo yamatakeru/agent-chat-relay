@@ -168,7 +168,7 @@ describe("relay", () => {
 })
 
 test("ハーネスには中継の秘密情報を渡さない", () => {
-  const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", CCJ_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
+  const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
   expect(env).toEqual({ PATH: "/bin" })
 })
 
