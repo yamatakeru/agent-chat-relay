@@ -2,6 +2,18 @@
 
 仕様は `docs/relay.md` にある。ここでは、手元の Mac で動かす手順と、確かめる項目を書く。
 
+## LINE 公式アカウントとチャネルの準備（初回だけ）
+
+Messaging API のチャネルは、LINE Developers コンソールで直接は作れない。LINE 公式アカウントを作り、LINE Official Account Manager（以下 OAM）で Messaging API を有効にすると、チャネルができる。画面の名称は変わることがあるので、見つからないときは近い名前の項目を探す。
+
+1. **公式アカウントを作る**：<https://entry.line.biz/start/jp/> から、LINE ビジネス ID（個人の LINE アカウントでよい）でログインして作る。アカウント名はグループのメンバーに表示される名前で、あとから変えられる。無料のコミュニケーションプランで始まり、認証済みアカウントの申請は要らない。
+2. **Messaging API を有効にする**（OAM の Web 版でだけ操作できる）：<https://manager.line.biz/> で、［設定］→［Messaging API］→［Messaging API を利用する］。プロバイダーは新しく作る。**プロバイダーはあとから変えられない**ので、仕事で使っている既存のものは選ばない。プライバシーポリシーと利用規約の URL は空欄でよい。
+3. **応答設定**（OAM の［設定］→［応答設定］）：チャット・あいさつメッセージ・応答メッセージをオフにする。手動のチャットや自動の応答が、Bot の返事に混ざらないようにするため。Webhook は、URL を登録するまでオンにできない。
+4. **グループへの参加を許可する**（OAM の［設定］→［アカウント設定］→［トークへの参加］）：既定では許可されていない。1 つのグループに参加できる公式アカウントは 1 つだけ。
+5. **値を控える**（<https://developers.line.biz/console/> で、作ったプロバイダーのチャネルを開く）
+   - ［チャネル基本設定］の**チャネルシークレット**と、［Messaging API 設定］の**チャネルアクセストークン（長期）**（［発行］を押す）を、`scripts/relay.sh secrets` で保存する。チャットに貼らない。OAM の［設定］→［Messaging API］にはシークレットが平文で出るので、その画面のスクリーンショットを共有しない。漏れたら再発行して、保存し直す。トークンを再発行すると、前のものは使えなくなる。
+   - ［Messaging API 設定］の QR コードは、Bot を友だちに追加するときに使う。
+
 ## 用意
 
 - `mise install` と `mise exec -- bun install`。Agent SDK に同梱の Claude CLI（約 320MB）は入れない（`bunfig.toml`）。
@@ -20,7 +32,17 @@
 ターミナルを 2 つ使う。
 
 1. `scripts/relay.sh serve`（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しない。試すときも、信頼できる人だけのルームに限る
-2. `scripts/relay.sh tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの Webhook URL に登録し、［検証］を押す。旧構成の `/callback` からパスが変わった。
+2. `scripts/relay.sh tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの［Messaging API 設定］の Webhook URL に登録し、［検証］を押す。
+
+   | ［検証］の結果 | 主な原因 |
+   |---|---|
+   | 401 | チャネルシークレットの誤り。`secrets` で入れ直す |
+   | 404 | URL の末尾の `/line/webhook` がない |
+   | 502・530 など | 中継が動いていない、またはトンネルの URL が古い |
+
+3. ［Webhook の利用］をオンにする。オフだと、検証が通っても発言は届かない。［Webhook の再送］はオフのまま（既定）にする。再送された依頼の扱いは、まだ決めていない（`docs/relay.md`）。
+
+Quick Tunnel の URL は、トンネルを起動し直すたびに変わる。そのたびに Webhook URL を登録し直す。URL が古いままだと、発言は届かずに失われる。中継だけを再起動するときは、URL は変わらない。
 
 止めるときは、両方を Ctrl+C で止め、［Webhook の利用］をオフにする。
 
