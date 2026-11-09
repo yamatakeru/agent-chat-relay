@@ -7,13 +7,13 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { AccessStore } from "./access.ts"
-import { ChatworkConnector } from "./chatwork.ts"
-import { startHarness, type HarnessConfig } from "./harness.ts"
-import { LineConnector } from "./line.ts"
-import { MediaStore, pruneOld, RETENTION_MS } from "./media.ts"
-import { mcpHandler } from "./mcp.ts"
-import { type Log, Relay } from "./relay.ts"
+import { AccessStore } from "./core/access.ts"
+import { ChatworkConnector } from "./connectors/chatwork.ts"
+import { startHarness, type HarnessConfig } from "./harness/harness.ts"
+import { LineConnector } from "./connectors/line.ts"
+import { MediaStore, pruneOld, RETENTION_MS } from "./connectors/line-media.ts"
+import { mcpHandler } from "./core/mcp.ts"
+import { type Log, Relay } from "./core/relay.ts"
 
 const home = resolve(process.env.RELAY_HOME ?? ".local/relay")
 const accessPath = join(home, "access.json")

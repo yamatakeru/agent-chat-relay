@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { AccessStore } from "../src/access.ts"
-import { ChatworkConnector, parseBody } from "../src/chatwork.ts"
-import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
-import { MediaStore, pruneOld, RETENTION_MS } from "../src/media.ts"
+import { AccessStore } from "../src/core/access.ts"
+import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
+import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/connectors/line.ts"
+import { MediaStore, pruneOld, RETENTION_MS } from "../src/connectors/line-media.ts"
 import { png } from "./fixtures/png.ts"
-import { type Connector, type Incoming, Relay, sendablePaths } from "../src/relay.ts"
-import { RotatingFile, withoutRelaySecrets } from "../src/harness.ts"
+import { type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
+import { RotatingFile, withoutRelaySecrets } from "../src/harness/harness.ts"
 
 let dir: string
 let access: AccessStore

@@ -3,9 +3,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { extname, join } from "node:path"
-import { localId } from "./access.ts"
-import type { MediaStore } from "./media.ts"
-import type { Attachment, Connector, Relay, Verdict } from "./relay.ts"
+import { localId } from "../core/access.ts"
+import type { MediaStore } from "./line-media.ts"
+import type { Attachment, Connector, Relay, Verdict } from "../core/relay.ts"
 
 const SERVICE = "line"
 const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンは 1 分で切れる。余裕を見て 50 秒

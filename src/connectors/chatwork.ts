@@ -3,7 +3,7 @@
 
 import { mkdirSync, statSync, writeFileSync } from "node:fs"
 import { basename, extname, join } from "node:path"
-import type { Attachment, Connector, Log, Relay } from "./relay.ts"
+import type { Attachment, Connector, Log, Relay } from "../core/relay.ts"
 
 const SERVICE = "chatwork"
 const MAX_BODY = 65535 // 本文の上限（文字数）

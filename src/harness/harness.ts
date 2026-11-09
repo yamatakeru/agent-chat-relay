@@ -4,7 +4,7 @@
 import * as acp from "@agentclientprotocol/sdk"
 import { closeSync, fstatSync, mkdirSync, openSync, renameSync, writeSync } from "node:fs"
 import { dirname } from "node:path"
-import type { Log, PermissionRequest, Session, Verdict } from "./relay.ts"
+import type { Log, PermissionRequest, Session, Verdict } from "../core/relay.ts"
 
 export type HarnessConfig = {
   command: string[]
