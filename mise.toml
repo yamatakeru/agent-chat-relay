@@ -1,10 +1,12 @@
 [tools]
+bun = "1.4.4"
 cloudflared = "2026.10.7"
-go = "1.27.3"
-"npm:cc-connect" = "1.5.0"
+go = "1.27.3" # old/ を動かすためだけに残す（ADR 0007）
 
 # Go の依存モジュール・ビルドキャッシュ・go install 先を、リポジトリ内（git の無視対象）に置く
 [env]
 GOPATH = "{{config_root}}/.local/go"
 GOMODCACHE = "{{config_root}}/.local/go/pkg/mod"
 GOCACHE = "{{config_root}}/.local/go/cache"
+# Bun のパッケージのキャッシュも、リポジトリ内に置く
+BUN_INSTALL_CACHE_DIR = "{{config_root}}/.local/bun/cache"

@@ -1,4 +1,4 @@
-module github.com/yamatakeru/cc-connect-jtc-adapters
+module github.com/yamatakeru/agent-chat-relay/old
 
 go 1.27.3
 

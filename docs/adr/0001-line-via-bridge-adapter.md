@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: superseded by ADR 0006
 ---
 
 # LINE も cc-connect 標準の LINE platform ではなく、Bridge 経由の自作アダプターで接続する
+
+> ADR 0006 で cc-connect をやめ、自作の中核が ACP でハーネスを動かす形に置き換えた。
 
 > cc-connect へのつなぎ方（Bridge）は ADR 0003 で cloud_web に置き換えた。自作アダプターにするという判断は変わらない。
 

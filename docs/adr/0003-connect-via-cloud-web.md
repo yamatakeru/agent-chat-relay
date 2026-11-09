@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: superseded by ADR 0006
 ---
 
 # アダプターは Bridge ではなく、標準 platform の cloud_web で cc-connect につなぐ
+
+> ADR 0006 で cc-connect をやめ、自作の中核が ACP でハーネスを動かす形に置き換えた。
 
 ADR 0001 で決めた自作アダプターの、cc-connect へのつなぎ方を変える。Bridge から、cc-connect 1.5.0 で入った標準 platform の cloud_web（CWIP v1）にする。cloud_web では、cc-connect がアダプターの WebSocket へ接続しにくる。アダプターは中継サーバーとして、サービス固有の部分だけを受け持つ。具体的には、受信と署名の検証、メンションの抽出、送信である。
 

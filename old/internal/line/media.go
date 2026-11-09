@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/image/draw"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/prune"
+	"github.com/yamatakeru/agent-chat-relay/old/internal/prune"
 )
 
 // LINE の画像メッセージの条件（JPEG・PNG、本体は 10MB、プレビューは 1MB まで）。

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/jsonfile"
+	"github.com/yamatakeru/agent-chat-relay/old/internal/jsonfile"
 )
 
 // 受信モード（GLOSSARY.md）。

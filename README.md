@@ -1,10 +1,5 @@
-# cc-connect-jtc-adapters
+# agent-chat-relay
 
-JTC特有の謎社内チャットシステムに対して，cc-connectのアダプター群を提供するリポジトリです。
+業務チャット（LINE・LINE WORKS・Chatwork・Discord）と、コーディングエージェントの間を中継する薄い層。自作の中核が ACP（Agent Client Protocol）でハーネス（Claude Code、OpenCode など）を動かし、MCP のツールでルームの読み書きを渡す。判断の経緯は `docs/adr/` にある（ADR 0006）。
 
-cc-connectが未installである場合，下記のコマンドでcc-connectをプロジェクト単位でinstallすることを推奨します。
-
-``` bash
-mise use npm:cc-connect@1.5.0
-mise exec -- cc-connect --version
-```
+当初は cc-connect の外部アダプターとして作っていた。その実装は `old/` に残している。

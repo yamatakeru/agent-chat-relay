@@ -1,18 +1,19 @@
 # AGENTS.md
 
-cc-connect の外部アダプター群。LINE・LINE WORKS・Chatwork のルームから cc-connect 経由で coding agent に依頼し、返答を同じルームへ返す。保守はエージェントが担う。
+LINE・LINE WORKS・Chatwork・Discord のルームを、任意のハーネス（コーディングエージェント）のセッションにつなぐ。自作の中核が ACP でハーネスを動かし、MCP のチャット用ツールでルームの読み書きを渡す（ADR 0006）。保守はエージェントが担う。
 
 ## 方針
 
-- 実現手段の優先順は「cc-connect の既存機能 → 外部アダプター（cloud_web でつなぐ。ADR 0003） → cc-connect 本体の改修」。fork はしない。
+- ハーネスとは ACP と MCP だけでつなぐ。特定のハーネスに固有の機能に頼らない。
+- `old/` は cc-connect を使っていた旧実装。参照用で、保守しない。
 - 作業の前に、`GLOSSARY.md`（用語）、`docs/adr/`（確定した判断）、GitHub の統括 issue（進捗と未決事項）を読む。
-- cc-connect の挙動は、ドキュメントよりソースとテストを信じる。
+- ハーネスや ACP のアダプターの挙動は、ドキュメントよりソースとテストを信じる。
 
 ## このディレクトリの中で完結させる
 
 - ツールは `mise.toml` で版を固定し、`mise exec --` で使う。グローバルの環境に頼らない。Go のキャッシュも `mise.toml` の `[env]` で `.local/go/` に向けている。
 - 実行時のデータ、調査用のソース、一時ファイルは `.local/`（git の無視対象）に置く。ホーム、`~/Library/Caches`、`/tmp` には作らない。設定ファイルの複製のような、不要な中間物も作らない。
-- cc-connect のソースは `.local/src/` に、`mise.toml` と同じ版のタグを clone して読む。
+- 調査用のソース（ACP のアダプターなど）は `.local/src/` に、使っている版のタグを clone して読む。
 - テストで Claude Code を起動すると、`~/.claude/projects/` に会話ログができる。終わったら片付ける。
 
 ## 秘密情報（リポジトリは public）
@@ -23,7 +24,7 @@ cc-connect の外部アダプター群。LINE・LINE WORKS・Chatwork のルー�
 
 ## ルームから動く agent
 
-- `examples/` の agent 設定のうち、実行承認と設定の読み込みに関わるものは安全境界である。緩めるときは、理由を ADR に残す。
+- ハーネスに渡す設定のうち、実行承認と設定の読み込みに関わるものは安全境界である。緩めるときは、理由を ADR に残す。
 - 防壁は作業場所の位置ではなく、実行承認である。
 
 ## 検証
