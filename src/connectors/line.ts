@@ -1,20 +1,16 @@
 // LINE の接続部。Webhook の受信と、Messaging API での送信を受け持つ。
 
 import { createHmac, timingSafeEqual } from "node:crypto"
-import { mkdirSync, writeFileSync } from "node:fs"
-import { extname, join } from "node:path"
+import { extname } from "node:path"
 import { localId } from "../core/access.ts"
 import type { MediaStore } from "./line-media.ts"
-import { remember } from "./cache.ts"
+import { assertNumericId, fitUnits, remember, saveDownload, TRUNCATED_NOTE } from "./common.ts"
 import type { Attachment, Connector, Relay, Verdict } from "../core/relay.ts"
 
 const SERVICE = "line"
 const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンは 1 分で切れる。余裕を見て 50 秒
 const MAX_BUBBLES = 5 // 1 回の送信に入れられるメッセージの数（本文の吹き出しと画像を合わせて）
 const MAX_BUBBLE_UNITS = 5000 // 吹き出し 1 つの最大文字数（UTF-16 の単位）
-const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略しました）"
-const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
-const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
 // 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形。ヘッダーの値をそのまま URL に入れるので絞る
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/
 
@@ -205,20 +201,16 @@ export class LineConnector implements Connector {
   }
 
   async download(_room: string, messageId: string, dir: string): Promise<string[]> {
-    if (!/^\d+$/.test(messageId)) throw new Error("message_id の形が違います")
+    assertNumericId(messageId)
     const res = await fetch(`${this.dataApi}/v2/bot/message/${messageId}/content`, {
       headers: { Authorization: `Bearer ${this.cfg.channelToken}` },
       signal: AbortSignal.timeout(120_000),
     })
     if (!res.ok) throw new Error(`LINE から取得できませんでした（HTTP ${res.status}）`)
-    if (Number(res.headers.get("content-length") ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error(TOO_LARGE)
-    const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.length > MAX_DOWNLOAD_BYTES) throw new Error(TOO_LARGE)
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const ext = extname(this.fileNames.get(messageId) ?? "").replace(/[^.a-zA-Z0-9]/g, "") || extension(res.headers.get("content-type") ?? "")
-    const path = join(dir, `${this.now()}-${messageId}${ext}`)
-    writeFileSync(path, buf, { mode: 0o600 })
-    return [path]
+    // 元の名前の拡張子が使えなければ（記号だけなど）、Content-Type から決める
+    const named = extname(this.fileNames.get(messageId) ?? "").replace(/[^.a-zA-Z0-9]/g, "")
+    const ext = named.length > 1 ? named : extension(res.headers.get("content-type") ?? "")
+    return [await saveDownload(res, dir, `${this.now()}-${messageId}`, ext)]
   }
 
   async roomName(room: string): Promise<string | undefined> {
@@ -340,7 +332,6 @@ export function verifySignature(secret: string, body: string, signature: string)
   return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
-
 function apiMessage(raw: string): string {
   try {
     return (JSON.parse(raw) as { message?: string }).message ?? ""
@@ -383,13 +374,6 @@ export function splitBubbles(text: string, max = MAX_BUBBLES): string[] {
     out[out.length - 1] = last.slice(0, fitUnits(last, MAX_BUBBLE_UNITS - TRUNCATED_NOTE.length)) + TRUNCATED_NOTE
   }
   return out
-}
-
-/** UTF-16 で limit 単位に収まる長さ。サロゲートペアの途中では切らない */
-function fitUnits(s: string, limit: number): number {
-  if (s.length <= limit) return s.length
-  const code = s.charCodeAt(limit - 1)
-  return code >= 0xd800 && code <= 0xdbff ? limit - 1 : limit
 }
 
 function extension(contentType: string): string {

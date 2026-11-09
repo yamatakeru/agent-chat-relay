@@ -8,11 +8,13 @@ import { MediaStore } from "../src/connectors/line-media.ts"
 import { png } from "./fixtures/png.ts"
 import { type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
 import { withoutRelaySecrets } from "../src/harness/harness.ts"
-import { pruneOld, RETENTION_MS, RotatingFile } from "../src/harness/files.ts"
+import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
+import { RotatingFile } from "../src/harness/log-file.ts"
 
 let dir: string
 let access: AccessStore
 let now = 1_000_000
+const quiet = { info: () => {}, error: () => {} }
 
 beforeEach(() => {
   // /tmp は使わない（AGENTS.md）
@@ -88,7 +90,7 @@ describe("access", () => {
 describe("relay", () => {
   function setup() {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, { info: () => {}, error: () => {} })
+    const relay = new Relay(access, quiet)
     const conn = new FakeConnector()
     relay.addConnector(conn)
     return { relay, conn }
@@ -143,7 +145,7 @@ describe("relay", () => {
     expect(await relay.requestPermission({ title: "Bash", input: "ls" })).toBe("deny")
   })
 
-  test("停止中に届いた発言は、登録したルームなら記録だけして、渡さない", async () => {
+  test("停止中に届いた発言は、登録したルームなら記録だけして、渡さない（許可やペアリングの判定も通さない）", async () => {
     const { relay, conn } = setup()
     const prompts: string[] = []
     relay.attach({ prompt: async (t) => void prompts.push(t) })
@@ -249,7 +251,7 @@ describe("返すファイル", () => {
     })
     try {
       writeFileSync(join(dir, "a.png"), png(16, 16, [0, 0, 0]))
-      const relay = new Relay(access, { info: () => {}, error: () => {} })
+      const relay = new Relay(access, quiet)
       const media = new MediaStore(join(dir, "media"))
       const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay)
       await line.send(ROOM, "どうぞ", { files: [join(dir, "a.png")] })
@@ -276,7 +278,7 @@ describe("chatwork", () => {
   test("Bot へのメンションと返信だけを取り除き、添付を取り出す", () => {
     expect(parseBody("[To:100]AI係さん\n調べて", BOT)).toMatchObject({ text: "調べて", mentioned: true })
     expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", BOT)).toMatchObject({ text: "ありがとう", mentioned: true })
-    // ほかの人宛ての To と、全員宛ての TOALL はメンションに数えない
+    // ほかの人宛ての To と、全員宛て（[toall]）はメンションに数えない
     expect(parseBody("[To:200]ボブさん\n確認して", BOT)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
     expect(parseBody("[toall]お知らせ", BOT).mentioned).toBe(false)
     const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", BOT)
@@ -332,14 +334,14 @@ describe("chatwork", () => {
   async function setup() {
     const api = fakeApi()
     access.save({ allowFrom: ["chatwork:u1"], rooms: { "chatwork:r7000": { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, { info: () => {}, error: () => {} }, dir)
+    const relay = new Relay(access, quiet, dir)
     const prompts: string[] = []
     relay.attach({ prompt: async (t) => void prompts.push(t) })
     // 起動は Unix 時刻 1000 秒
-    const cw = new ChatworkConnector({ apiToken: "t", apiBase: api.server.url.href }, relay, { info: () => {}, error: () => {} }, () => 1_000_000)
+    const cw = new ChatworkConnector({ apiToken: "t", apiBase: api.server.url.href }, relay, quiet, () => 1_000_000)
     relay.addConnector(cw)
     await cw.start()
-    cw.stop()
+    cw.stop() // タイマーは止め、テストから poll() を呼ぶ
     return { api, relay, cw, prompts }
   }
 

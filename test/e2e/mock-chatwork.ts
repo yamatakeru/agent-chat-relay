@@ -18,6 +18,7 @@ const cursor = new Map<number, number>()
 let seq = 1000
 const now = () => Math.floor(Date.now() / 1000)
 const PNG = png(32, 32, [220, 20, 20])
+const record = (o: object) => appendFileSync(log, JSON.stringify(o) + "\n")
 
 function add(roomId: number, account: number, body: string, at = now()): string {
   const id = String(++seq)
@@ -35,7 +36,6 @@ Bun.serve({
   port: 18098,
   async fetch(req) {
     const p = new URL(req.url).pathname
-    const record = (o: object) => appendFileSync(log, JSON.stringify(o) + "\n")
     if (req.method === "POST" && p === "/_say") {
       const b = new URLSearchParams(await req.text())
       return Response.json({ id: add(Number(b.get("room")), Number(b.get("account")), b.get("body") ?? "") })

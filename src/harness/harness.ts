@@ -1,9 +1,9 @@
-// ハーネスを ACP で動かす（ADR 0006）。中核が ACP のクライアントになり、ハーネスを子プロセスとして起動する。
+// ハーネスを ACP で動かす（ADR 0006）。中継が ACP のクライアントになり、ハーネスを子プロセスとして起動する。
 // セッションは 1 つ。チャット用ツールの MCP サーバーを session/new で渡し、発言は session/prompt で入れる。
 
 import * as acp from "@agentclientprotocol/sdk"
 import type { Log, PermissionRequest, Session, Verdict } from "../core/relay.ts"
-import { RotatingFile } from "./files.ts"
+import { RotatingFile } from "./log-file.ts"
 
 export type HarnessConfig = {
   command: string[]

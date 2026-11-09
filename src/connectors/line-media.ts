@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { RETENTION_MS } from "../harness/files.ts"
+import { RETENTION_MS } from "../core/retention.ts"
 
 // LINE の画像メッセージの上限（本体 10MB、プレビュー 1MB）
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024

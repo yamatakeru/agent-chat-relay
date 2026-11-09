@@ -7,12 +7,12 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { AccessStore } from "./core/access.ts"
+import { AccessStore, localId, serviceOf } from "./core/access.ts"
 import { ChatworkConnector } from "./connectors/chatwork.ts"
 import { startHarness, type HarnessConfig } from "./harness/harness.ts"
 import { LineConnector } from "./connectors/line.ts"
 import { MediaStore } from "./connectors/line-media.ts"
-import { pruneOld, RETENTION_MS } from "./harness/files.ts"
+import { pruneOld, RETENTION_MS } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { type Log, Relay } from "./core/relay.ts"
 
@@ -24,7 +24,6 @@ const log: Log = {
   info: (msg, extra) => console.log(format(msg, extra)),
   error: (msg, extra) => console.error(format(msg, extra)),
 }
-
 
 /** ハーネスごとの起動方法。実行承認と設定の読み込みに関わる部分は安全境界（AGENTS.md） */
 function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Omit<HarnessConfig, "stderrPath"> {
@@ -97,12 +96,12 @@ async function serve(access: AccessStore): Promise<void> {
     Bun.spawnSync(["git", "init", "-q", workspace])
   }
   const inbox = join(workspace, ".relay", "inbox")
-  // 返す画像の公開場所。作業場所の外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
-  const media = new MediaStore(join(home, "media"))
+  // LINE へ返す画像の公開場所。作業場所の外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
+  const mediaDir = join(home, "media")
 
   // 受け取った添付と公開した画像は 7 日で消す（起動時と 1 時間ごと。ADR 0005）
   const prune = () => {
-    const removed = pruneOld(inbox, RETENTION_MS) + pruneOld(media.dir, RETENTION_MS)
+    const removed = pruneOld(inbox, RETENTION_MS) + pruneOld(mediaDir, RETENTION_MS)
     if (removed > 0) log.info("7 日を過ぎた添付と画像を消しました", { removed })
   }
   prune()
@@ -125,10 +124,12 @@ async function serve(access: AccessStore): Promise<void> {
     routes: { "/mcp": mcpHandler(relay, inbox, token) },
     fetch: () => new Response("not found", { status: 404 }),
   })
-  const servers = [mcp]
+  // 終了時に閉じるもの
+  const closers: (() => void)[] = [() => void mcp.stop()]
   log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
 
   if (lineSecret && lineToken) {
+    const media = new MediaStore(mediaDir)
     const line = new LineConnector(
       {
         channelSecret: lineSecret,
@@ -151,19 +152,19 @@ async function serve(access: AccessStore): Promise<void> {
       },
       fetch: () => new Response("not found", { status: 404 }),
     })
-    servers.push(webhook)
+    closers.push(() => void webhook.stop())
     log.info("LINE の受け口を開きました", { webhook: `${webhook.url}line/webhook` })
   }
 
-  let chatwork: ChatworkConnector | undefined
   if (chatworkToken) {
-    chatwork = new ChatworkConnector(
-      { apiToken: chatworkToken, apiBase: process.env.RELAY_CHATWORK_API_BASE, pollMs: Math.max(2, Number(process.env.RELAY_CHATWORK_POLL_SEC) || 5) * 1000 },
+    const chatwork = new ChatworkConnector(
+      { apiToken: chatworkToken, apiBase: process.env.RELAY_CHATWORK_API_BASE, pollMs: Number(process.env.RELAY_CHATWORK_POLL_SEC) * 1000 || undefined },
       relay,
       log,
     )
     relay.addConnector(chatwork)
     await chatwork.start()
+    closers.push(() => chatwork.stop())
     log.info("Chatwork の定期取得を始めました")
   }
 
@@ -182,7 +183,6 @@ async function serve(access: AccessStore): Promise<void> {
     if (stopping) return
     stopping = true
     log.info("停止します")
-    chatwork?.stop()
     harness.stop()
   }
   process.on("SIGINT", stop)
@@ -195,13 +195,13 @@ async function serve(access: AccessStore): Promise<void> {
     log.error(`ハーネスが異常終了したため、中継も止めます。ハーネスのログ：${harnessLog}（最後の 20 行を下に出す）`, { harness: harnessName, code })
     console.error(tail)
   }
-  chatwork?.stop()
-  for (const s of servers) void s.stop()
+  for (const close of closers) close()
   process.exit(code === 0 ? 0 : 1)
 }
 
 function mask(id: string): string {
-  return id.replace(/([CRU])[0-9a-f]{32}/g, "$1…").replace(/^(chatwork:[ru])\d+$/, "$1…")
+  // サービス名と、ローカル ID の先頭 1 文字（LINE の C・R・U、Chatwork の r・u）だけを残す
+  return `${serviceOf(id)}:${localId(id).slice(0, 1)}…`
 }
 
 async function main(): Promise<void> {

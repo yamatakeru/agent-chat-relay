@@ -26,7 +26,7 @@ export type ChatMessage = {
 export type Incoming = ChatMessage & {
   isDM: boolean
   mentioned: boolean
-  /** 中継が止まっている間に届いた発言。登録したルームのものは記録だけして、エージェントには渡さない */
+  /** 中継が止まっている間に届いた発言。登録したルームと許可した人の DM のものは記録だけして、エージェントには渡さない */
   stale?: boolean
 }
 
@@ -104,6 +104,7 @@ export class Relay {
 
   /** 接続部が受けた発言 */
   receive(m: Incoming): GateResult {
+    // 古い依頼の実行、古い承認の返事、ペアリングのコードを出さないよう、許可の判定（gate）を通さない
     if (m.stale) {
       if (!canSendTo(this.access.load(), m.room)) return { action: "drop" }
       this.record(m)

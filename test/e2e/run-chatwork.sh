@@ -51,7 +51,7 @@ mention() { printf '[To:100]AI係さん\n%s' "$1"; }
 echo "== pairing (DM, group)"
 n="$(lines)"; say $DM $ALICE "hi"; waitfor "$n" 15; scripts/relay.sh pair "$(code)"
 n="$(lines)"; say $SALES $ALICE "$(mention "はじめまして")"; waitfor "$n" 15; scripts/relay.sh pair "$(code)"
-echo "codes so far: $(grep -c 'relay pair' "$LOG")（起動前の依頼にはコードを返さないので 2）"
+echo "codes so far: $(grep -c 'relay pair' "$LOG")（DM と営業チームの 2 つ。起動前の依頼は記録だけで、何も返さない）"
 
 echo "== reply in group"
 n="$(lines)"; say $GROUP $ALICE "$(mention "自己紹介を一言で")"; waitfor "$n"

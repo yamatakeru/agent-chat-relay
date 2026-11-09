@@ -50,24 +50,28 @@ store_value() {
 cmd_secrets() {
   require_dotenvx
   ensure_ignored
-  local secret token
   case "${1:-line}" in
-    line) ;;
-    chatwork)
-      echo "Bot の Chatwork アカウントの API トークンを入力します。入力内容は画面に表示されません。"
-      read -rsp "API トークン: " token; echo
-      store_value RELAY_CHATWORK_API_TOKEN "$token"
-      echo "保存しました: ${ENV_FILE}"
-      return
-      ;;
+    line) secrets_line ;;
+    chatwork) secrets_chatwork ;;
     *) die "secrets の対象は line か chatwork です" ;;
   esac
+  echo "保存しました: ${ENV_FILE}"
+}
+
+secrets_chatwork() {
+  local token
+  echo "Bot の Chatwork アカウントの API トークンを入力します。入力内容は画面に表示されません。"
+  read -rsp "API トークン: " token; echo
+  store_value RELAY_CHATWORK_API_TOKEN "$token"
+}
+
+secrets_line() {
+  local secret token
   echo "LINE Developers コンソールの値を入力します。入力内容は画面に表示されません。"
   read -rsp "[1/2] チャネルシークレット: " secret; echo
   store_value RELAY_LINE_CHANNEL_SECRET "$secret"
   read -rsp "[2/2] チャネルアクセストークン（長期）: " token; echo
   store_value RELAY_LINE_CHANNEL_TOKEN "$token"
-  echo "保存しました: ${ENV_FILE}"
 }
 
 # 旧構成（cc-connect）のキーの値を、新しいキーへ写す。値は変数の中だけを通り、コマンド引数に載らない
