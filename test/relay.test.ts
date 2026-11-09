@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { AccessStore } from "../src/core/access.ts"
+import { AccessStore, canSendTo } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
+import { DiscordConnector, renderContent } from "../src/connectors/discord.ts"
 import { splitText } from "../src/connectors/common.ts"
 import { ApiClient, sign, verifySignature } from "../src/connectors/http.ts"
 import { LineConnector, stripSelfMentions } from "../src/connectors/line.ts"
 import { MediaStore } from "../src/connectors/line-media.ts"
 import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
+import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
 import { withoutRelaySecrets } from "../src/harness/harness.ts"
@@ -86,6 +88,18 @@ describe("access", () => {
     if (r.action !== "pair") throw new Error("pair expected")
     now += 61 * 60 * 1000
     expect(() => access.approve(r.code)).toThrow()
+  })
+
+  test("スレッド（親/子の ID）は、親の登録を引き継ぐ。未登録なら親を登録するコードを返す", () => {
+    const parent = "discord:c100"
+    const thread = "discord:c100/200"
+    const r = access.gate({ room: thread, sender: ALICE, isDM: false, mentioned: true })
+    if (r.action !== "pair") throw new Error("pair expected")
+    expect(access.approve(r.code)).toMatchObject({ kind: "room", target: parent })
+    expect(access.gate({ room: thread, sender: ALICE, isDM: false, mentioned: true }).action).toBe("deliver")
+    expect(access.gate({ room: thread, sender: ALICE, isDM: false, mentioned: false }).action).toBe("record")
+    expect(canSendTo(access.load(), thread)).toBe(true)
+    expect(canSendTo(access.load(), "discord:c300/200")).toBe(false)
   })
 
   test("ルームの allowFrom があれば、その人の発言だけを渡す", () => {
@@ -481,6 +495,95 @@ describe("chatwork", () => {
     } finally {
       void api.server.stop()
     }
+  })
+})
+
+describe("discord", () => {
+  const ALICE_D = "discord:u1"
+
+  async function setup() {
+    const d = fakeDiscord()
+    access.save({ allowFrom: [ALICE_D], rooms: { "discord:c100": { requireMention: true, allowFrom: [] } }, pending: {} })
+    const relay = new Relay(access, quiet, dir)
+    const prompts: string[] = []
+    relay.attach({ prompt: async (t) => void prompts.push(t) })
+    const dc = new DiscordConnector({ token: "t" }, relay, quiet, d.client, () => 1_000_000)
+    relay.addConnector(dc)
+    await dc.start()
+    const dev = d.channel("100", { name: "開発" })
+    const thread = d.channel("200", { name: "調査", parentId: "100" })
+    return { d, relay, dc, prompts, dev, thread }
+  }
+
+  test("メンションは Bot・Bot 専用のロール・Bot の発言への返信だけ。スレッドは親の登録で受け、DM は相手の ID をルームにする", async () => {
+    const { d, relay, dc, prompts, dev, thread } = await setup()
+    await dc.handleMessage(d.say(dev, "1", `<@${BOT_ID}> 調べて`, { users: [BOT_ID] }))
+    await dc.handleMessage(d.say(dev, "2", "@everyone お知らせ", { everyone: true }))
+    await dc.handleMessage(d.say(dev, "2", `<@&${BOT_ROLE}> 頼む`, { roles: { [BOT_ROLE]: "AI係" } }))
+    await dc.handleMessage(d.say(dev, "2", "<@&951> 営業へ", { roles: { "951": "営業" } }))
+    const [mine] = await dc.send("discord:c100", "Bot の発言")
+    await dc.handleMessage(d.say(dev, "2", "ありがとう", { replyTo: mine }))
+    await dc.handleMessage(d.say(dev, BOT_ID, "自分の発言"))
+    await dc.handleMessage(d.say(thread, "1", `<@${BOT_ID}> スレッドで`, { users: [BOT_ID] }))
+    await dc.handleMessage(d.say(d.channel("dm-1", { dm: true }), "1", "DM です"))
+    await Bun.sleep(0)
+    const all = prompts.join("\n")
+    for (const t of ["調べて", "頼む", "ありがとう", "スレッドで", "DM です"]) expect(all).toContain(t)
+    expect(all).not.toContain("お知らせ")
+    expect(all).not.toContain("営業へ")
+    expect(all).toContain('chat_id="discord:c100/200" chat="#開発 › 調査"')
+    expect(all).toContain('chat_id="discord:u1"')
+    expect(d.typing).toContain("100")
+    // 渡さない発言も、記録には残る（Discord は履歴を読むので、fetch_messages は Discord から）
+    expect((await relay.fetchMessages("discord:c100")).map((m) => m.text)).toContain("@everyone お知らせ")
+  })
+
+  test("未登録のチャンネルのスレッドで話しかけられたら、スレッドに親を登録するコードを返す", async () => {
+    const { d, dc } = await setup()
+    d.channel("300")
+    const t = d.channel("301", { parentId: "300" })
+    await dc.handleMessage(d.say(t, "2", `<@${BOT_ID}> はじめまして`, { users: [BOT_ID] }))
+    await Bun.sleep(0)
+    expect(d.sent.at(-1)).toMatchObject({ channel: "301", content: expect.stringContaining("relay pair") })
+    expect(Object.values(access.load().pending)[0]).toMatchObject({ kind: "room", target: "discord:c300" })
+  })
+
+  test("長い本文は分けて送り、ファイルと返信は 1 通目に付ける。ほかのチャンネルのスレッドには送らない", async () => {
+    const { d, dc } = await setup()
+    writeFileSync(join(dir, "a.png"), "x")
+    const ids = await dc.send("discord:c100", `${"あ".repeat(1500)}\n\n${"い".repeat(1500)}`, { replyTo: "42", files: [join(dir, "a.png")] })
+    expect(ids).toHaveLength(2)
+    expect(d.sent.map((s) => [s.content?.length, s.files?.length, s.reply?.messageReference])).toEqual([
+      [1500, 1, "42"],
+      [1500, 0, undefined],
+    ])
+    d.channel("999", { parentId: "300" })
+    await expect(dc.send("discord:c100/999", "x")).rejects.toThrow("送れません")
+  })
+
+  test("承認の依頼はボタン付きで DM に送り、許可リストの人の押下だけを受け付ける", async () => {
+    const { d, relay, dc: conn } = await setup()
+    const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
+    await Bun.sleep(0)
+    const req = d.sent.at(-1)!
+    expect(req.channel).toBe("dm-1")
+    expect(req.components).toHaveLength(1)
+    const id = /yes ([a-km-z]{5})/.exec(req.content ?? "")![1]!
+    const bob = d.press("2", `perm:allow:${id}`)
+    await conn.handleInteraction(bob.interaction)
+    expect(bob.replies).toMatchObject([{ reply: { content: expect.stringContaining("見つからない") } }])
+    const alice = d.press("1", `perm:deny:${id}`, req.content)
+    await conn.handleInteraction(alice.interaction)
+    expect(await verdict).toBe("deny")
+    expect(alice.replies).toMatchObject([{ update: { components: [], content: expect.stringContaining("❌ 拒否しました") } }])
+  })
+
+  test("メンションとチャンネルの記法を名前にし、Bot へのメンションは取り除く", () => {
+    const msg = {
+      content: `<@${BOT_ID}> <@2> と <@&951> は <#100> へ <@3>`,
+      mentions: { users: new Map([["2", { displayName: "ボブ" }]]), members: null, roles: new Map([["951", { name: "営業" }]]), channels: new Map([["100", { name: "開発" }]]) },
+    } as unknown as Parameters<typeof renderContent>[0]
+    expect(renderContent(msg, BOT_ID, BOT_ROLE)).toBe("@ボブ と @営業 は #開発 へ <@3>")
   })
 })
 

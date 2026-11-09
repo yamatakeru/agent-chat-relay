@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { AccessStore, localId, serviceOf } from "./core/access.ts"
 import { chatworkFromEnv } from "./connectors/chatwork.ts"
+import { discordFromEnv } from "./connectors/discord.ts"
 import { lineFromEnv } from "./connectors/line.ts"
 import { startHarness, type HarnessConfig } from "./harness/harness.ts"
 import { schedulePrune } from "./core/retention.ts"
@@ -16,7 +17,7 @@ import { mcpHandler } from "./core/mcp.ts"
 import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
 
 /** 接続部の一覧。秘密情報のあるものだけを動かす */
-const CONNECTORS: ConnectorFactory[] = [lineFromEnv, chatworkFromEnv]
+const CONNECTORS: ConnectorFactory[] = [lineFromEnv, chatworkFromEnv, discordFromEnv]
 
 const home = resolve(process.env.RELAY_HOME ?? ".local/relay")
 const accessPath = join(home, "access.json")
@@ -105,7 +106,7 @@ async function serve(access: AccessStore): Promise<void> {
   const relay = new Relay(access, log, workspace)
   const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
   if (connectors.length === 0) {
-    throw new Error("チャットサービスの秘密情報がありません。scripts/relay.sh secrets line か secrets chatwork を実行してください")
+    throw new Error("チャットサービスの秘密情報がありません。scripts/relay.sh secrets line・secrets chatwork・secrets discord のどれかを実行してください")
   }
   for (const c of connectors) relay.addConnector(c)
 
@@ -174,7 +175,7 @@ async function serve(access: AccessStore): Promise<void> {
 }
 
 function mask(id: string): string {
-  // サービス名と、ローカル ID の先頭 1 文字（LINE の C・R・U、Chatwork の r・u）だけを残す
+  // サービス名と、ローカル ID の先頭 1 文字（LINE の C・R・U、Chatwork の r・u、Discord の c・u）だけを残す
   return `${serviceOf(id)}:${localId(id).slice(0, 1)}…`
 }
 

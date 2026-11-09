@@ -21,15 +21,31 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 3. **コンタクトになる**：使う人と Bot をコンタクトにする。DM と実行承認の依頼は、コンタクトとのダイレクトチャットでやりとりする。無料プランでは、組織外のコンタクトは 1 ユーザーあたり 20 人まで。
 4. Webhook とトンネルは要らない（ADR 0010）。
 
+## Discord の Bot の準備（初回だけ）
+
+1. **アプリを作る**：<https://discord.com/developers/applications> で［New Application］。名前は、サーバーのメンバーに見える Bot の名前になる。
+2. **Bot のトークン**：［Bot］→［Reset Token］で表示されたトークンを、`scripts/relay.sh secrets discord` で保存する。チャットに貼らない。漏れたら作り直して、保存し直す。
+3. **Message Content Intent をオンにする**：同じ［Bot］の画面の［Privileged Gateway Intents］で、［Message Content Intent］をオンにする。オフだと、メンションのない発言の本文が空で届く。
+4. **サーバーに招待する**：［OAuth2］→［URL Generator］で、Scopes に `bot` を選ぶ。Bot Permissions には次を選ぶ。
+   - View Channels
+   - Send Messages
+   - Send Messages in Threads
+   - Read Message History
+   - Attach Files
+   - Add Reactions
+
+   作られた URL を開き、使うサーバーを選ぶ。
+5. Webhook とトンネルは要らない（ADR 0011）。非公開スレッドで使うときは、そのスレッドに Bot を招待する。
+
 ## 用意
 
 - `mise install` と `mise exec -- bun install`。Agent SDK に同梱の Claude CLI（約 320MB）は入れない（`bunfig.toml`）。
 - Claude Code（`claude`）がインストールされ、ログインしていること。中継は、このコマンドを `claude-agent-acp` 経由で動かす。
-- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork` で入力する。どちらか片方だけでも動く。
+- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork`、Discord は `scripts/relay.sh secrets discord` で入力する。1 つだけでも動く。
 
 | 場所 | 中身 |
 |---|---|
-| `.env`（git の無視対象） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`（dotenvx で暗号化） |
+| `.env`（git の無視対象） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`・`RELAY_DISCORD_BOT_TOKEN`（dotenvx で暗号化） |
 | `.local/relay/access.json` | ルームの登録・許可リスト・ペアリング待ちのコード |
 | `.local/relay/workspace/` | セッションの作業場所。受け取った添付は `.relay/inbox/` に置き、7 日で消す |
 | `.local/relay/media/` | LINE へ返した画像（推測できない名前で公開する。7 日で消す） |
@@ -54,7 +70,7 @@ Quick Tunnel の URL は、トンネルを起動し直すたびに変わる。�
 
 止めるときは、両方を Ctrl+C で止め、［Webhook の利用］をオフにする。
 
-Chatwork だけで使うときは、`scripts/relay.sh serve` だけでよい（トンネルは要らない）。
+Chatwork と Discord だけで使うときは、`scripts/relay.sh serve` だけでよい（トンネルは要らない）。
 
 ## ルームと承認者の登録（ペアリング）
 
@@ -88,9 +104,24 @@ Push は、グループでは人数分、承認依頼は承認者 1 人につき
 | ファイルを送ってから、「さっきのファイルを要約して」 | 中身を読んだ答えが届く |
 | 「〜を CSV にして送って」 | 作業場所に作る承認依頼が DM に届き、`yes <ID>` で許可するとファイルが届く |
 
+## 確かめる項目（Discord）
+
+| すること | 期待する結果 |
+|---|---|
+| Bot に DM を送る | コードが返り、`pair` すると許可リストに入る |
+| チャンネルで Bot に `@` を付けて話しかける | コードが返る。`pair` すると、そのチャンネルが登録される |
+| 登録したチャンネルで、Bot に `@` を付けて質問する | 入力中の表示が出て、返事が届く |
+| Bot の発言に返信する／`@everyone` で発言する | 返信には返事が届く。`@everyone` には反応しない |
+| 登録したチャンネルでスレッドを作り、Bot に `@` を付けて話しかける | 登録なしで、スレッドに返事が届く |
+| 未登録のチャンネルのスレッドで話しかける | スレッドにコードが返り、`pair` すると親のチャンネルが登録される |
+| 中継を止めている間に発言し、起動してから「さっきの発言は？」と聞く | Discord の履歴から読んで答える |
+| 画像を送ってから、「さっきの画像を説明して」 | 中身を読んだ答えが届く |
+| 「〜を CSV にして送って」 | 作業場所に作る承認依頼が、ボタン付きで DM に届く。［許可］を押すとファイルが届く |
+| 2000 字を超える答えになる質問 | 分けて届く |
+
 ## モックでの確認
 
-e2e のスクリプトは、チャットサービスごとに `test/e2e/<サービス>.sh` に置く（モックは `mock-<サービス>.ts`）。
+e2e のスクリプトは、チャットサービスごとに `test/e2e/<サービス>.sh` に置く（モックは `mock-<サービス>.ts`）。Discord は e2e を作らず、偽の Client（`test/fixtures/discord-fake.ts`）を使う単体テストと、実際の Discord で確かめる（ADR 0011）。
 
 - `test/e2e/chatwork.sh claude`：Chatwork の API をモックにして流す（ペアリング、返事、画像の説明、停止中に届いた依頼、承認とファイルの返送、ルームへの追加）。
 - `test/e2e/line.sh claude`：LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。
