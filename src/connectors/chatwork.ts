@@ -1,22 +1,21 @@
 // Chatwork の接続部。API の定期取得で受け、REST API で送る（ADR 0010）。
 // Bot は、専用の Chatwork アカウントの API トークンで発言する。
 
-import { statSync } from "node:fs"
 import { basename, extname } from "node:path"
 import { localId } from "../core/access.ts"
-import { assertNumericId, remember, saveDownload, truncate } from "./common.ts"
-import type { Attachment, Connector, Log, Relay } from "../core/relay.ts"
+import { assertNumericId, remember, saveDownload, splitText, truncate } from "./common.ts"
+import { ApiClient, jsonError } from "./http.ts"
+import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay } from "../core/relay.ts"
 
 const SERVICE = "chatwork"
-const MAX_BODY = 65535 // 本文の上限（文字数）
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 // アップロードできるファイルの上限
+// 本文の上限は 65535 字。返信の記法を付ける分を残す
+const MAX_TEXT = 65000
 // 取得は 1 回ごとに、ルーム一覧 1 回と、更新のあったルームごとに 2 回。回数制限（5 分に 300 回）を送信と分け合うので、2 秒より詰めない
 const MIN_POLL_MS = 2000
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"])
 
 type CwRoom = { room_id: number; name: string; type: "my" | "direct" | "group"; last_update_time: number }
 type CwMessage = { message_id: string; account: { account_id: number; name: string }; body: string; send_time: number }
-type CwFile = { filename: string; filesize: number; download_url?: string }
 
 type ChatworkConfig = {
   apiToken: string
@@ -29,9 +28,22 @@ type ChatworkConfig = {
 const roomKey = (roomId: number) => `${SERVICE}:r${roomId}`
 const userKey = (accountId: number) => `${SERVICE}:u${accountId}`
 
+/** API トークンがあれば、接続部を作る */
+export function chatworkFromEnv(env: Record<string, string | undefined>, deps: ConnectorDeps): ChatworkConnector | undefined {
+  const apiToken = env.RELAY_CHATWORK_API_TOKEN
+  if (!apiToken) return undefined
+  const pollMs = Number(env.RELAY_CHATWORK_POLL_SEC) * 1000 || undefined
+  return new ChatworkConnector({ apiToken, apiBase: env.RELAY_CHATWORK_API_BASE, pollMs }, deps.relay, deps.log)
+}
+
 export class ChatworkConnector implements Connector {
   readonly service = SERVICE
-  private readonly api: string
+  readonly label = "Chatwork"
+  readonly capabilities: Capabilities = {
+    files: { maxBytes: 5 * 1024 * 1024, maxCount: 10 },
+    text: { max: MAX_TEXT, parts: 10 },
+  }
+  private readonly api: ApiClient
   private me?: { id: number; name: string; mention: RegExp }
   /** この時刻（Unix 秒）より前の発言は、停止中に届いたものとして記録だけする */
   private startedAt = 0
@@ -45,8 +57,6 @@ export class ChatworkConnector implements Connector {
   private readonly dmRooms = new Map<number, number>()
   /** 受け取った発言（ルーム ID-メッセージ ID）→ 送り主と本文。重複の除去、返信の記法、添付の取得に使う */
   private readonly messages = new Map<string, { author: number; body: string }>()
-  /** 回数制限で止めている間の終わり（ミリ秒） */
-  private pausedUntil = 0
   private timer?: Timer
   private lastError = ""
 
@@ -56,7 +66,19 @@ export class ChatworkConnector implements Connector {
     private readonly log: Log,
     private readonly now: () => number = Date.now,
   ) {
-    this.api = (cfg.apiBase ?? "https://api.chatwork.com/v2").replace(/\/$/, "")
+    this.api = new ApiClient({
+      label: "Chatwork",
+      base: cfg.apiBase ?? "https://api.chatwork.com/v2",
+      auth: () => ({ "x-chatworktoken": cfg.apiToken }),
+      errorMessage: (raw) => jsonError(raw, (b) => (b.errors as string[] | undefined)?.join(", ")),
+      rateLimited: (res, msg, now) =>
+        // ルームごとの投稿の制限（10 秒に 10 回）は、ヘッダーではなくエラーの文面でしか見分けられない。そのルームにだけかかる。
+        // 全体の制限（5 分に 300 回）なら、解除の時刻（x-ratelimit-reset。Unix 秒）まで止める。ヘッダーがなければ 1 分待つ
+        /per room/i.test(msg)
+          ? { message: "このルームへの投稿が多すぎます。10 秒ほど待ってから送ってください" }
+          : { resumeAt: Number(res.headers.get("x-ratelimit-reset")) * 1000 || now + 60_000, message: "Chatwork の API の回数制限（5 分に 300 回）に達しました" },
+      now,
+    })
   }
 
   /**
@@ -64,11 +86,12 @@ export class ChatworkConnector implements Connector {
    * force=0 の差分の起点は Chatwork がトークンごとに覚えているので、停止中の発言は、そのルームの次の差分に含まれて届く
    */
   async start(): Promise<void> {
-    const [me, rooms] = await Promise.all([this.call("GET", "/me") as Promise<{ account_id: number; name: string }>, this.listRooms()])
+    const [me, rooms] = await Promise.all([this.api.call("GET", "/me") as Promise<{ account_id: number; name: string }>, this.listRooms()])
     this.me = { id: me.account_id, name: me.name, mention: selfMention(me.account_id, me.name) }
     this.startedAt = Math.floor(this.now() / 1000)
     for (const r of rooms) this.fetched.set(r.room_id, { t: r.last_update_time, done: true })
     this.schedule()
+    this.log.info("Chatwork の定期取得を始めました")
   }
 
   stop(): void {
@@ -97,7 +120,7 @@ export class ChatworkConnector implements Connector {
 
   /** ルーム一覧で更新のあったルームだけ、前回からの差分を取る */
   async poll(): Promise<void> {
-    if (this.now() < this.pausedUntil) return
+    if (this.api.paused) return
     for (const r of await this.listRooms()) {
       if (r.type === "my") continue
       const prev = this.fetched.get(r.room_id)
@@ -137,23 +160,21 @@ export class ChatworkConnector implements Connector {
   async send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]> {
     const rid = await this.roomId(room)
     const files = opts?.files ?? []
-    // 途中まで送られた状態を作らないよう、先にすべて確かめる
-    for (const f of files) {
-      if (statSync(f).size > MAX_UPLOAD_BYTES) throw new Error(`Chatwork に送れるファイルは 5MB までです: ${basename(f)}`)
-    }
-    let body = truncate(text.trim(), MAX_BODY)
+    const parts = splitText(text, MAX_TEXT, this.capabilities.text.parts)
     const author = opts?.replyTo ? this.messages.get(`${rid}-${opts.replyTo}`)?.author : undefined
-    if (body && author !== undefined) body = `[rp aid=${author} to=${rid}-${opts!.replyTo}]\n${body}`
-    if (!body && files.length === 0) throw new Error("本文が空です")
-    if (files.length === 0) return [await this.post(rid, body)]
-    // 本文は 1 つ目のファイルに添える。ファイルの投稿は、メッセージ ID を返さない
+    if (parts.length > 0 && author !== undefined) parts[0] = `[rp aid=${author} to=${rid}-${opts!.replyTo}]\n${parts[0]}`
+    if (parts.length === 0 && files.length === 0) throw new Error("本文が空です")
+    // 本文の最後の 1 通は、1 つ目のファイルに添える。ファイルの投稿は、メッセージ ID を返さない
+    const caption = files.length > 0 ? parts.pop() : undefined
+    const ids: string[] = []
+    for (const p of parts) ids.push(await this.post(rid, p))
     for (const [i, f] of files.entries()) {
       const form = new FormData()
       form.append("file", Bun.file(f), basename(f))
-      if (i === 0 && body) form.append("message", body)
-      await this.call("POST", `/rooms/${rid}/files`, form, 60_000)
+      if (i === 0 && caption) form.append("message", caption)
+      await this.api.call("POST", `/rooms/${rid}/files`, form, 60_000)
     }
-    return []
+    return ids
   }
 
   async sendApproval(user: string, text: string, _requestId: string): Promise<void> {
@@ -169,18 +190,14 @@ export class ChatworkConnector implements Connector {
     assertNumericId(messageId)
     const rid = await this.roomId(room)
     const body =
-      this.messages.get(`${rid}-${messageId}`)?.body ?? ((await this.call("GET", `/rooms/${rid}/messages/${messageId}`)) as CwMessage).body
+      this.messages.get(`${rid}-${messageId}`)?.body ?? ((await this.api.call("GET", `/rooms/${rid}/messages/${messageId}`)) as CwMessage).body
     const ids = [...new Set([...body.matchAll(/\[download:(\d+)\]/g)].map((m) => m[1]!))]
     if (ids.length === 0) throw new Error("この発言には添付がありません")
     const paths: string[] = []
     for (const fid of ids) {
-      const file = (await this.call("GET", `/rooms/${rid}/files/${fid}?create_download_url=1`)) as CwFile
-      // 本物の API の URL は https だけを許す。モックの API（http）では、同じホストの URL を許す
-      const url = URL.parse(file.download_url ?? "")
-      if (!url || (url.protocol !== "https:" && url.origin !== URL.parse(this.api)?.origin)) throw new Error("ダウンロードの URL を取得できませんでした")
+      const file = (await this.api.call("GET", `/rooms/${rid}/files/${fid}?create_download_url=1`)) as { filename: string; download_url?: string }
       // 取得用の URL は 30 秒で切れる。API トークンは付けない（別のホストへ渡さない）
-      const res = await fetch(url, { signal: AbortSignal.timeout(120_000) })
-      if (!res.ok) throw new Error(`Chatwork から取得できませんでした（HTTP ${res.status}）`)
+      const res = await this.api.download(file.download_url ?? "", "none")
       paths.push(await saveDownload(res, dir, `${this.now()}-${messageId}-${fid}`, extname(file.filename)))
     }
     return paths
@@ -194,11 +211,11 @@ export class ChatworkConnector implements Connector {
   async edit(room: string, messageId: string, text: string): Promise<void> {
     assertNumericId(messageId)
     const rid = await this.roomId(room)
-    await this.call("PUT", `/rooms/${rid}/messages/${messageId}`, new URLSearchParams({ body: truncate(text.trim(), MAX_BODY) }))
+    await this.api.call("PUT", `/rooms/${rid}/messages/${messageId}`, new URLSearchParams({ body: truncate(text.trim(), MAX_TEXT) }))
   }
 
   private async post(rid: number, body: string): Promise<string> {
-    const res = (await this.call("POST", `/rooms/${rid}/messages`, new URLSearchParams({ body }))) as { message_id: string }
+    const res = (await this.api.call("POST", `/rooms/${rid}/messages`, new URLSearchParams({ body }))) as { message_id: string }
     return res.message_id
   }
 
@@ -210,7 +227,7 @@ export class ChatworkConnector implements Connector {
 
   /** 一覧を返す API。0 件のときは 204 で本文がない */
   private async list<T>(path: string): Promise<T[]> {
-    return ((await this.call("GET", path)) as T[] | null) ?? []
+    return ((await this.api.call("GET", path)) as T[] | null) ?? []
   }
 
   /** ルームの ID を、Chatwork のルーム ID にする。DM の相手なら、コンタクトからダイレクトチャットを探す */
@@ -226,30 +243,6 @@ export class ChatworkConnector implements Connector {
     }
     if (rid === undefined) throw new Error("この人とのダイレクトチャットが見つかりません（Bot のコンタクトではありません）")
     return rid
-  }
-
-  private async call(method: string, path: string, body?: URLSearchParams | FormData, timeoutMs = 15_000): Promise<unknown> {
-    if (this.now() < this.pausedUntil) throw new Error(`Chatwork の API の回数制限に達しています。${Math.ceil((this.pausedUntil - this.now()) / 1000)} 秒後に使えます`)
-    const res = await fetch(`${this.api}${path}`, { method, headers: { "x-chatworktoken": this.cfg.apiToken }, body, signal: AbortSignal.timeout(timeoutMs) })
-    if (res.status === 204) return null
-    const raw = await res.text()
-    if (!res.ok) {
-      const msg = apiErrors(raw)
-      if (res.status === 429) {
-        // ルームごとの投稿の制限（10 秒に 10 回）は、ヘッダーではなくエラーの文面でしか見分けられない。そのルームにだけかかる
-        if (/per room/i.test(msg)) throw new Error("このルームへの投稿が多すぎます。10 秒ほど待ってから送ってください")
-        // 全体の制限（5 分に 300 回）なら、解除の時刻（x-ratelimit-reset。Unix 秒）まで止める。ヘッダーがなければ 1 分待つ
-        const reset = Number(res.headers.get("x-ratelimit-reset"))
-        this.pausedUntil = reset > 0 ? reset * 1000 : this.now() + 60_000
-        throw new Error("Chatwork の API の回数制限（5 分に 300 回）に達しました")
-      }
-      throw new Error(`Chatwork API: HTTP ${res.status}: ${msg}`)
-    }
-    try {
-      return JSON.parse(raw)
-    } catch {
-      throw new Error(`Chatwork API: 応答を読めませんでした（${method} ${path.split("?")[0]}）`)
-    }
   }
 }
 
@@ -279,14 +272,6 @@ export function parseBody(
     .trim()
   if (!text && attachments.length > 0) text = attachments.every((a) => a.type === "image") ? "（画像）" : "（ファイル）"
   return { text, attachments, mentioned }
-}
-
-function apiErrors(raw: string): string {
-  try {
-    return ((JSON.parse(raw) as { errors?: string[] }).errors ?? []).join(", ")
-  } catch {
-    return raw.slice(0, 200)
-  }
 }
 
 function escapeRegExp(s: string): string {
