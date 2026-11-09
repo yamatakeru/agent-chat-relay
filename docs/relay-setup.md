@@ -40,7 +40,7 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 ターミナルを 2 つ使う。
 
 1. `scripts/relay.sh serve`（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しない。試すときも、信頼できる人だけのルームに限る
-2. `scripts/relay.sh tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの［Messaging API 設定］の Webhook URL に登録し、［検証］を押す。
+2. `scripts/relay.sh line-tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの［Messaging API 設定］の Webhook URL に登録し、［検証］を押す。
 
    | ［検証］の結果 | 主な原因 |
    |---|---|
@@ -75,7 +75,7 @@ Chatwork だけで使うときは、`scripts/relay.sh serve` だけでよい（�
 | メンションして、作業場所にファイルを作るよう頼む | 承認者の DM に承認依頼が届く。［許可］で実行され、返事が届く |
 | 承認依頼に［拒否］で答える | 実行されない |
 
-Push は、グループでは人数分、承認依頼は承認者 1 人につき 1 通を使う。今月の消費は `scripts/relay.sh quota` で分かる。
+Push は、グループでは人数分、承認依頼は承認者 1 人につき 1 通を使う。今月の消費は `scripts/relay.sh line-quota` で分かる。
 
 ## 確かめる項目（Chatwork）
 
@@ -97,4 +97,4 @@ e2e のスクリプトは、チャットサービスごとに `test/e2e/<サー�
 
 どちらも実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は `.local/e2e/` に、サービスの名前を付けて残る（例：`relay-line-claude/`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
 
-開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（LINE だけ。`scripts/line-webhook.ts`）。
+開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh line-webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（`scripts/line-webhook.ts`）。

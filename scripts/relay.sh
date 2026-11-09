@@ -7,9 +7,9 @@
 #   scripts/relay.sh serve [harness]    中継を起動する（harness：claude（既定）か opencode）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
-#   scripts/relay.sh tunnel             LINE の Webhook を Cloudflare Quick Tunnel で公開する（Chatwork には要らない）
-#   scripts/relay.sh quota              LINE の今月の送信数
-#   scripts/relay.sh webhook <種類> ... 署名付きの LINE の Webhook をローカルへ送る（開発用。scripts/line-webhook.ts）
+#   scripts/relay.sh line-tunnel        LINE の Webhook を Cloudflare Quick Tunnel で公開する
+#   scripts/relay.sh line-quota         LINE の今月の送信数
+#   scripts/relay.sh line-webhook <種類> ...  署名付きの LINE の Webhook をローカルへ送る（開発用。scripts/line-webhook.ts）
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -107,9 +107,9 @@ case "$cmd" in
     RELAY_HARNESS="${1:-${RELAY_HARNESS:-claude}}" exec mise exec -- bun src/main.ts serve
     ;;
   pair | access) exec mise exec -- bun src/main.ts "$cmd" "$@" ;;
-  tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_LINE_PORT" ;;
-  quota)
-    with_env quota
+  line-tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_LINE_PORT" ;;
+  line-quota)
+    with_env line-quota
     for path in quota quota/consumption; do
       printf '%s: ' "$path"
       # トークンをコマンド引数に載せないよう、ヘッダーはプロセス置換で渡す
@@ -117,8 +117,8 @@ case "$cmd" in
       echo
     done
     ;;
-  webhook)
-    with_env webhook "$@"
+  line-webhook)
+    with_env line-webhook "$@"
     exec mise exec -- bun scripts/line-webhook.ts "$@"
     ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;

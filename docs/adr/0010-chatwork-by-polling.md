@@ -30,7 +30,7 @@ Chatwork の Webhook には、次の制約がある。
 
 ## Consequences
 
-- 公開 URL もトンネルも要らない。Chatwork だけで使うなら、`scripts/relay.sh tunnel` は不要になる。
+- 公開 URL もトンネルも要らない。Chatwork だけで使うなら、`scripts/relay.sh line-tunnel` は不要になる。
 - 返事は、最大で取得の間隔（既定 5 秒、`RELAY_CHATWORK_POLL_SEC`）だけ遅れる。
 - API の回数制限（5 分に 300 回）を、取得と送信で分け合う。取得は 5 秒ごとに 1 回と、更新のあったルームごとに 2 回。制限に達したら、解除されるまで取得を止め、送信はエラーにしてエージェントに伝える。
 - `force=0` の差分は、API トークンごとに Chatwork が覚えている。同じトークンを、ほかのプログラムの取得に使わない。

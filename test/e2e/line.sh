@@ -32,7 +32,7 @@ for _ in $(seq 60); do
 done
 grep -q "セッションを開始しました" "$RLOG" || { echo "relay did not start"; tail -20 "$RLOG"; exit 1; }
 
-wh() { scripts/relay.sh webhook "$@" >/dev/null; }
+wh() { scripts/relay.sh line-webhook "$@" >/dev/null; }
 lines() { wc -l <"$LOG" | tr -d ' '; }
 # 送信の記録が n 行を超えるまで待つ
 waitfor() {
