@@ -9,13 +9,13 @@ import type { Attachment, Connector, Relay, Verdict } from "./relay.ts"
 
 const SERVICE = "line"
 const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンは 1 分で切れる。余裕を見て 50 秒
-const MAX_BUBBLES = 5 // 1 回の送信に入れられる吹き出しの数
+const MAX_BUBBLES = 5 // 1 回の送信に入れられるメッセージの数（本文の吹き出しと画像を合わせて）
 const MAX_BUBBLE_UNITS = 5000 // 吹き出し 1 つの最大文字数（UTF-16 の単位）
 const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略しました）"
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
 const CACHE_CAP = 1000
-// 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形
+// 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形。ヘッダーの値をそのまま URL に入れるので絞る
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/
 
 type Source = { type: "user" | "group" | "room"; userId?: string; groupId?: string; roomId?: string }
@@ -81,7 +81,8 @@ export class LineConnector implements Connector {
     if (!verifySignature(this.cfg.channelSecret, body, req.headers.get("x-line-signature") ?? "")) {
       return new Response("bad signature", { status: 401 })
     }
-    // 署名が合えば、LINE が登録された URL へ送ってきたもの。そのホスト名で画像を公開する（Quick Tunnel は起動ごとに変わる）
+    // 署名が合えば、LINE が登録された URL へ送ってきたもの。そのホスト名で画像を公開する（Quick Tunnel は起動ごとに変わる）。
+    // LINE は HTTPS の URL しか受け付けないので、トンネル経由（X-Forwarded-Proto: https）のときだけ使う
     const host = req.headers.get("host") ?? ""
     if (!this.cfg.publicUrl && req.headers.get("x-forwarded-proto") === "https" && HOST_RE.test(host)) this.publicBase = `https://${host}`
     let events: LineEvent[]
@@ -165,12 +166,10 @@ export class LineConnector implements Connector {
 
   async send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]> {
     const files = opts?.files ?? []
-    // 1 回の送信は、本文の吹き出しと画像を合わせて 5 件まで
     const maxImages = text.trim() ? MAX_BUBBLES - 1 : MAX_BUBBLES
     if (files.length > maxImages) throw new Error(`LINE で一度に送れる画像は、本文があれば ${MAX_BUBBLES - 1} 枚、なければ ${MAX_BUBBLES} 枚までです`)
     // 画像を先に公開する。送れないものがあれば、何も送らずにエラーを返す
-    const images = []
-    for (const f of files) images.push(await this.publish(f))
+    const images = await Promise.all(files.map((f) => this.publish(f)))
     const bubbles = splitBubbles(text, MAX_BUBBLES - images.length)
     if (bubbles.length === 0 && images.length === 0) throw new Error("本文が空です")
     const quoteToken = opts?.replyTo ? this.quoteTokens.get(opts.replyTo) : undefined
@@ -378,7 +377,7 @@ export function stripSelfMentions(text: string, mentionees: Mentionee[]): string
     .trim()
 }
 
-/** LINE の上限（吹き出し 5 つ）に収める。あふれた分は切り、省略したことを書き添える */
+/** 吹き出し max 個（既定は LINE の上限の 5。画像を添えるときは、その分を減らす）に収める。あふれた分は切り、省略したことを書き添える */
 export function splitBubbles(text: string, max = MAX_BUBBLES): string[] {
   let rest = text.trim()
   const out: string[] = []

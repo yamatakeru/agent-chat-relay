@@ -53,6 +53,7 @@ export type Verdict = "allow" | "deny"
 const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 const PERMISSION_TIMEOUT_MS = 30 * 60 * 1000
 const HISTORY_LIMIT = 200
+// サービスを問わない上限。接続部がさらに絞る（LINE は 1 回に画像 5 枚まで）
 const MAX_FILES = 10
 
 export const INSTRUCTIONS = [

@@ -33,7 +33,7 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
         chat_id: z.string(),
         text: z.string().describe("本文。files があれば空でもよい"),
         reply_to: z.string().optional().describe("引用して返す発言の message_id"),
-        files: z.array(z.string()).optional().describe("添えるファイルのパス（作業場所の中だけ。最大 10 個）"),
+        files: z.array(z.string()).optional().describe("添えるファイルのパス（作業場所の中だけ。相対パスは作業場所から。最大 10 個）"),
       },
     },
     ({ chat_id, text, reply_to, files }) =>

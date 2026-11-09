@@ -10,6 +10,7 @@ LOG="$E/sent-$H.jsonl"
 RLOG="$E/relay-$H.log"
 mkdir -p "$E"
 : >"$LOG"
+# モックの Webhook には X-Forwarded-Proto が付かないので、画像の公開 URL は固定で渡す
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
   RELAY_LINE_CHANNEL_SECRET=dummysecret RELAY_LINE_CHANNEL_TOKEN=dummytoken RELAY_PUBLIC_URL=http://127.0.0.1:18080
 G1=C111aaaaaaaaaaaaaaaaaaaaaaaaaaaaa

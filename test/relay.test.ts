@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { deflateSync } from "node:zlib"
 import { AccessStore } from "../src/access.ts"
 import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
-import { MediaStore, pruneOld } from "../src/media.ts"
+import { MediaStore, pruneOld, RETENTION_MS } from "../src/media.ts"
+import { png } from "./fixtures/png.ts"
 import { type Connector, type Incoming, Relay, sendablePaths } from "../src/relay.ts"
 import { RotatingFile, withoutRelaySecrets } from "../src/harness.ts"
 
@@ -176,24 +176,6 @@ describe("line", () => {
   })
 })
 
-/** 単色（random なら乱数）の PNG を作る */
-function png(w: number, h: number, random = false): Uint8Array {
-  const row = (i: number) => Buffer.concat([Buffer.from([0]), random ? crypto.getRandomValues(Buffer.alloc(w * 3)) : Buffer.alloc(w * 3, i % 256)])
-  const raw = Buffer.concat(Array.from({ length: h }, (_, i) => row(i)))
-  const chunk = (t: string, d: Buffer) => {
-    const len = Buffer.alloc(4)
-    len.writeUInt32BE(d.length)
-    const crc = Buffer.alloc(4)
-    crc.writeUInt32BE(Bun.hash.crc32(Buffer.concat([Buffer.from(t), d])))
-    return Buffer.concat([len, Buffer.from(t), d, crc])
-  }
-  const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(w, 0)
-  ihdr.writeUInt32BE(h, 4)
-  ihdr.set([8, 2, 0, 0, 0], 8)
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))])
-}
-
 describe("返すファイル", () => {
   test("作業場所の中のファイルだけを送れる", () => {
     const ws = join(dir, "ws")
@@ -212,8 +194,8 @@ describe("返すファイル", () => {
 
   test("画像は JPEG と PNG だけを公開し、1MB を超えるものには縮小したプレビューを作る", async () => {
     const media = new MediaStore(join(dir, "media"))
-    writeFileSync(join(dir, "small.png"), png(32, 32))
-    writeFileSync(join(dir, "big.png"), png(800, 800, true))
+    writeFileSync(join(dir, "small.png"), png(32, 32, [200, 30, 30]))
+    writeFileSync(join(dir, "big.png"), png(800, 800))
     writeFileSync(join(dir, "note.txt"), "hello")
     const small = await media.publish(join(dir, "small.png"))
     expect(small.preview).toBe(small.original)
@@ -231,9 +213,9 @@ describe("返すファイル", () => {
     mkdirSync(d)
     writeFileSync(join(d, "old"), "o")
     writeFileSync(join(d, "new"), "n")
-    const eightDaysAgo = (Date.now() - 8 * 24 * 3600 * 1000) / 1000
-    utimesSync(join(d, "old"), eightDaysAgo, eightDaysAgo)
-    expect(pruneOld(d, 7 * 24 * 3600 * 1000)).toBe(1)
+    const old = (Date.now() - RETENTION_MS - 60_000) / 1000
+    utimesSync(join(d, "old"), old, old)
+    expect(pruneOld(d, RETENTION_MS)).toBe(1)
     expect(existsSync(join(d, "old"))).toBe(false)
     expect(existsSync(join(d, "new"))).toBe(true)
   })
@@ -251,7 +233,7 @@ describe("返すファイル", () => {
       },
     })
     try {
-      writeFileSync(join(dir, "a.png"), png(16, 16))
+      writeFileSync(join(dir, "a.png"), png(16, 16, [0, 0, 0]))
       const relay = new Relay(access, { info: () => {}, error: () => {} })
       const media = new MediaStore(join(dir, "media"))
       const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay)

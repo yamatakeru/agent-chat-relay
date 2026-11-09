@@ -26,7 +26,7 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 | `.local/relay/access.json` | ルームの登録・許可リスト・ペアリング待ちのコード |
 | `.local/relay/workspace/` | セッションの作業場所。受け取った添付は `.relay/inbox/` に置き、7 日で消す |
 | `.local/relay/media/` | LINE へ返した画像（推測できない名前で公開する。7 日で消す） |
-| `.local/relay/harness.log` | ハーネスが stderr に出したもの（画面には出さない。異常終了したときだけ、最後の 20 行を画面に出す）。10MB を超えたら `harness.log.1` に移して新しく始める |
+| `.local/relay/harness.log` | ハーネスが stderr に出したもの（画面には出さない。異常終了したときだけ、最後の 20 行を画面に出す）。10MB を超えそうになったら `harness.log.1` に移して新しく始める |
 
 ## 起動
 

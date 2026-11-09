@@ -100,10 +100,10 @@ async function serve(access: AccessStore): Promise<void> {
     Bun.spawnSync(["git", "init", "-q", workspace])
   }
   const inbox = join(workspace, ".relay", "inbox")
-  // 返す画像の公開場所。作業場所の外に置き、エージェントからは見えないようにする
+  // 返す画像の公開場所。作業場所の外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
   const media = new MediaStore(join(home, "media"))
 
-  // 受け取った添付と公開した画像は 7 日で消す（起動時と 1 時間ごと）
+  // 受け取った添付と公開した画像は 7 日で消す（起動時と 1 時間ごと。ADR 0005）
   const prune = () => {
     const removed = pruneOld(inbox, RETENTION_MS) + pruneOld(media.dir, RETENTION_MS)
     if (removed > 0) log.info("7 日を過ぎた添付と画像を消しました", { removed })

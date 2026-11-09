@@ -16,7 +16,7 @@ export type HarnessConfig = {
   meta?: Record<string, unknown>
   /** セッションのモード（ACP の session mode）。違うモードで始まったら切り替える。安全境界 */
   mode?: string
-  /** ハーネスの stderr を追記するファイル。画面には出さない。10MB を超えたら <path>.1 に移して新しく始める */
+  /** ハーネスの stderr を追記するファイル。画面には出さない。10MB を超えそうになったら <path>.1 に移して新しく始める */
   stderrPath: string
 }
 
@@ -27,6 +27,7 @@ export async function startHarness(
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
   log: Log,
 ): Promise<{ session: Session; exited: Promise<number>; stop: () => void }> {
+  // stderr はファイルへ直接つながず、中継が受けて書く。大きさを数えて入れ替えるため
   const stderrLog = new RotatingFile(cfg.stderrPath, MAX_STDERR_BYTES)
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
@@ -37,8 +38,20 @@ export async function startHarness(
     stderr: "pipe",
   })
   const stderrDrained = (async () => {
-    for await (const chunk of proc.stderr) stderrLog.write(chunk)
-    stderrLog.close()
+    let failed = false
+    try {
+      // 書けなくても読み続ける。読むのをやめると、パイプが詰まってハーネスが止まる
+      for await (const chunk of proc.stderr) {
+        try {
+          stderrLog.write(chunk)
+        } catch (err) {
+          if (!failed) log.error("harness.log に書けませんでした", { error: String(err) })
+          failed = true
+        }
+      }
+    } finally {
+      stderrLog.close()
+    }
   })()
   const stdin = new WritableStream<Uint8Array>({
     write(chunk) {
