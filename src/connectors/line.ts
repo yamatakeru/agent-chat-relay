@@ -4,9 +4,9 @@ import { extname, join } from "node:path"
 import { localId } from "../core/access.ts"
 import { schedulePrune } from "../core/retention.ts"
 import { MAX_IMAGE_BYTES, MediaStore } from "./line-media.ts"
-import { assertNumericId, remember, saveDownload, splitText, truncate } from "./common.ts"
+import { assertNumericId, parsePermissionData, permissionData, remember, saveDownload, splitText, truncate, verdictText } from "./common.ts"
 import { ApiClient, ApiError, jsonError, verifySignature } from "./http.ts"
-import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay, Routes, Verdict } from "../core/relay.ts"
+import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay, Routes } from "../core/relay.ts"
 
 const SERVICE = "line"
 const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンは 1 分で切れる。余裕を見て 50 秒
@@ -163,11 +163,9 @@ export class LineConnector implements Connector {
       return
     }
     if (ev.type === "postback") {
-      const m = /^perm:(allow|deny):([a-km-z]{5})$/.exec(ev.postback?.data ?? "")
-      if (!m || !sender) return
-      const verdict = m[1] as Verdict
-      const ok = this.relay.answer(sender, m[2]!, verdict)
-      await this.notice(room, ok ? (verdict === "allow" ? "✅ 許可しました" : "❌ 拒否しました") : "その依頼は見つからないか、すでに答えが出ています")
+      const p = parsePermissionData(ev.postback?.data ?? "")
+      if (!p || !sender) return
+      await this.notice(room, verdictText(this.relay.answer(sender, p.id, p.verdict), p.verdict))
       return
     }
     const msg = ev.message
@@ -235,8 +233,8 @@ export class LineConnector implements Connector {
   async sendApproval(user: string, text: string, requestId: string): Promise<void> {
     // 承認者の DM へ Push で送る。ボタンでも、yes/no の文字でも答えられる
     const items = [
-      { label: "許可", data: `perm:allow:${requestId}` },
-      { label: "拒否", data: `perm:deny:${requestId}` },
+      { label: "許可", data: permissionData("allow", requestId) },
+      { label: "拒否", data: permissionData("deny", requestId) },
     ].map((b) => ({ type: "action", action: { type: "postback", label: b.label, data: b.data, displayText: b.label } }))
     await this.post("/v2/bot/message/push", {
       to: localId(user),

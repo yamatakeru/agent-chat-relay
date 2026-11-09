@@ -1,6 +1,7 @@
 // ルームの登録・送信者の許可・ペアリング（docs/relay.md）。
 // 公式の Claude Code Discord プラグインの access.json を手本にした。
 // ID はすべて「サービス名:サービス内の ID」（例：line:C0123…）で持つ。
+// 親の中にある場（Discord のスレッド）は「親の ID/子の ID」とし、親の登録を引き継ぐ（ADR 0011）。
 
 import { randomBytes } from "node:crypto"
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
@@ -93,10 +94,11 @@ export class AccessStore {
     if (m.isDM) {
       result = a.allowFrom.includes(m.sender) ? { action: "deliver" } : this.pair(a, "user", m.sender)
     } else {
-      const policy = a.rooms[m.room]
+      const key = registrationOf(m.room)
+      const policy = a.rooms[key]
       if (!policy) {
-        // 未登録のルームでは、Bot に話しかけられたときだけコードを返す
-        result = m.mentioned ? this.pair(a, "room", m.room) : { action: "drop" }
+        // 未登録のルームでは、Bot に話しかけられたときだけコードを返す。スレッドなら、親を登録するコードになる
+        result = m.mentioned ? this.pair(a, "room", key) : { action: "drop" }
       } else if ((policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) || (policy.requireMention && !m.mentioned)) {
         result = { action: "record" }
       } else {
@@ -112,8 +114,9 @@ export class AccessStore {
   joined(room: string): GateResult {
     const a = this.load()
     this.pruneExpired(a)
-    if (a.rooms[room]) return { action: "drop" }
-    const r = this.pair(a, "room", room)
+    const key = registrationOf(room)
+    if (a.rooms[key]) return { action: "drop" }
+    const r = this.pair(a, "room", key)
     this.save(a)
     return r
   }
@@ -161,9 +164,17 @@ export class AccessStore {
   }
 }
 
-/** 送信先の制限：登録したルームと、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる */
+/**
+ * 送信先の制限：登録したルーム（と、ID が「その ID/子」のもの）と、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる。
+ * 中核は ID の文字列しか見ない。子が本当にその親の中にあるかは、入れ子の ID を使う接続部が送るときに確かめる（Connector.nestedRooms）
+ */
 export function canSendTo(a: Access, room: string): boolean {
-  return room in a.rooms || a.allowFrom.includes(room)
+  return registrationOf(room) in a.rooms || a.allowFrom.includes(room)
+}
+
+/** 登録を引くルームの ID。「親/子」（どちらも空でなく、/ は 1 つだけ）の形なら親。ほかの形はそのまま（登録と一致しない） */
+export function registrationOf(room: string): string {
+  return /^([^/]+)\/[^/.]+$/.exec(room)?.[1] ?? room
 }
 
 export function serviceOf(id: string): string {

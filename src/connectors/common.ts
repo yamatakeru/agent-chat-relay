@@ -2,6 +2,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import type { Attachment, Verdict } from "../core/relay.ts"
 
 const CACHE_CAP = 1000
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
@@ -66,4 +67,25 @@ export async function saveDownload(res: Response, dir: string, stem: string, ext
 /** 接続部の API が受け付けるメッセージ ID か（数字だけ）。パスに入れる前に確かめる */
 export function assertNumericId(id: string): void {
   if (!/^\d+$/.test(id)) throw new Error("message_id の形が違います")
+}
+
+/** 本文がなく添付だけの発言の、本文の代わり */
+export function attachmentOnlyText(attachments: Attachment[]): string {
+  if (attachments.length === 0) return ""
+  return attachments.every((a) => a.type === "image") ? "（画像）" : "（ファイル）"
+}
+
+/** 承認のボタンに載せる値（perm:allow:<ID>・perm:deny:<ID>） */
+export const permissionData = (verdict: Verdict, requestId: string) => `perm:${verdict}:${requestId}`
+
+/** ボタンの値から、答えと依頼の ID を読む。形が違えば undefined */
+export function parsePermissionData(data: string): { verdict: Verdict; id: string } | undefined {
+  const m = /^perm:(allow|deny):([a-km-z]{5})$/.exec(data)
+  return m ? { verdict: m[1] as Verdict, id: m[2]! } : undefined
+}
+
+/** ボタンで答えたあとに見せる文言 */
+export function verdictText(ok: boolean, verdict: Verdict): string {
+  if (!ok) return "その依頼は見つからないか、すでに答えが出ています"
+  return verdict === "allow" ? "✅ 許可しました" : "❌ 拒否しました"
 }

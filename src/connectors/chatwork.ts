@@ -3,7 +3,7 @@
 
 import { basename, extname } from "node:path"
 import { localId } from "../core/access.ts"
-import { assertNumericId, remember, saveDownload, splitText, truncate } from "./common.ts"
+import { assertNumericId, attachmentOnlyText, remember, saveDownload, splitText, truncate } from "./common.ts"
 import { ApiClient, jsonError } from "./http.ts"
 import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay } from "../core/relay.ts"
 
@@ -272,7 +272,7 @@ export function parseBody(
     .replace(/\[preview [^\]]*\]/g, "")
     .replace(/\[info\]\s*\[title\]\[dtext:file_uploaded\]\[\/title\]\s*\[\/info\]/g, "")
     .trim()
-  if (!text && attachments.length > 0) text = attachments.every((a) => a.type === "image") ? "（画像）" : "（ファイル）"
+  text ||= attachmentOnlyText(attachments)
   return { text, attachments, mentioned }
 }
 

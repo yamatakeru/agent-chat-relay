@@ -2,7 +2,7 @@
 # agent-chat-relay の操作。秘密情報は dotenvx で暗号化したリポジトリ直下の .env に置き、
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
-#   scripts/relay.sh secrets [line|chatwork]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン）
+#   scripts/relay.sh secrets [line|chatwork|discord]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン、Discord は Bot のトークン）
 #   scripts/relay.sh serve [harness]    中継を起動する（harness：claude（既定）か opencode）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
@@ -52,7 +52,8 @@ cmd_secrets() {
   case "${1:-line}" in
     line) secrets_line ;;
     chatwork) secrets_chatwork ;;
-    *) die "secrets の対象は line か chatwork です" ;;
+    discord) secrets_discord ;;
+    *) die "secrets の対象は line・chatwork・discord のどれかです" ;;
   esac
   echo "保存しました: ${ENV_FILE}"
 }
@@ -62,6 +63,13 @@ secrets_chatwork() {
   echo "Bot の Chatwork アカウントの API トークンを入力します。入力内容は画面に表示されません。"
   read -rsp "API トークン: " token; echo
   store_value RELAY_CHATWORK_API_TOKEN "$token"
+}
+
+secrets_discord() {
+  local token
+  echo "Discord Developer Portal の Bot のトークンを入力します。入力内容は画面に表示されません。"
+  read -rsp "Bot のトークン: " token; echo
+  store_value RELAY_DISCORD_BOT_TOKEN "$token"
 }
 
 secrets_line() {
