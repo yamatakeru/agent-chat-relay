@@ -20,9 +20,9 @@ Bun.serve({
     if (req.method === "GET" && /\/content$/.test(url.pathname)) return new Response(PNG, { headers: { "Content-Type": "image/png" } })
     if (req.method === "GET" && /\/summary$/.test(url.pathname)) return Response.json({ groupName: url.pathname.includes("C111") ? "開発チーム" : "営業チーム" })
     if (req.method === "GET") return Response.json({ displayName: url.pathname.includes("Uaaa") ? "アリス" : "ボブ" })
-    const body = await req.json() as { to?: string; replyToken?: string; messages?: { type: string; text?: string; quickReply?: unknown }[] }
+    const body = await req.json() as { to?: string; replyToken?: string; messages?: { type: string; text?: string; quickReply?: unknown; originalContentUrl?: string }[] }
     const kind = url.pathname.split("/").pop()
-    appendFileSync(log, JSON.stringify({ kind, to: body.to?.slice(0, 4), messages: body.messages?.map((m) => ({ text: m.text?.slice(0, 300), quick: !!m.quickReply })) }) + "\n")
+    appendFileSync(log, JSON.stringify({ kind, to: body.to?.slice(0, 4), messages: body.messages?.map((m) => ({ type: m.type, text: m.text?.slice(0, 300), quick: !!m.quickReply, image: m.originalContentUrl })) }) + "\n")
     return Response.json({ sentMessages: (body.messages ?? []).map(() => ({ id: String(900000 + ++n), quoteToken: `q${n}` })) })
   },
 })

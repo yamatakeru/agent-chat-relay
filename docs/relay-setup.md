@@ -24,8 +24,9 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 |---|---|
 | `.env`（git の無視対象） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`（dotenvx で暗号化） |
 | `.local/relay/access.json` | ルームの登録・許可リスト・ペアリング待ちのコード |
-| `.local/relay/workspace/` | セッションの作業場所。受け取った添付は `.relay/inbox/` に置く |
-| `.local/relay/harness.log` | ハーネスが stderr に出したもの（画面には出さない。異常終了したときだけ、最後の 20 行を画面に出す） |
+| `.local/relay/workspace/` | セッションの作業場所。受け取った添付は `.relay/inbox/` に置き、7 日で消す |
+| `.local/relay/media/` | LINE へ返した画像（推測できない名前で公開する。7 日で消す） |
+| `.local/relay/harness.log` | ハーネスが stderr に出したもの（画面には出さない。異常終了したときだけ、最後の 20 行を画面に出す）。10MB を超えたら `harness.log.1` に移して新しく始める |
 
 ## 起動
 
@@ -61,6 +62,7 @@ Quick Tunnel の URL は、トンネルを起動し直すたびに変わる。�
 | メンションせずに発言する | 返事はない |
 | グループ A で「グループ B に〜と投稿して」と頼む | B に投稿され（Push）、A に報告が届く |
 | 画像を送ってから、メンションして「さっきの画像を説明して」 | 画像を見た答えが届く |
+| メンションして「さっきの画像をそのまま返して」 | 画像が届く。開くと元の大きさで見られる |
 | メンションして、作業場所にファイルを作るよう頼む | 承認者の DM に承認依頼が届く。［許可］で実行され、返事が届く |
 | 承認依頼に［拒否］で答える | 実行されない |
 
@@ -68,6 +70,6 @@ Push は、グループでは人数分、承認依頼は承認者 1 人につき
 
 ## モックでの確認
 
-`test/e2e/run.sh claude` で、LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像、承認）。実際のハーネスを動かすので、契約の利用枠を少し使う。記録は `.local/e2e/` に残る。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
+`test/e2e/run.sh claude` で、LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。実際のハーネスを動かすので、契約の利用枠を少し使う。記録は `.local/e2e/` に残る。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
 
 開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（`scripts/webhook.ts`）。

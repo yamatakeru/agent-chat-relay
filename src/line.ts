@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { extname, join } from "node:path"
 import { localId } from "./access.ts"
+import type { MediaStore } from "./media.ts"
 import type { Attachment, Connector, Relay, Verdict } from "./relay.ts"
 
 const SERVICE = "line"
@@ -14,6 +15,8 @@ const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略し�
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
 const CACHE_CAP = 1000
+// 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形
+const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/
 
 type Source = { type: "user" | "group" | "room"; userId?: string; groupId?: string; roomId?: string }
 type Mentionee = { index: number; length: number; isSelf?: boolean }
@@ -43,6 +46,10 @@ type LineConfig = {
   channelToken: string
   apiBase?: string
   dataApiBase?: string
+  /** 返す画像を公開する場所（ADR 0005）。ないと画像を送れない */
+  media?: MediaStore
+  /** 画像を公開する URL の先頭（例：https://example.com）。なければ、署名を確かめた Webhook が届いたホスト名を使う */
+  publicUrl?: string
 }
 
 export class LineConnector implements Connector {
@@ -56,6 +63,7 @@ export class LineConnector implements Connector {
   private readonly names = new Map<string, string>()
   /** ファイルの元の名前。取得したファイルの拡張子に使う */
   private readonly fileNames = new Map<string, string>()
+  private publicBase?: string
 
   constructor(
     private readonly cfg: LineConfig,
@@ -64,6 +72,7 @@ export class LineConnector implements Connector {
   ) {
     this.api = (cfg.apiBase ?? "https://api.line.me").replace(/\/$/, "")
     this.dataApi = (cfg.dataApiBase ?? cfg.apiBase ?? "https://api-data.line.me").replace(/\/$/, "")
+    this.publicBase = cfg.publicUrl?.replace(/\/$/, "")
   }
 
   /** 署名を確かめ、すぐ 200 を返す。イベントはその後で処理する */
@@ -72,6 +81,9 @@ export class LineConnector implements Connector {
     if (!verifySignature(this.cfg.channelSecret, body, req.headers.get("x-line-signature") ?? "")) {
       return new Response("bad signature", { status: 401 })
     }
+    // 署名が合えば、LINE が登録された URL へ送ってきたもの。そのホスト名で画像を公開する（Quick Tunnel は起動ごとに変わる）
+    const host = req.headers.get("host") ?? ""
+    if (!this.cfg.publicUrl && req.headers.get("x-forwarded-proto") === "https" && HOST_RE.test(host)) this.publicBase = `https://${host}`
     let events: LineEvent[]
     try {
       events = (JSON.parse(body) as { events?: LineEvent[] }).events ?? []
@@ -151,12 +163,27 @@ export class LineConnector implements Connector {
     if (result.action === "deliver" && isDM) void this.loading(localId(sender))
   }
 
-  async send(room: string, text: string, opts?: { replyTo?: string }): Promise<string[]> {
-    const bubbles = splitBubbles(text)
-    if (bubbles.length === 0) throw new Error("本文が空です")
+  async send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]> {
+    const files = opts?.files ?? []
+    // 1 回の送信は、本文の吹き出しと画像を合わせて 5 件まで
+    const maxImages = text.trim() ? MAX_BUBBLES - 1 : MAX_BUBBLES
+    if (files.length > maxImages) throw new Error(`LINE で一度に送れる画像は、本文があれば ${MAX_BUBBLES - 1} 枚、なければ ${MAX_BUBBLES} 枚までです`)
+    // 画像を先に公開する。送れないものがあれば、何も送らずにエラーを返す
+    const images = []
+    for (const f of files) images.push(await this.publish(f))
+    const bubbles = splitBubbles(text, MAX_BUBBLES - images.length)
+    if (bubbles.length === 0 && images.length === 0) throw new Error("本文が空です")
     const quoteToken = opts?.replyTo ? this.quoteTokens.get(opts.replyTo) : undefined
-    const messages = bubbles.map((t, i) => ({ type: "text", text: t, ...(i === 0 && quoteToken ? { quoteToken } : {}) }))
+    const messages: object[] = bubbles.map((t, i) => ({ type: "text", text: t, ...(i === 0 && quoteToken ? { quoteToken } : {}) }))
+    for (const img of images) messages.push({ type: "image", originalContentUrl: img.original, previewImageUrl: img.preview })
     return this.deliver(room, messages)
+  }
+
+  private async publish(path: string): Promise<{ original: string; preview: string }> {
+    if (!this.cfg.media) throw new Error("画像を送る設定がありません")
+    if (!this.publicBase) throw new Error("画像を公開する URL が分からないため、送れません。Webhook が一度届くか、RELAY_PUBLIC_URL を設定すると送れます")
+    const { original, preview } = await this.cfg.media.publish(path)
+    return { original: `${this.publicBase}/media/${original}`, preview: `${this.publicBase}/media/${preview}` }
   }
 
   async sendApproval(user: string, text: string, requestId: string): Promise<void> {
@@ -352,10 +379,10 @@ export function stripSelfMentions(text: string, mentionees: Mentionee[]): string
 }
 
 /** LINE の上限（吹き出し 5 つ）に収める。あふれた分は切り、省略したことを書き添える */
-export function splitBubbles(text: string): string[] {
+export function splitBubbles(text: string, max = MAX_BUBBLES): string[] {
   let rest = text.trim()
   const out: string[] = []
-  while (rest.length > 0 && out.length < MAX_BUBBLES) {
+  while (rest.length > 0 && out.length < max) {
     const n = fitUnits(rest, MAX_BUBBLE_UNITS)
     out.push(rest.slice(0, n))
     rest = rest.slice(n)

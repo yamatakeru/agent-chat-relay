@@ -2,7 +2,7 @@
 // セッションは 1 つ。チャット用ツールの MCP サーバーを session/new で渡し、発言は session/prompt で入れる。
 
 import * as acp from "@agentclientprotocol/sdk"
-import { closeSync, mkdirSync, openSync } from "node:fs"
+import { closeSync, fstatSync, mkdirSync, openSync, renameSync, writeSync } from "node:fs"
 import { dirname } from "node:path"
 import type { Log, PermissionRequest, Session, Verdict } from "./relay.ts"
 
@@ -16,26 +16,30 @@ export type HarnessConfig = {
   meta?: Record<string, unknown>
   /** セッションのモード（ACP の session mode）。違うモードで始まったら切り替える。安全境界 */
   mode?: string
-  /** ハーネスの stderr を追記するファイル。画面には出さない */
+  /** ハーネスの stderr を追記するファイル。画面には出さない。10MB を超えたら <path>.1 に移して新しく始める */
   stderrPath: string
 }
+
+const MAX_STDERR_BYTES = 10 * 1024 * 1024
 
 export async function startHarness(
   cfg: HarnessConfig,
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
   log: Log,
 ): Promise<{ session: Session; exited: Promise<number>; stop: () => void }> {
-  mkdirSync(dirname(cfg.stderrPath), { recursive: true, mode: 0o700 })
-  const stderr = openSync(cfg.stderrPath, "a", 0o600)
+  const stderrLog = new RotatingFile(cfg.stderrPath, MAX_STDERR_BYTES)
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
     // 中継の秘密情報（LINE のトークンなど）をハーネスへ渡さない。渡すと、エージェントが送信先の制限を迂回できる
     env: { ...withoutRelaySecrets(process.env), ...cfg.env },
     stdin: "pipe",
     stdout: "pipe",
-    stderr,
+    stderr: "pipe",
   })
-  closeSync(stderr)
+  const stderrDrained = (async () => {
+    for await (const chunk of proc.stderr) stderrLog.write(chunk)
+    stderrLog.close()
+  })()
   const stdin = new WritableStream<Uint8Array>({
     write(chunk) {
       proc.stdin.write(chunk)
@@ -107,12 +111,43 @@ export async function startHarness(
     })
     .catch((err) => ready.reject(err))
 
-  const exited = proc.exited.then((code) => {
+  // stderr を書き終えてから終了を知らせる（異常終了のとき、呼び出し側がログの末尾を読む）
+  const exited = Promise.all([proc.exited, stderrDrained.catch(() => {})]).then(([code]) => {
     done.resolve()
     ready.reject(new Error(`ハーネスが終了しました（終了コード ${code}）`))
     return code
   })
   return { session: await ready.promise, exited, stop: () => proc.kill() }
+}
+
+/** 追記用のファイル。max バイトを超えそうになったら <path>.1 に移し（前の .1 は消える）、新しく始める */
+export class RotatingFile {
+  private fd: number
+  private size: number
+
+  constructor(
+    private readonly path: string,
+    private readonly max: number,
+  ) {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    this.fd = openSync(path, "a", 0o600)
+    this.size = fstatSync(this.fd).size
+  }
+
+  write(chunk: Uint8Array): void {
+    if (this.size > 0 && this.size + chunk.length > this.max) {
+      closeSync(this.fd)
+      renameSync(this.path, `${this.path}.1`)
+      this.fd = openSync(this.path, "a", 0o600)
+      this.size = 0
+    }
+    writeSync(this.fd, chunk)
+    this.size += chunk.length
+  }
+
+  close(): void {
+    closeSync(this.fd)
+  }
 }
 
 export function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {

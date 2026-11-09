@@ -27,16 +27,18 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
   server.registerTool(
     "reply",
     {
-      description: "チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。",
+      description:
+        "チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。files で、作業場所の中のファイルを添えられる（送れる種類はチャットサービスによる。LINE は JPEG・PNG の画像だけ）。",
       inputSchema: {
         chat_id: z.string(),
-        text: z.string(),
+        text: z.string().describe("本文。files があれば空でもよい"),
         reply_to: z.string().optional().describe("引用して返す発言の message_id"),
+        files: z.array(z.string()).optional().describe("添えるファイルのパス（作業場所の中だけ。最大 10 個）"),
       },
     },
-    ({ chat_id, text, reply_to }) =>
+    ({ chat_id, text, reply_to, files }) =>
       run("reply", async () => {
-        const ids = await relay.reply(chat_id, text, reply_to)
+        const ids = await relay.reply(chat_id, text, reply_to, files)
         return ids.length <= 1 ? `sent (id: ${ids[0] ?? "-"})` : `sent ${ids.length} parts (ids: ${ids.join(", ")})`
       }),
   )
