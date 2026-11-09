@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { AccessStore } from "../src/access.ts"
-import { sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
-import { type Connector, type Incoming, Relay } from "../src/relay.ts"
-import { withoutRelaySecrets } from "../src/harness.ts"
+import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
+import { MediaStore, pruneOld, RETENTION_MS } from "../src/media.ts"
+import { png } from "./fixtures/png.ts"
+import { type Connector, type Incoming, Relay, sendablePaths } from "../src/relay.ts"
+import { RotatingFile, withoutRelaySecrets } from "../src/harness.ts"
 
 let dir: string
 let access: AccessStore
@@ -172,4 +174,92 @@ describe("line", () => {
     expect(out.every((b) => b.length <= 5000)).toBe(true)
     expect(out[4]).toEndWith("省略しました）")
   })
+})
+
+describe("返すファイル", () => {
+  test("作業場所の中のファイルだけを送れる", () => {
+    const ws = join(dir, "ws")
+    mkdirSync(join(ws, "out"), { recursive: true })
+    writeFileSync(join(ws, "out", "a.png"), "x")
+    writeFileSync(join(dir, "secret.txt"), "s")
+    symlinkSync(join(dir, "secret.txt"), join(ws, "link.txt"))
+    expect(sendablePaths(["out/a.png"], ws)).toEqual([join(ws, "out", "a.png")])
+    expect(() => sendablePaths([join(dir, "secret.txt")], ws)).toThrow("作業場所の外")
+    expect(() => sendablePaths(["../secret.txt"], ws)).toThrow("作業場所の外")
+    expect(() => sendablePaths(["link.txt"], ws)).toThrow("作業場所の外")
+    expect(() => sendablePaths(["out"], ws)).toThrow("ファイルではありません")
+    expect(() => sendablePaths(["none.png"], ws)).toThrow("見つかりません")
+    expect(() => sendablePaths(["out/a.png"], undefined)).toThrow("送れません")
+  })
+
+  test("画像は JPEG と PNG だけを公開し、1MB を超えるものには縮小したプレビューを作る", async () => {
+    const media = new MediaStore(join(dir, "media"))
+    writeFileSync(join(dir, "small.png"), png(32, 32, [200, 30, 30]))
+    writeFileSync(join(dir, "big.png"), png(800, 800))
+    writeFileSync(join(dir, "note.txt"), "hello")
+    const small = await media.publish(join(dir, "small.png"))
+    expect(small.preview).toBe(small.original)
+    expect(small.original).toMatch(/^[A-Za-z0-9_-]{43}\.png$/)
+    const big = await media.publish(join(dir, "big.png"))
+    expect(big.preview).toMatch(/_p\.jpg$/)
+    expect(readFileSync(join(dir, "media", big.preview)).length).toBeLessThanOrEqual(1024 * 1024)
+    await expect(media.publish(join(dir, "note.txt"))).rejects.toThrow("JPEG と PNG")
+    expect(media.serve(small.original).status).toBe(200)
+    expect(media.serve("../access.json").status).toBe(404)
+  })
+
+  test("7 日を過ぎたファイルを消す", () => {
+    const d = join(dir, "inbox")
+    mkdirSync(d)
+    writeFileSync(join(d, "old"), "o")
+    writeFileSync(join(d, "new"), "n")
+    const old = (Date.now() - RETENTION_MS - 60_000) / 1000
+    utimesSync(join(d, "old"), old, old)
+    expect(pruneOld(d, RETENTION_MS)).toBe(1)
+    expect(existsSync(join(d, "old"))).toBe(false)
+    expect(existsSync(join(d, "new"))).toBe(true)
+  })
+
+  test("LINE では、本文と画像を 1 回で送り、画像は公開 URL で渡す", async () => {
+    type Body = { messages: { type: string; originalContentUrl?: string; previewImageUrl?: string }[] }
+    const posted: { path: string; body: Body }[] = []
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as Body
+        posted.push({ path: new URL(req.url).pathname, body })
+        return Response.json({ sentMessages: body.messages.map((_, i) => ({ id: String(i) })) })
+      },
+    })
+    try {
+      writeFileSync(join(dir, "a.png"), png(16, 16, [0, 0, 0]))
+      const relay = new Relay(access, { info: () => {}, error: () => {} })
+      const media = new MediaStore(join(dir, "media"))
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay)
+      await line.send(ROOM, "どうぞ", { files: [join(dir, "a.png")] })
+      const msgs = posted[0]!.body.messages
+      expect(msgs.map((m) => m.type)).toEqual(["text", "image"])
+      expect(msgs[1]!.originalContentUrl).toMatch(/^https:\/\/example\.test\/media\/[A-Za-z0-9_-]{43}\.png$/)
+      // 本文と合わせて 5 件を超えるときは、何も送らずにエラーにする
+      await expect(line.send(ROOM, "x", { files: Array(5).fill(join(dir, "a.png")) })).rejects.toThrow("4 枚")
+      expect(posted).toHaveLength(1)
+      // 公開 URL が分からなければ送らない
+      const noUrl = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media }, relay)
+      await expect(noUrl.send(ROOM, "", { files: [join(dir, "a.png")] })).rejects.toThrow("URL が分からない")
+    } finally {
+      void api.stop()
+    }
+  })
+})
+
+test("ハーネスのログは、上限を超えそうになったら .1 に移して新しく始める", () => {
+  const p = join(dir, "h.log")
+  const f = new RotatingFile(p, 10)
+  f.write(Buffer.from("123456"))
+  f.write(Buffer.from("7890"))
+  f.write(Buffer.from("abc"))
+  f.close()
+  expect(readFileSync(`${p}.1`, "utf8")).toBe("1234567890")
+  expect(readFileSync(p, "utf8")).toBe("abc")
 })

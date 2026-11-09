@@ -10,6 +10,7 @@ import { join, resolve } from "node:path"
 import { AccessStore } from "./access.ts"
 import { startHarness, type HarnessConfig } from "./harness.ts"
 import { LineConnector } from "./line.ts"
+import { MediaStore, pruneOld, RETENTION_MS } from "./media.ts"
 import { mcpHandler } from "./mcp.ts"
 import { type Log, Relay } from "./relay.ts"
 
@@ -99,14 +100,26 @@ async function serve(access: AccessStore): Promise<void> {
     Bun.spawnSync(["git", "init", "-q", workspace])
   }
   const inbox = join(workspace, ".relay", "inbox")
+  // 返す画像の公開場所。作業場所の外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
+  const media = new MediaStore(join(home, "media"))
 
-  const relay = new Relay(access, log)
+  // 受け取った添付と公開した画像は 7 日で消す（起動時と 1 時間ごと。ADR 0005）
+  const prune = () => {
+    const removed = pruneOld(inbox, RETENTION_MS) + pruneOld(media.dir, RETENTION_MS)
+    if (removed > 0) log.info("7 日を過ぎた添付と画像を消しました", { removed })
+  }
+  prune()
+  setInterval(prune, 60 * 60 * 1000).unref()
+
+  const relay = new Relay(access, log, workspace)
   const line = new LineConnector(
     {
       channelSecret: required("RELAY_LINE_CHANNEL_SECRET"),
       channelToken: required("RELAY_LINE_CHANNEL_TOKEN"),
       apiBase: process.env.RELAY_LINE_API_BASE,
       dataApiBase: process.env.RELAY_LINE_DATA_API_BASE,
+      media,
+      publicUrl: process.env.RELAY_PUBLIC_URL,
     },
     relay,
   )
@@ -118,7 +131,11 @@ async function serve(access: AccessStore): Promise<void> {
   const webhook = Bun.serve({
     hostname: "127.0.0.1",
     port: linePort,
-    routes: { "/line/webhook": { POST: (req) => line.handleWebhook(req) } },
+    routes: {
+      "/line/webhook": { POST: (req) => line.handleWebhook(req) },
+      // 返した画像（ADR 0005）。トンネルで外へ公開される
+      "/media/:name": { GET: (req) => media.serve(req.params.name) },
+    },
     fetch: () => new Response("not found", { status: 404 }),
   })
   const mcp = Bun.serve({

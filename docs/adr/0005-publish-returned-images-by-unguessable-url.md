@@ -13,6 +13,8 @@ LINE の Bot は、画像を LINE へ直接アップロードできない。画�
 - 公開する URL の先頭は、署名を確かめた Webhook が届いたホスト名（`X-Forwarded-Proto: https` のときの `Host`）から決める。Quick Tunnel でも設定が要らない。固定の URL を使うときは `CCJ_LINE_PUBLIC_URL` で指定する。
 - URL はログに出さない。送るたびにルームでの承認が要るので、意図しない画像は出ない。
 
+（2026-11-09 追記）cc-connect をやめた後も、公開のしかたは引き継いだ。画像はチャット用ツールの `reply` で返し、承認は要らなくなった（ADR 0009）。置き場所は `.local/relay/media/`、固定の URL の指定は `RELAY_PUBLIC_URL` に変わった。
+
 ## Considered Options
 
 - 画像を返さない。作業場所の中身を外へ出す経路ができない一方、Claude が作った図やグラフを LINE で見られない。

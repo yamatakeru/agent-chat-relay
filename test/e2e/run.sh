@@ -10,8 +10,9 @@ LOG="$E/sent-$H.jsonl"
 RLOG="$E/relay-$H.log"
 mkdir -p "$E"
 : >"$LOG"
+# モックの Webhook には X-Forwarded-Proto が付かないので、画像の公開 URL は固定で渡す
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
-  RELAY_LINE_CHANNEL_SECRET=dummysecret RELAY_LINE_CHANNEL_TOKEN=dummytoken
+  RELAY_LINE_CHANNEL_SECRET=dummysecret RELAY_LINE_CHANNEL_TOKEN=dummytoken RELAY_PUBLIC_URL=http://127.0.0.1:18080
 G1=C111aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 G2=C222bbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 A=Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -58,6 +59,16 @@ n="$(lines)"; wh text "$G2" "$B" "開発チームのルームに『営業から�
 echo "== image from someone else, then ask"
 wh image "$G1" "$B"; sleep 1
 n="$(lines)"; wh text "$G1" "$A" "さっきボブが送った画像の色を一語で教えて" --mention; waitfor "$n" 200
+
+echo "== return the image"
+wh text "$G1" "$A" "さっきボブが送った画像を、そのままこのルームに返して" --mention
+for _ in $(seq 200); do
+  grep -q '"type":"image"' "$LOG" && break
+  sleep 1
+done
+url="$(grep -o '"image":"[^"]*"' "$LOG" | tail -1 | cut -d'"' -f4)"
+echo "image url: ${url:-none}"
+[ -n "$url" ] && curl -s -o /dev/null -w "GET /media -> %{http_code} %{content_type} %{size_download}B\n" "$url"
 
 echo "== approval"
 wh text "$G1" "$A" "作業場所に note.txt を作って ok と書いて。終わったら一言で報告して" --mention
