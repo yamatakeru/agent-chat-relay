@@ -1,6 +1,8 @@
 // agent-chat-relay の入口。scripts/relay.sh から、秘密情報を環境変数に入れた状態で呼ばれる。
 //
-//   serve          中継を起動する（チャットサービスの接続部、チャット用ツールの MCP、ハーネス）
+//   serve [harness] [--session-id <id>]
+//                  中継を起動する（チャットサービスの接続部、チャット用ツールの MCP、ハーネス）。
+//                  harness の既定は RELAY_HARNESS、なければ claude。--session-id で、そのセッションを再開する
 //   pair <code>    ペアリングのコードを承認する（ルームの登録、DM の相手の許可）
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
 
@@ -14,6 +16,7 @@ import { lineFromEnv } from "./connectors/line.ts"
 import { startHarness, type HarnessConfig } from "./harness/harness.ts"
 import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
+import { type HarnessName, parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
 
 /** 接続部の一覧。秘密情報のあるものだけを動かす */
@@ -29,7 +32,7 @@ const log: Log = {
 }
 
 /** ハーネスごとの起動方法。実行承認と設定の読み込みに関わる部分は安全境界（AGENTS.md） */
-function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Omit<HarnessConfig, "stderrPath"> {
+function harnessConfig(name: HarnessName, cwd: string, mcp: HarnessConfig["mcp"]): Omit<HarnessConfig, "stderrPath"> {
   switch (name) {
     case "claude": {
       const claude = Bun.which("claude")
@@ -86,12 +89,10 @@ function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Om
       writeFileSync(join(cwd, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
       return { command: ["opencode", "acp"], cwd, mcp }
     }
-    default:
-      throw new Error(`知らないハーネスです: ${name}（claude か opencode）`)
   }
 }
 
-async function serve(access: AccessStore): Promise<void> {
+async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const workspace = join(home, "workspace")
   if (!existsSync(join(workspace, ".git"))) {
     // 作業場所を独立した git リポジトリにして、上位（このリポジトリ）の設定や AGENTS.md を拾わせない
@@ -143,10 +144,10 @@ async function serve(access: AccessStore): Promise<void> {
   await Promise.all(connectors.map((c) => c.start()))
   for (const c of connectors) closers.push(() => c.stop())
 
-  const harnessName = process.env.RELAY_HARNESS ?? "claude"
+  const { harness: harnessName, sessionId } = args
   const harnessLog = join(home, "harness.log")
   const harness = await startHarness(
-    { ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }), stderrPath: harnessLog },
+    { ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }), sessionId, stderrPath: harnessLog },
     (req) => relay.requestPermission(req),
     log,
   )
@@ -180,11 +181,13 @@ function mask(id: string): string {
 }
 
 async function main(): Promise<void> {
-  const [cmd, arg] = process.argv.slice(2)
+  const [cmd, ...rest] = process.argv.slice(2)
+  const arg = rest[0]
   const access = new AccessStore(accessPath)
   switch (cmd) {
     case "serve":
-      return serve(access)
+      // 不正な引数は、何も起動しないうちに拒否する
+      return serve(access, parseServeArgs(rest, process.env.RELAY_HARNESS ?? "claude"))
     case "pair": {
       if (!arg) throw new Error("usage: relay pair <code>")
       const p = access.approve(arg)
@@ -201,7 +204,7 @@ async function main(): Promise<void> {
       return
     }
     default:
-      throw new Error("usage: relay serve | pair <code> | access")
+      throw new Error("usage: relay serve [harness] [--session-id <id>] | pair <code> | access")
   }
 }
 
