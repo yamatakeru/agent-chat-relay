@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { AccessStore } from "../src/access.ts"
-import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/line.ts"
-import { MediaStore, pruneOld, RETENTION_MS } from "../src/media.ts"
+import { AccessStore } from "../src/core/access.ts"
+import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
+import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/connectors/line.ts"
+import { MediaStore } from "../src/connectors/line-media.ts"
 import { png } from "./fixtures/png.ts"
-import { type Connector, type Incoming, Relay, sendablePaths } from "../src/relay.ts"
-import { RotatingFile, withoutRelaySecrets } from "../src/harness.ts"
+import { type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
+import { withoutRelaySecrets } from "../src/harness/harness.ts"
+import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
+import { RotatingFile } from "../src/harness/log-file.ts"
 
 let dir: string
 let access: AccessStore
 let now = 1_000_000
+const quiet = { info: () => {}, error: () => {} }
 
 beforeEach(() => {
   // /tmp は使わない（AGENTS.md）
@@ -86,7 +90,7 @@ describe("access", () => {
 describe("relay", () => {
   function setup() {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, { info: () => {}, error: () => {} })
+    const relay = new Relay(access, quiet)
     const conn = new FakeConnector()
     relay.addConnector(conn)
     return { relay, conn }
@@ -141,6 +145,19 @@ describe("relay", () => {
     expect(await relay.requestPermission({ title: "Bash", input: "ls" })).toBe("deny")
   })
 
+  test("停止中に届いた発言は、登録したルームなら記録だけして、渡さない（許可やペアリングの判定も通さない）", async () => {
+    const { relay, conn } = setup()
+    const prompts: string[] = []
+    relay.attach({ prompt: async (t) => void prompts.push(t) })
+    expect(relay.receive(msg({ text: "old", stale: true }))).toEqual({ action: "record" })
+    // 未登録のルームでは、メンションがあってもコードを返さない
+    expect(relay.receive(msg({ room: "line:C0000000000000000000000000000000f", stale: true }))).toEqual({ action: "drop" })
+    await Bun.sleep(0)
+    expect(prompts).toHaveLength(0)
+    expect(conn.notices).toHaveLength(0)
+    expect(relay.fetchMessages(ROOM).map((m) => m.text)).toEqual(["old"])
+  })
+
   test("登録していないルームへは送れない", async () => {
     const { relay, conn } = setup()
     await expect(relay.reply("line:C0000000000000000000000000000000f", "x")).rejects.toThrow("登録されていません")
@@ -151,7 +168,7 @@ describe("relay", () => {
 })
 
 test("ハーネスには中継の秘密情報を渡さない", () => {
-  const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", CCJ_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
+  const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
   expect(env).toEqual({ PATH: "/bin" })
 })
 
@@ -234,7 +251,7 @@ describe("返すファイル", () => {
     })
     try {
       writeFileSync(join(dir, "a.png"), png(16, 16, [0, 0, 0]))
-      const relay = new Relay(access, { info: () => {}, error: () => {} })
+      const relay = new Relay(access, quiet)
       const media = new MediaStore(join(dir, "media"))
       const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay)
       await line.send(ROOM, "どうぞ", { files: [join(dir, "a.png")] })
@@ -249,6 +266,155 @@ describe("返すファイル", () => {
       await expect(noUrl.send(ROOM, "", { files: [join(dir, "a.png")] })).rejects.toThrow("URL が分からない")
     } finally {
       void api.stop()
+    }
+  })
+})
+
+describe("chatwork", () => {
+  const BOT = { id: 100, name: "AI係" }
+  const CW_ROOM = 7000
+  const CW_DM = 7001
+
+  test("Bot へのメンションと返信だけを取り除き、添付を取り出す", () => {
+    expect(parseBody("[To:100]AI係さん\n調べて", BOT)).toMatchObject({ text: "調べて", mentioned: true })
+    expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", BOT)).toMatchObject({ text: "ありがとう", mentioned: true })
+    // ほかの人宛ての To と、全員宛て（[toall]）はメンションに数えない
+    expect(parseBody("[To:200]ボブさん\n確認して", BOT)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
+    expect(parseBody("[toall]お知らせ", BOT).mentioned).toBe(false)
+    const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", BOT)
+    expect(file).toEqual({ text: "（画像）", attachments: [{ name: "図 1.png", type: "image" }], mentioned: false })
+    expect(parseBody("見て[info][title][dtext:file_uploaded][/title][download:8]a.pdf (1 MB)[/download][/info]", BOT).attachments).toEqual([{ name: "a.pdf", type: "file" }])
+  })
+
+  /** Chatwork の API のモック。force=0 の差分は、queue に積んだ発言を一度だけ返す */
+  function fakeApi() {
+    const rooms = [
+      { room_id: CW_ROOM, name: "開発チーム", type: "group", last_update_time: 10 },
+      { room_id: CW_DM, name: "アリス", type: "direct", last_update_time: 10 },
+    ]
+    const queue = new Map<number, object[]>()
+    const posted: { path: string; body: string; file?: string }[] = []
+    let gets = 0
+    const server: Bun.Server<undefined> = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        const p = url.pathname
+        if (req.method === "GET") {
+          if (p === "/me") return Response.json({ account_id: BOT.id, name: BOT.name })
+          if (p === "/rooms") return Response.json(rooms)
+          if (p === "/contacts") return Response.json([{ account_id: 1, room_id: CW_DM }])
+          const m = /^\/rooms\/(\d+)\/messages$/.exec(p)
+          if (m) {
+            gets++
+            const list = queue.get(Number(m[1])) ?? []
+            queue.delete(Number(m[1]))
+            return list.length ? Response.json(list) : new Response(null, { status: 204 })
+          }
+          if (/^\/rooms\/\d+\/files\/\d+$/.test(p)) return Response.json({ filename: "a.txt", filesize: 2, download_url: `${server.url.origin}/dl/a` })
+          if (p === "/dl/a") return new Response("hi")
+        }
+        if (p.endsWith("/files")) {
+          const form = await req.formData()
+          posted.push({ path: p, body: String(form.get("message") ?? ""), file: (form.get("file") as File).name })
+          return Response.json({ file_id: 1 })
+        }
+        posted.push({ path: p, body: new URLSearchParams(await req.text()).get("body") ?? "" })
+        return Response.json({ message_id: String(900 + posted.length) })
+      },
+    })
+    const say = (room: number, id: string, account: number, body: string, t: number) => {
+      queue.set(room, [...(queue.get(room) ?? []), { message_id: id, account: { account_id: account, name: account === 1 ? "アリス" : "ボブ" }, body, send_time: t, update_time: 0 }])
+      rooms.find((r) => r.room_id === room)!.last_update_time = t
+    }
+    return { server, rooms, posted, say, gets: () => gets }
+  }
+
+  async function setup() {
+    const api = fakeApi()
+    access.save({ allowFrom: ["chatwork:u1"], rooms: { "chatwork:r7000": { requireMention: true, allowFrom: [] } }, pending: {} })
+    const relay = new Relay(access, quiet, dir)
+    const prompts: string[] = []
+    relay.attach({ prompt: async (t) => void prompts.push(t) })
+    // 起動は Unix 時刻 1000 秒
+    const cw = new ChatworkConnector({ apiToken: "t", apiBase: api.server.url.href }, relay, quiet, () => 1_000_000)
+    relay.addConnector(cw)
+    await cw.start()
+    cw.stop() // タイマーは止め、テストから poll() を呼ぶ
+    return { api, relay, cw, prompts }
+  }
+
+  test("更新のあったルームだけを取り、自分の発言は除き、停止中の発言は記録だけする", async () => {
+    const { api, relay, cw, prompts } = await setup()
+    try {
+      await cw.poll()
+      expect(api.gets()).toBe(0) // 起動時のルームの状態を起点にする
+      api.say(CW_ROOM, "1", 2, "停止中の依頼 [To:100]", 999)
+      api.say(CW_ROOM, "2", 2, "[To:100]AI係さん\n今の依頼", 1001)
+      api.say(CW_ROOM, "3", 100, "Bot の発言", 1001)
+      await cw.poll()
+      await cw.poll() // 同じ秒に届いた発言を取りこぼさないよう、もう一度だけ取る
+      await cw.poll()
+      expect(api.gets()).toBe(2)
+      await Bun.sleep(0)
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]).toContain("今の依頼")
+      expect(prompts[0]).not.toContain("停止中の依頼")
+      expect(relay.fetchMessages("chatwork:r7000").map((m) => m.id)).toEqual(["1", "2"])
+      // DM は相手の ID をルームとし、メンションなしで渡す
+      api.say(CW_DM, "4", 1, "こんにちは", 1002)
+      await cw.poll()
+      await Bun.sleep(0)
+      expect(relay.fetchMessages("chatwork:u1").map((m) => m.text)).toEqual(["こんにちは"])
+      expect(prompts[1]).toContain('chat_id="chatwork:u1"')
+      // 起動後に現れたグループチャットは、Bot が追加されたもの。ペアリングのコードを投稿する
+      api.rooms.push({ room_id: 7002, name: "新しいルーム", type: "group", last_update_time: 1003 })
+      await cw.poll()
+      await Bun.sleep(50)
+      expect(api.posted.at(-1)).toMatchObject({ path: "/rooms/7002/messages", body: expect.stringContaining("relay pair") })
+    } finally {
+      void api.server.stop()
+    }
+  })
+
+  test("返信の記法を付けて送り、DM はコンタクトからルームを探す", async () => {
+    const { api, cw } = await setup()
+    try {
+      api.say(CW_ROOM, "2", 2, "[To:100] 依頼", 1001)
+      await cw.poll()
+      await cw.send("chatwork:r7000", "どうぞ", { replyTo: "2" })
+      await cw.sendApproval("chatwork:u1", "許可：yes abcde", "abcde")
+      expect(api.posted).toEqual([
+        { path: "/rooms/7000/messages", body: "[rp aid=2 to=7000-2]\nどうぞ" },
+        { path: "/rooms/7001/messages", body: "許可：yes abcde" },
+      ])
+      await expect(cw.send("chatwork:u9", "x")).rejects.toThrow("ダイレクトチャットが見つかりません")
+    } finally {
+      void api.server.stop()
+    }
+  })
+
+  test("ファイルは種類を問わず 5MB まで送り、本文は 1 つ目に添える。添付は取得用の URL から取る", async () => {
+    const { api, cw } = await setup()
+    try {
+      writeFileSync(join(dir, "a.pdf"), "x")
+      writeFileSync(join(dir, "b.csv"), "y")
+      writeFileSync(join(dir, "big.bin"), Buffer.alloc(5 * 1024 * 1024 + 1))
+      await expect(cw.send("chatwork:r7000", "x", { files: [join(dir, "a.pdf"), join(dir, "big.bin")] })).rejects.toThrow("5MB")
+      expect(api.posted).toHaveLength(0)
+      await cw.send("chatwork:r7000", "資料です", { files: [join(dir, "a.pdf"), join(dir, "b.csv")] })
+      expect(api.posted).toEqual([
+        { path: "/rooms/7000/files", body: "資料です", file: "a.pdf" },
+        { path: "/rooms/7000/files", body: "", file: "b.csv" },
+      ])
+      api.say(CW_ROOM, "5", 2, "[info][title][dtext:file_uploaded][/title][download:9]a.txt (2 B)[/download][/info]", 1003)
+      await cw.poll()
+      const [path] = await cw.download("chatwork:r7000", "5", join(dir, "inbox"))
+      expect(readFileSync(path!, "utf8")).toBe("hi")
+      expect(path).toEndWith(".txt")
+    } finally {
+      void api.server.stop()
     }
   })
 })

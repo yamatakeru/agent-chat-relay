@@ -2,12 +2,10 @@
 // URL を知っていれば誰でも見られる。名前は 256 ビットの乱数にし、一覧は出さない。URL はログに出さない。
 
 import { randomBytes } from "node:crypto"
-import { readdirSync, rmSync, statSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { RETENTION_MS } from "../core/retention.ts"
 
-/** 受け取った添付と公開した画像を残す期間（ADR 0005） */
-export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 // LINE の画像メッセージの上限（本体 10MB、プレビュー 1MB）
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_PREVIEW_BYTES = 1024 * 1024
@@ -62,28 +60,4 @@ async function shrink(data: Uint8Array): Promise<Uint8Array> {
     if (out.length <= MAX_PREVIEW_BYTES) return out
   }
   throw new Error("プレビューを作れませんでした")
-}
-
-/** dir の直下で、更新から maxAgeMs を過ぎたファイルを消す。消した数を返す */
-export function pruneOld(dir: string, maxAgeMs: number): number {
-  let names: string[]
-  try {
-    names = readdirSync(dir)
-  } catch {
-    return 0
-  }
-  let n = 0
-  for (const name of names) {
-    const p = join(dir, name)
-    try {
-      const st = statSync(p)
-      if (st.isFile() && Date.now() - st.mtimeMs > maxAgeMs) {
-        rmSync(p)
-        n++
-      }
-    } catch {
-      // 途中で消えたものは無視する
-    }
-  }
-  return n
 }

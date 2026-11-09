@@ -2,14 +2,13 @@
 # agent-chat-relay の操作。秘密情報は dotenvx で暗号化したリポジトリ直下の .env に置き、
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
-#   scripts/relay.sh secrets            LINE のチャネルシークレットとアクセストークンを保存する
-#   scripts/relay.sh migrate-secrets    旧構成の CCJ_LINE_* を RELAY_LINE_* へ写す（一度だけ）
+#   scripts/relay.sh secrets [line|chatwork]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン）
 #   scripts/relay.sh serve [harness]    中継を起動する（harness：claude（既定）か opencode）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
-#   scripts/relay.sh tunnel             LINE の Webhook を Cloudflare Quick Tunnel で公開する
-#   scripts/relay.sh quota              LINE の今月の送信数
-#   scripts/relay.sh webhook <種類> ... 署名付きの Webhook をローカルへ送る（開発用。scripts/webhook.ts）
+#   scripts/relay.sh line-tunnel        LINE の Webhook を Cloudflare Quick Tunnel で公開する
+#   scripts/relay.sh line-quota         LINE の今月の送信数
+#   scripts/relay.sh line-webhook <種類> ...  署名付きの LINE の Webhook をローカルへ送る（開発用。scripts/line-webhook.ts）
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,27 +49,28 @@ store_value() {
 cmd_secrets() {
   require_dotenvx
   ensure_ignored
+  case "${1:-line}" in
+    line) secrets_line ;;
+    chatwork) secrets_chatwork ;;
+    *) die "secrets の対象は line か chatwork です" ;;
+  esac
+  echo "保存しました: ${ENV_FILE}"
+}
+
+secrets_chatwork() {
+  local token
+  echo "Bot の Chatwork アカウントの API トークンを入力します。入力内容は画面に表示されません。"
+  read -rsp "API トークン: " token; echo
+  store_value RELAY_CHATWORK_API_TOKEN "$token"
+}
+
+secrets_line() {
   local secret token
   echo "LINE Developers コンソールの値を入力します。入力内容は画面に表示されません。"
   read -rsp "[1/2] チャネルシークレット: " secret; echo
   store_value RELAY_LINE_CHANNEL_SECRET "$secret"
   read -rsp "[2/2] チャネルアクセストークン（長期）: " token; echo
   store_value RELAY_LINE_CHANNEL_TOKEN "$token"
-  echo "保存しました: ${ENV_FILE}"
-}
-
-# 旧構成（cc-connect）のキーの値を、新しいキーへ写す。値は変数の中だけを通り、コマンド引数に載らない
-cmd_migrate_secrets() {
-  require_dotenvx
-  ensure_ignored
-  local old new value
-  for old in CCJ_LINE_CHANNEL_SECRET CCJ_LINE_CHANNEL_TOKEN; do
-    new="RELAY_${old#CCJ_}"
-    value="$(dotenvx get "$old" -f "$ENV_FILE" --strict 2>/dev/null)" || die "$ENV_FILE に $old がありません"
-    store_value "$new" "$value"
-    echo "$old → $new"
-  done
-  echo "写しました。旧キー（CCJ_*）は使わないので、不要なら .env から行ごと消してください。"
 }
 
 # .env を復号して環境変数に入れてから、自分自身を呼び直す。既存の環境変数が優先される
@@ -85,16 +85,15 @@ cd "$REPO_ROOT"
 cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
-  secrets) cmd_secrets ;;
-  migrate-secrets) cmd_migrate_secrets ;;
+  secrets) cmd_secrets "$@" ;;
   serve)
     with_env serve "$@"
     RELAY_HARNESS="${1:-${RELAY_HARNESS:-claude}}" exec mise exec -- bun src/main.ts serve
     ;;
   pair | access) exec mise exec -- bun src/main.ts "$cmd" "$@" ;;
-  tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_LINE_PORT" ;;
-  quota)
-    with_env quota
+  line-tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_LINE_PORT" ;;
+  line-quota)
+    with_env line-quota
     for path in quota quota/consumption; do
       printf '%s: ' "$path"
       # トークンをコマンド引数に載せないよう、ヘッダーはプロセス置換で渡す
@@ -102,9 +101,9 @@ case "$cmd" in
       echo
     done
     ;;
-  webhook)
-    with_env webhook "$@"
-    exec mise exec -- bun scripts/webhook.ts "$@"
+  line-webhook)
+    with_env line-webhook "$@"
+    exec mise exec -- bun scripts/line-webhook.ts "$@"
     ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

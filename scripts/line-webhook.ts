@@ -6,7 +6,7 @@
 //   join <room>                             Bot がグループに追加された
 //   postback <user> <data>                  ボタン（承認など）の操作
 
-import { sign } from "../src/line.ts"
+import { sign } from "../src/connectors/line.ts"
 
 const [kind, ...args] = process.argv.slice(2)
 const secret = process.env.RELAY_LINE_CHANNEL_SECRET

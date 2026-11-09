@@ -14,15 +14,22 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
    - ［チャネル基本設定］の**チャネルシークレット**と、［Messaging API 設定］の**チャネルアクセストークン（長期）**（［発行］を押す）を、`scripts/relay.sh secrets` で保存する。チャットに貼らない。OAM の［設定］→［Messaging API］にはシークレットが平文で出るので、その画面のスクリーンショットを共有しない。漏れたら再発行して、保存し直す。トークンを再発行すると、前のものは使えなくなる。
    - ［Messaging API 設定］の QR コードは、Bot を友だちに追加するときに使う。
 
+## Chatwork の Bot アカウントの準備（初回だけ）
+
+1. **Bot 用の Chatwork アカウントを作る**（無料プランでよい）。表示名は、ルームのメンバーに見える Bot の名前になる。自分のアカウントは使わない。Bot の発言が自分の名前で出て、自分へのメンションがすべて Bot に渡ってしまうため。
+2. **API トークンを発行する**：Bot のアカウントでログインし、右上のメニュー →［サービス連携］→［API トークン］。組織の契約によっては、組織管理者への申請が要る。トークンは `scripts/relay.sh secrets chatwork` で保存する。チャットに貼らない。漏れたら再発行して、保存し直す。
+3. **コンタクトになる**：使う人と Bot をコンタクトにする。DM と実行承認の依頼は、コンタクトとのダイレクトチャットでやりとりする。無料プランでは、組織外のコンタクトは 1 ユーザーあたり 20 人まで。
+4. Webhook とトンネルは要らない（ADR 0010）。
+
 ## 用意
 
 - `mise install` と `mise exec -- bun install`。Agent SDK に同梱の Claude CLI（約 320MB）は入れない（`bunfig.toml`）。
 - Claude Code（`claude`）がインストールされ、ログインしていること。中継は、このコマンドを `claude-agent-acp` 経由で動かす。
-- LINE の秘密情報：`scripts/relay.sh secrets` で入力する。旧構成の値があるなら、`scripts/relay.sh migrate-secrets` で写せる。
+- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork` で入力する。どちらか片方だけでも動く。
 
 | 場所 | 中身 |
 |---|---|
-| `.env`（git の無視対象） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`（dotenvx で暗号化） |
+| `.env`（git の無視対象） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`（dotenvx で暗号化） |
 | `.local/relay/access.json` | ルームの登録・許可リスト・ペアリング待ちのコード |
 | `.local/relay/workspace/` | セッションの作業場所。受け取った添付は `.relay/inbox/` に置き、7 日で消す |
 | `.local/relay/media/` | LINE へ返した画像（推測できない名前で公開する。7 日で消す） |
@@ -33,7 +40,7 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 ターミナルを 2 つ使う。
 
 1. `scripts/relay.sh serve`（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しない。試すときも、信頼できる人だけのルームに限る
-2. `scripts/relay.sh tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの［Messaging API 設定］の Webhook URL に登録し、［検証］を押す。
+2. `scripts/relay.sh line-tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの［Messaging API 設定］の Webhook URL に登録し、［検証］を押す。
 
    | ［検証］の結果 | 主な原因 |
    |---|---|
@@ -47,13 +54,15 @@ Quick Tunnel の URL は、トンネルを起動し直すたびに変わる。�
 
 止めるときは、両方を Ctrl+C で止め、［Webhook の利用］をオフにする。
 
+Chatwork だけで使うときは、`scripts/relay.sh serve` だけでよい（トンネルは要らない）。
+
 ## ルームと承認者の登録（ペアリング）
 
 1. Bot に 1 対 1 で何か送る。コードが返るので、端末で `scripts/relay.sh pair <コード>` を実行する。これで、自分が許可リストに入り、実行承認の依頼を受け取れるようになる。
 2. Bot をグループに招待する（招待済みなら、Bot にメンションして何か送る）。コードが返るので、同じく `pair` する。
 3. `scripts/relay.sh access` で、登録したものを確かめられる（ID は伏せて表示する）。
 
-## 確かめる項目
+## 確かめる項目（LINE）
 
 | すること | 期待する結果 |
 |---|---|
@@ -66,10 +75,26 @@ Quick Tunnel の URL は、トンネルを起動し直すたびに変わる。�
 | メンションして、作業場所にファイルを作るよう頼む | 承認者の DM に承認依頼が届く。［許可］で実行され、返事が届く |
 | 承認依頼に［拒否］で答える | 実行されない |
 
-Push は、グループでは人数分、承認依頼は承認者 1 人につき 1 通を使う。今月の消費は `scripts/relay.sh quota` で分かる。
+Push は、グループでは人数分、承認依頼は承認者 1 人につき 1 通を使う。今月の消費は `scripts/relay.sh line-quota` で分かる。
+
+## 確かめる項目（Chatwork）
+
+| すること | 期待する結果 |
+|---|---|
+| Bot を新しいグループチャットに追加する | 数秒でコードが投稿される |
+| 登録したルームで、Bot に To を付けて質問する | 返事が届く（数秒遅れる） |
+| To を付けずに発言する | 返事はない。あとで「さっきの発言は？」と聞くと読める |
+| 中継を止めている間に To を付けて依頼し、起動する | 実行されない |
+| ファイルを送ってから、「さっきのファイルを要約して」 | 中身を読んだ答えが届く |
+| 「〜を CSV にして送って」 | 作業場所に作る承認依頼が DM に届き、`yes <ID>` で許可するとファイルが届く |
 
 ## モックでの確認
 
-`test/e2e/run.sh claude` で、LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。実際のハーネスを動かすので、契約の利用枠を少し使う。記録は `.local/e2e/` に残る。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
+e2e のスクリプトは、チャットサービスごとに `test/e2e/<サービス>.sh` に置く（モックは `mock-<サービス>.ts`）。
 
-開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（`scripts/webhook.ts`）。
+- `test/e2e/chatwork.sh claude`：Chatwork の API をモックにして流す（ペアリング、返事、画像の説明、停止中に届いた依頼、承認とファイルの返送、ルームへの追加）。
+- `test/e2e/line.sh claude`：LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。
+
+どちらも実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は `.local/e2e/` に、サービスの名前を付けて残る（例：`relay-line-claude/`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
+
+開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh line-webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（`scripts/line-webhook.ts`）。

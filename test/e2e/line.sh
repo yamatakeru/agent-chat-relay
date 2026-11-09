@@ -6,19 +6,21 @@ set -uo pipefail
 
 H="$1"
 E=.local/e2e
-LOG="$E/sent-$H.jsonl"
-RLOG="$E/relay-$H.log"
+LOG="$E/sent-line-$H.jsonl"
+RLOG="$E/relay-line-$H.log"
 mkdir -p "$E"
 : >"$LOG"
+# 前回の作業場所が残っていると、承認の要らない結果になる（ファイルがすでにある）ので、作り直す
+rm -rf "$E/relay-line-$H"
 # モックの Webhook には X-Forwarded-Proto が付かないので、画像の公開 URL は固定で渡す
-export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
+export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-line-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
   RELAY_LINE_CHANNEL_SECRET=dummysecret RELAY_LINE_CHANNEL_TOKEN=dummytoken RELAY_PUBLIC_URL=http://127.0.0.1:18080
 G1=C111aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 G2=C222bbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 A=Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 B=Ubbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
-mise exec -- bun test/e2e/mock-line.ts "$LOG" >"$E/mock-$H.log" 2>&1 &
+mise exec -- bun test/e2e/mock-line.ts "$LOG" >"$E/mock-line-$H.log" 2>&1 &
 MOCK=$!
 scripts/relay.sh serve "$H" >"$RLOG" 2>&1 &
 RELAY=$!
@@ -30,7 +32,7 @@ for _ in $(seq 60); do
 done
 grep -q "セッションを開始しました" "$RLOG" || { echo "relay did not start"; tail -20 "$RLOG"; exit 1; }
 
-wh() { scripts/relay.sh webhook "$@" >/dev/null; }
+wh() { scripts/relay.sh line-webhook "$@" >/dev/null; }
 lines() { wc -l <"$LOG" | tr -d ' '; }
 # 送信の記録が n 行を超えるまで待つ
 waitfor() {
