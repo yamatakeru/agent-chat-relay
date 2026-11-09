@@ -4,10 +4,11 @@ import { join } from "node:path"
 import { AccessStore } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
 import { LineConnector, sign, splitBubbles, stripSelfMentions, verifySignature } from "../src/connectors/line.ts"
-import { MediaStore, pruneOld, RETENTION_MS } from "../src/connectors/line-media.ts"
+import { MediaStore } from "../src/connectors/line-media.ts"
 import { png } from "./fixtures/png.ts"
 import { type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
-import { RotatingFile, withoutRelaySecrets } from "../src/harness/harness.ts"
+import { withoutRelaySecrets } from "../src/harness/harness.ts"
+import { pruneOld, RETENTION_MS, RotatingFile } from "../src/harness/files.ts"
 
 let dir: string
 let access: AccessStore

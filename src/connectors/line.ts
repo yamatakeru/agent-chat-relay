@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { extname, join } from "node:path"
 import { localId } from "../core/access.ts"
 import type { MediaStore } from "./line-media.ts"
+import { remember } from "./cache.ts"
 import type { Attachment, Connector, Relay, Verdict } from "../core/relay.ts"
 
 const SERVICE = "line"
@@ -14,7 +15,6 @@ const MAX_BUBBLE_UNITS = 5000 // 吹き出し 1 つの最大文字数（UTF-16 �
 const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略しました）"
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
-const CACHE_CAP = 1000
 // 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形。ヘッダーの値をそのまま URL に入れるので絞る
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/
 
@@ -340,14 +340,6 @@ export function verifySignature(secret: string, body: string, signature: string)
   return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
-/** 入れて、上限を超えたら最も古いものを捨てる */
-function remember(c: Set<string>, key: string): void
-function remember(c: Map<string, string>, key: string, value: string): void
-function remember(c: Set<string> | Map<string, string>, key: string, value?: string): void {
-  if (c instanceof Set) c.add(key)
-  else c.set(key, value!)
-  if (c.size > CACHE_CAP) c.delete(c.keys().next().value!)
-}
 
 function apiMessage(raw: string): string {
   try {

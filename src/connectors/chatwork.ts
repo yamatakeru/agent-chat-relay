@@ -3,6 +3,7 @@
 
 import { mkdirSync, statSync, writeFileSync } from "node:fs"
 import { basename, extname, join } from "node:path"
+import { remember } from "./cache.ts"
 import type { Attachment, Connector, Log, Relay } from "../core/relay.ts"
 
 const SERVICE = "chatwork"
@@ -11,7 +12,6 @@ const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略し�
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 // アップロードできるファイルの上限
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
-const CACHE_CAP = 1000
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"])
 
 type CwRoom = { room_id: number; name: string; type: "my" | "direct" | "group"; last_update_time: number }
@@ -281,13 +281,4 @@ function apiErrors(raw: string): string {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-/** 入れて、上限を超えたら最も古いものを捨てる */
-function remember(c: Set<string>, key: string): void
-function remember<V>(c: Map<string, V>, key: string, value: V): void
-function remember<V>(c: Set<string> | Map<string, V>, key: string, value?: V): void {
-  if (c instanceof Set) c.add(key)
-  else c.set(key, value!)
-  if (c.size > CACHE_CAP) c.delete(c.keys().next().value!)
 }
