@@ -13,6 +13,7 @@
 | `.env`（git の無視対象） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`（dotenvx で暗号化） |
 | `.local/relay/access.json` | ルームの登録・許可リスト・ペアリング待ちのコード |
 | `.local/relay/workspace/` | セッションの作業場所。受け取った添付は `.relay/inbox/` に置く |
+| `.local/relay/harness.log` | ハーネスが stderr に出したもの（画面には出さない。異常終了したときだけ、最後の 20 行を画面に出す） |
 
 ## 起動
 

@@ -4,7 +4,9 @@
 import { randomInt } from "node:crypto"
 import { AccessStore, canSendTo, serviceOf, type GateResult } from "./access.ts"
 
-export type Log = (msg: string, extra?: Record<string, unknown>) => void
+type LogFn = (msg: string, extra?: Record<string, unknown>) => void
+/** info は普段の知らせ、error は失敗 */
+export type Log = { info: LogFn; error: LogFn }
 
 export type Attachment = { name: string; type: string; size?: number }
 
@@ -75,7 +77,7 @@ export class Relay {
 
   constructor(
     private readonly access: AccessStore,
-    private readonly log: Log = (m, e) => console.error(`relay: ${m}`, e ?? ""),
+    private readonly log: Log = { info: (m, e) => console.log(`relay: ${m}`, e ?? ""), error: (m, e) => console.error(`relay: ${m}`, e ?? "") },
   ) {}
 
   addConnector(c: Connector): void {
@@ -115,7 +117,7 @@ export class Relay {
   requestPermission(req: PermissionRequest): Promise<Verdict> {
     const approvers = this.access.load().allowFrom
     if (approvers.length === 0) {
-      this.log("実行承認を送れる人がいないため、拒否しました", { tool: req.title })
+      this.log.error("実行承認を送れる人がいないため、拒否しました", { tool: req.title })
       return Promise.resolve("deny")
     }
     let id: string
@@ -125,14 +127,14 @@ export class Relay {
     return new Promise<Verdict>((resolve) => {
       const timer = setTimeout(() => {
         this.permissions.delete(id)
-        this.log("実行承認の返事がなく、拒否しました", { id })
+        this.log.info("実行承認の返事がなく、拒否しました", { id })
         resolve("deny")
       }, PERMISSION_TIMEOUT_MS)
       this.permissions.set(id, { resolve, timer })
       for (const user of approvers) {
         this.connector(user)
           ?.sendApproval(user, text, id)
-          .catch((err) => this.log("承認の依頼を送れませんでした", { user, error: String(err) }))
+          .catch((err) => this.log.error("承認の依頼を送れませんでした", { user, error: String(err) }))
       }
     })
   }
@@ -201,7 +203,7 @@ export class Relay {
         try {
           await this.session.prompt(text)
         } catch (err) {
-          this.log("セッションへの入力に失敗しました", { error: String(err) })
+          this.log.error("セッションへの入力に失敗しました", { error: String(err) })
         }
       }
     } finally {
@@ -246,7 +248,7 @@ export class Relay {
     const lead = isResend ? "まだ登録されていません" : "このルームは登録されていません"
     await this.connector(room)
       ?.notice(room, `${lead}。管理者が端末で次を実行すると登録されます。\n\nrelay pair ${code}`)
-      .catch((err) => this.log("ペアリングのコードを送れませんでした", { error: String(err) }))
+      .catch((err) => this.log.error("ペアリングのコードを送れませんでした", { error: String(err) }))
   }
 
   private connector(id: string): Connector | undefined {

@@ -5,19 +5,21 @@
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
 
 import { randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { AccessStore } from "./access.ts"
 import { startHarness, type HarnessConfig } from "./harness.ts"
 import { LineConnector } from "./line.ts"
 import { mcpHandler } from "./mcp.ts"
-import { Relay } from "./relay.ts"
+import { type Log, Relay } from "./relay.ts"
 
 const home = resolve(process.env.RELAY_HOME ?? ".local/relay")
 const accessPath = join(home, "access.json")
 
-function log(msg: string, extra?: Record<string, unknown>): void {
-  console.error(`${new Date().toISOString()} relay: ${msg}${extra ? ` ${JSON.stringify(extra)}` : ""}`)
+const format = (msg: string, extra?: Record<string, unknown>) => `${new Date().toISOString()} relay: ${msg}${extra ? ` ${JSON.stringify(extra)}` : ""}`
+const log: Log = {
+  info: (msg, extra) => console.log(format(msg, extra)),
+  error: (msg, extra) => console.error(format(msg, extra)),
 }
 
 function required(name: string): string {
@@ -27,7 +29,7 @@ function required(name: string): string {
 }
 
 /** ハーネスごとの起動方法。実行承認と設定の読み込みに関わる部分は安全境界（AGENTS.md） */
-function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): HarnessConfig {
+function harnessConfig(name: string, cwd: string, mcp: HarnessConfig["mcp"]): Omit<HarnessConfig, "stderrPath"> {
   switch (name) {
     case "claude": {
       const claude = Bun.which("claude")
@@ -126,24 +128,35 @@ async function serve(access: AccessStore): Promise<void> {
     routes: { "/mcp": mcpHandler(relay, inbox, token) },
     fetch: () => new Response("not found", { status: 404 }),
   })
-  log("受け口を開きました", { webhook: `${webhook.url}line/webhook`, mcp: `${mcp.url}mcp` })
+  log.info("受け口を開きました", { webhook: `${webhook.url}line/webhook`, mcp: `${mcp.url}mcp` })
 
   const harnessName = process.env.RELAY_HARNESS ?? "claude"
+  const harnessLog = join(home, "harness.log")
   const harness = await startHarness(
-    harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }),
+    { ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }), stderrPath: harnessLog },
     (req) => relay.requestPermission(req),
     log,
   )
   relay.attach(harness.session)
 
+  // Ctrl+C は、端末と dotenvx の両方から届くことがある
+  let stopping = false
   const stop = () => {
-    log("停止します")
+    if (stopping) return
+    stopping = true
+    log.info("停止します")
     harness.stop()
   }
   process.on("SIGINT", stop)
   process.on("SIGTERM", stop)
   const code = await harness.exited
-  log("ハーネスが終了したため、中継も止めます", { harness: harnessName, code })
+  if (code === 0 || stopping) {
+    log.info("ハーネスが終了したため、中継も止めます", { harness: harnessName, code })
+  } else {
+    const tail = readFileSync(harnessLog, "utf8").trimEnd().split("\n").slice(-20).join("\n")
+    log.error(`ハーネスが異常終了したため、中継も止めます。ハーネスのログ：${harnessLog}（最後の 20 行を下に出す）`, { harness: harnessName, code })
+    console.error(tail)
+  }
   void webhook.stop()
   void mcp.stop()
   process.exit(code === 0 ? 0 : 1)

@@ -2,6 +2,8 @@
 // セッションは 1 つ。チャット用ツールの MCP サーバーを session/new で渡し、発言は session/prompt で入れる。
 
 import * as acp from "@agentclientprotocol/sdk"
+import { closeSync, mkdirSync, openSync } from "node:fs"
+import { dirname } from "node:path"
 import type { Log, PermissionRequest, Session, Verdict } from "./relay.ts"
 
 export type HarnessConfig = {
@@ -14,6 +16,8 @@ export type HarnessConfig = {
   meta?: Record<string, unknown>
   /** セッションのモード（ACP の session mode）。違うモードで始まったら切り替える。安全境界 */
   mode?: string
+  /** ハーネスの stderr を追記するファイル。画面には出さない */
+  stderrPath: string
 }
 
 export async function startHarness(
@@ -21,14 +25,17 @@ export async function startHarness(
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
   log: Log,
 ): Promise<{ session: Session; exited: Promise<number>; stop: () => void }> {
+  mkdirSync(dirname(cfg.stderrPath), { recursive: true, mode: 0o700 })
+  const stderr = openSync(cfg.stderrPath, "a", 0o600)
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
     // 中継の秘密情報（LINE のトークンなど）をハーネスへ渡さない。渡すと、エージェントが送信先の制限を迂回できる
     env: { ...withoutRelaySecrets(process.env), ...cfg.env },
     stdin: "pipe",
     stdout: "pipe",
-    stderr: "inherit",
+    stderr,
   })
+  closeSync(stderr)
   const stdin = new WritableStream<Uint8Array>({
     write(chunk) {
       proc.stdin.write(chunk)
@@ -51,14 +58,14 @@ export async function startHarness(
       // 「常に許可」は選ばない。毎回、承認者に尋ねる
       const kind = verdict === "allow" ? "allow_once" : "reject_once"
       const option = params.options.find((o) => o.kind === kind)
-      log(`実行承認：${verdict}`, { tool: title })
+      log.info(`実行承認：${verdict}`, { tool: title })
       if (!option) return { outcome: { outcome: "cancelled" } }
       return { outcome: { outcome: "selected", optionId: option.optionId } }
     })
     .onNotification("session/update", ({ params }) => {
       const u = params.update
       if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "text") turnText += u.content.text
-      if (u.sessionUpdate === "tool_call") log(`ツール：${u.title}`)
+      if (u.sessionUpdate === "tool_call") log.info(`ツール：${u.title}`)
     })
 
   const ready = Promise.withResolvers<Session>()
@@ -84,16 +91,16 @@ export async function startHarness(
       if (cfg.mode && mode !== cfg.mode) {
         if (!created.modes?.availableModes.some((m) => m.id === cfg.mode)) throw new Error(`モード ${cfg.mode} を使えません（今は ${mode}）`)
         await ctx.request("session/set_mode", { sessionId: created.sessionId, modeId: cfg.mode })
-        log(`モードを ${mode} から ${cfg.mode} に切り替えました`)
+        log.info(`モードを ${mode} から ${cfg.mode} に切り替えました`)
         mode = cfg.mode
       }
-      log("セッションを開始しました", { agent: init.agentInfo?.name, version: init.agentInfo?.version, protocol: init.protocolVersion, mode })
+      log.info("セッションを開始しました", { agent: init.agentInfo?.name, version: init.agentInfo?.version, protocol: init.protocolVersion, mode })
       ready.resolve({
         async prompt(text) {
           turnText = ""
           const res = await ctx.request("session/prompt", { sessionId: created.sessionId, prompt: [{ type: "text", text }] })
           // reply を使わずに書いた文章はチャットに届かない。気づけるようにログに出す
-          if (turnText.trim()) log("ターンの出力（チャットには届いていない）", { stopReason: res.stopReason, text: turnText.trim().slice(0, 300) })
+          if (turnText.trim()) log.info("ターンの出力（チャットには届いていない）", { stopReason: res.stopReason, text: turnText.trim().slice(0, 300) })
         },
       })
       await done.promise

@@ -84,7 +84,7 @@ describe("access", () => {
 describe("relay", () => {
   function setup() {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, () => {})
+    const relay = new Relay(access, { info: () => {}, error: () => {} })
     const conn = new FakeConnector()
     relay.addConnector(conn)
     return { relay, conn }
