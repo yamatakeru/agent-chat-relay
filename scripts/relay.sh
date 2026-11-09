@@ -3,7 +3,8 @@
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
 #   scripts/relay.sh secrets [line|chatwork|discord]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン、Discord は Bot のトークン）
-#   scripts/relay.sh serve [harness]    中継を起動する（harness：claude（既定）か opencode）
+#   scripts/relay.sh serve [harness] [--session-id <id>]
+#                                       中継を起動する（harness：claude（既定）か opencode。--session-id で既存のセッションを再開する）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
 #   scripts/relay.sh line-tunnel        LINE の Webhook を Cloudflare Quick Tunnel で公開する
@@ -96,7 +97,8 @@ case "$cmd" in
   secrets) cmd_secrets "$@" ;;
   serve)
     with_env serve "$@"
-    RELAY_HARNESS="${1:-${RELAY_HARNESS:-claude}}" exec mise exec -- bun src/main.ts serve
+    # 引数の解釈と検証は main.ts がする（ハーネスの既定は RELAY_HARNESS、なければ claude）
+    exec mise exec -- bun src/main.ts serve "$@"
     ;;
   pair | access) exec mise exec -- bun src/main.ts "$cmd" "$@" ;;
   line-tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_HTTP_PORT" ;;

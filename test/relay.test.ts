@@ -12,7 +12,9 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
-import { withoutRelaySecrets } from "../src/harness/harness.ts"
+import { startHarness, withoutRelaySecrets } from "../src/harness/harness.ts"
+import { parseServeArgs } from "../src/serve-args.ts"
+import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
 
@@ -285,6 +287,139 @@ describe("接続部の共通の部分", () => {
 test("ハーネスには中継の秘密情報を渡さない", () => {
   const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
   expect(env).toEqual({ PATH: "/bin" })
+})
+
+describe("ハーネスの起動と再開", () => {
+  const MCP = { url: "http://127.0.0.1:1/mcp", token: "launch-token" }
+  const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
+
+  /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ入れる。エージェントが受けた要求と、中継のログを返す */
+  async function run(fake: FakeAcpConfig, sessionId?: string) {
+    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
+    const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
+    const stderrPath = join(dir, "harness.log")
+    const requests = () =>
+      (existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "")
+        .split("\n")
+        .filter((l) => l.startsWith("REQ "))
+        .map((l) => JSON.parse(l.slice(4)) as { method: string; params: Record<string, any> })
+    let error: Error | undefined
+    try {
+      const h = await startHarness(
+        {
+          command: [process.execPath, join(import.meta.dir, "fixtures/acp-agent.ts")],
+          env: { FAKE_ACP: JSON.stringify(fake) },
+          cwd: dir,
+          mcp: MCP,
+          meta: META,
+          mode: "default",
+          stderrPath,
+          sessionId,
+        },
+        async () => "deny",
+        log,
+      )
+      await h.session.prompt("NEW REQUEST")
+      h.stop()
+      await h.exited
+    } catch (err) {
+      error = err as Error
+      // 失敗したときもハーネスは止められ、stderr を書き終えるまで少し待つ
+      await Bun.sleep(200)
+    }
+    return { error, logs, requests: requests() }
+  }
+  const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
+  const chatServer = [{ type: "http", name: "chat", url: MCP.url, headers: [{ name: "Authorization", value: "Bearer launch-token" }] }]
+
+  test("ID がなければ session/new で作り、モードを default にしてから発言を入れる。ID をログに出す", async () => {
+    const { error, logs, requests } = await run({ resume: true, load: true, list: true })
+    expect(error).toBeUndefined()
+    expect(methods(requests)).toEqual(["initialize", "session/new", "session/set_mode", "session/prompt"])
+    expect(requests[1]!.params).toMatchObject({ cwd: dir, mcpServers: chatServer, _meta: META })
+    expect(requests[2]!.params).toEqual({ sessionId: "new-session", modeId: "default" })
+    expect(logs.find((l) => l.msg === "セッションを開始しました")?.extra).toMatchObject({ sessionId: "new-session", start: "new", mode: "default" })
+  })
+
+  test("resume に対応していれば、作業場所の一覧を確かめて session/resume で再開し、会話記録のモードを default に戻す", async () => {
+    const sessions = [
+      { id: "other", cwd: dir, mode: "default" },
+      { id: "s1", cwd: dir, mode: "acceptEdits" },
+    ]
+    const { error, logs, requests } = await run({ resume: true, load: true, list: true, sessions }, "s1")
+    expect(error).toBeUndefined()
+    // 一覧は 2 ページ目まで読む。load は使わない。モードは最初の発言の前に戻す
+    expect(methods(requests)).toEqual(["initialize", "session/list", "session/list", "session/resume", "session/set_mode", "session/prompt"])
+    expect(requests[1]!.params.cwd).toBe(dir)
+    // 起動ごとの認証情報と、設定の読み込み（_meta）を渡し直す
+    expect(requests[3]!.params).toMatchObject({ sessionId: "s1", cwd: dir, mcpServers: chatServer, _meta: META })
+    expect(requests[4]!.params).toEqual({ sessionId: "s1", modeId: "default" })
+    expect(requests[5]!.params.sessionId).toBe("s1")
+    expect(logs.map((l) => l.msg)).toContain("モードを acceptEdits から default に切り替えました")
+    expect(logs.find((l) => l.msg === "セッションを再開しました")?.extra).toMatchObject({ sessionId: "s1", start: "resume", mode: "default" })
+  })
+
+  test("load だけなら session/load で再開し、再送された履歴は新しい出力に混ぜない", async () => {
+    const { error, logs, requests } = await run({ load: true, sessions: [{ id: "s1", cwd: dir, mode: "default" }] }, "s1")
+    expect(error).toBeUndefined()
+    // 一覧に対応していないので確かめずに進む。モードは既に default
+    expect(methods(requests)).toEqual(["initialize", "session/load", "session/prompt"])
+    expect(requests[1]!.params).toMatchObject({ sessionId: "s1", cwd: dir, mcpServers: chatServer, _meta: META })
+    expect(logs.map((l) => l.msg)).toContain("ハーネスがセッションの一覧に対応していないため、作業場所のセッションかどうかは確かめずに再開します")
+    expect(logs.find((l) => l.msg === "セッションを再開しました")?.extra).toMatchObject({ start: "load" })
+    // 履歴のツールはログに出さず、ターンの出力には新しい応答だけが入る
+    expect(logs.some((l) => l.msg.includes("OLD"))).toBe(false)
+    expect(logs.find((l) => l.msg.startsWith("ターンの出力"))?.extra?.text).toBe("NEW ANSWER")
+  })
+
+  test("再開に対応していなければ、新しく作らずに起動を失敗させる", async () => {
+    const { error, requests } = await run({ list: true, sessions: [{ id: "s1", cwd: dir, mode: "default" }] }, "s1")
+    expect(error?.message).toContain("再開（session/resume・session/load）に対応していません")
+    expect(methods(requests)).toEqual(["initialize"])
+  })
+
+  test("作業場所の一覧にない ID（別の作業場所のセッションを含む）は、再開を試みずに起動を失敗させる", async () => {
+    const sessions = [{ id: "elsewhere", cwd: "/somewhere/else", mode: "bypassPermissions" }]
+    for (const id of ["missing", "elsewhere"]) {
+      const { error, requests } = await run({ resume: true, list: true, sessions }, id)
+      expect(error?.message).toContain(`作業場所のセッションに ${id} がありません`)
+      expect(methods(requests)).toEqual(["initialize", "session/list"])
+      rmSync(join(dir, "harness.log"), { force: true })
+    }
+  })
+
+  test("一覧で確かめられないときは、ハーネスの再開の失敗をそのまま起動の失敗にする（load に切り替えない）", async () => {
+    const { error, requests } = await run({ resume: true, load: true }, "missing")
+    expect(error?.message).toContain("セッション missing を再開できませんでした（session/resume）")
+    expect(methods(requests)).toEqual(["initialize", "session/resume"])
+  })
+})
+
+describe("serve の引数", () => {
+  test("ハーネスとセッション ID を受け取る。省いたハーネスは既定にする", () => {
+    expect(parseServeArgs([])).toEqual({ harness: "claude" })
+    expect(parseServeArgs([], "opencode")).toEqual({ harness: "opencode" })
+    expect(parseServeArgs(["--session-id", "0b6d6c1e-3a0e-4f6a-9d1e-2f0c3b4a5d6e"])).toEqual({ harness: "claude", sessionId: "0b6d6c1e-3a0e-4f6a-9d1e-2f0c3b4a5d6e" })
+    expect(parseServeArgs(["opencode", "--session-id=ses_abc"])).toEqual({ harness: "opencode", sessionId: "ses_abc" })
+    expect(parseServeArgs(["--session-id", "s1", "claude"])).toEqual({ harness: "claude", sessionId: "s1" })
+  })
+
+  test("不正な引数は拒否する", () => {
+    const bad: [string[], string][] = [
+      [["--session-id"], "値がありません"],
+      [["--session-id", "--x"], "値がありません"],
+      [["--session-id="], "値が空です"],
+      [["--session-id", "a b"], "空白か制御文字"],
+      [["--session-id", "a\u0007"], "空白か制御文字"],
+      [["--session-id", "x".repeat(257)], "長すぎます"],
+      [["--session-id", "a", "--session-id", "b"], "2 回"],
+      [["--resume", "a"], "知らないオプション"],
+      [["claude", "opencode"], "1 つだけ"],
+      [["codex"], "知らないハーネス"],
+    ]
+    for (const [args, message] of bad) expect(() => parseServeArgs(args)).toThrow(message)
+    expect(parseServeArgs(["--session-id", "x".repeat(256)]).sessionId).toHaveLength(256)
+  })
 })
 
 describe("line", () => {

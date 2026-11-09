@@ -56,6 +56,7 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 ターミナルを 2 つ使う。
 
 1. `scripts/relay.sh serve`（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しない。試すときも、信頼できる人だけのルームに限る
+   - 起動のたびに新しいセッションになる。前の会話を続けるときは、前回の起動ログの「セッションを開始しました」（または「再開しました」）にある `sessionId` を渡す：`scripts/relay.sh serve --session-id <id>`。再開できなければ、理由を出して起動しない（新しくは作らない）。再開できるのは、中継の作業場所で作ったセッションだけ（`docs/relay.md`）
 2. `scripts/relay.sh line-tunnel`。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けて、LINE Developers コンソールの［Messaging API 設定］の Webhook URL に登録し、［検証］を押す。
 
    | ［検証］の結果 | 主な原因 |
@@ -125,7 +126,8 @@ e2e のスクリプトは、チャットサービスごとに `test/e2e/<サー�
 
 - `test/e2e/chatwork.sh claude`：Chatwork の API をモックにして流す（ペアリング、返事、画像の説明、停止中に届いた依頼、承認とファイルの返送、ルームへの追加）。
 - `test/e2e/line.sh claude`：LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。
+- `test/e2e/resume.sh claude`：LINE の API をモックにして、セッションの再開を流す（合言葉を覚えさせて止め、`--session-id` で再開して合言葉・返事・承認を確かめる。未知の ID では起動しないこと）。
 
-どちらも実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は `.local/e2e/` に、サービスの名前を付けて残る（例：`relay-line-claude/`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
+どれも実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は `.local/e2e/` に、サービスの名前を付けて残る（例：`relay-line-claude/`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
 
 開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh line-webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（`scripts/line-webhook.ts`）。
