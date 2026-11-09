@@ -31,11 +31,13 @@ export type ApiConfig = {
 }
 
 export class ApiClient {
-  readonly base: string
+  private readonly base: string
+  private readonly origin?: string
   private pausedUntil = 0
 
   constructor(private readonly cfg: ApiConfig) {
     this.base = cfg.base.replace(/\/$/, "")
+    this.origin = URL.parse(this.base)?.origin
   }
 
   /** 回数制限で、呼び出しを止めているか */
@@ -66,19 +68,23 @@ export class ApiClient {
   }
 
   /**
-   * 添付を取得する。保存先が API の外のホストのこともあるので、https か、API と同じ origin（モック）の URL だけを許す。
-   * 転送（3xx）は自分でたどる。auth は、認証を付ける範囲（none：付けない、first：最初の URL だけ、all：転送先にも）
+   * 添付を取得する。url は API の中のパス（/ で始まる）か、保存先の完全な URL。保存先が API の外のホストのこともあるので、
+   * https か、API と同じ origin（モック）の URL だけを許す。転送（3xx）は自分でたどる。
+   * auth は、認証を付ける範囲。none：付けない（Chatwork の取得用 URL）、first：最初の URL だけ（LINE）、
+   * all：転送先にも（LINE WORKS は、転送先の保存先にも認証が要る）
    */
   async download(url: string, auth: "none" | "first" | "all", timeoutMs = 120_000): Promise<Response> {
     this.checkPaused()
     const signal = AbortSignal.timeout(timeoutMs)
-    let target = URL.parse(url)
+    let target = URL.parse(url.startsWith("/") ? `${this.base}${url}` : url)
+    // 転送は、ふつう 1 回（API → 保存先）。それより多ければ、おかしいものとして止める
     for (let hop = 0; hop < 3 && target; hop++) {
-      if (target.protocol !== "https:" && target.origin !== URL.parse(this.base)?.origin) break
+      if (target.protocol !== "https:" && target.origin !== this.origin) break
       const withAuth = auth === "all" || (auth === "first" && hop === 0)
       const res = await fetch(target, { headers: withAuth ? await this.cfg.auth() : {}, redirect: "manual", signal })
       const location = res.headers.get("location")
       if (res.status >= 300 && res.status < 400 && location) {
+        await res.body?.cancel()
         target = URL.parse(location, target.href)
         continue
       }

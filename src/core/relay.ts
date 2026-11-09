@@ -74,6 +74,9 @@ export interface Connector {
   history?(room: string, limit: number): Promise<ChatMessage[]>
 }
 
+/** 環境変数（秘密情報）から接続部を作る。秘密情報がなければ undefined */
+export type ConnectorFactory = (env: Record<string, string | undefined>, deps: ConnectorDeps) => Connector | undefined
+
 /** 接続部を作るときに渡すもの */
 export type ConnectorDeps = {
   relay: Relay
@@ -114,7 +117,7 @@ type PendingPermission = { resolve: (v: Verdict) => void; timer: Timer }
 
 export class Relay {
   private readonly connectors = new Map<string, Connector>()
-  /** 中継が受けた発言と送った発言の記録（メモリだけ。履歴を読めないサービスの fetch_messages に使う） */
+  /** 中継が受けた発言と送った発言の記録（メモリだけ）。どのサービスでも取るが、fetch_messages で読むのは、履歴を読めない接続部のときだけ */
   private readonly records = new Map<string, ChatMessage[]>()
   private readonly queue: ChatMessage[] = []
   private readonly permissions = new Map<string, PendingPermission>()

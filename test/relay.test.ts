@@ -5,9 +5,9 @@ import { AccessStore } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
 import { splitText } from "../src/connectors/common.ts"
 import { ApiClient, sign, verifySignature } from "../src/connectors/http.ts"
-import { LineConnector, splitBubbles, stripSelfMentions } from "../src/connectors/line.ts"
+import { LineConnector, stripSelfMentions } from "../src/connectors/line.ts"
 import { MediaStore } from "../src/connectors/line-media.ts"
-import { chatworkApi } from "./fixtures/chatwork-api.ts"
+import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
 import { withoutRelaySecrets } from "../src/harness/harness.ts"
@@ -282,11 +282,25 @@ describe("line", () => {
     expect(stripSelfMentions(text, [{ index: 2, length: 4, isSelf: true }, { index: 13, length: 6 }])).toBe("😀 こんにちは @alice")
   })
 
-  test("長い本文は 5 つの吹き出しに分け、入りきらない分は省略を書き添える", () => {
-    const out = splitBubbles("あ".repeat(26000))
-    expect(out).toHaveLength(5)
-    expect(out.every((b) => b.length <= 5000)).toBe(true)
-    expect(out[4]).toEndWith("省略しました）")
+  test("Reply が本文なしで成功しても、Push で送り直さない", async () => {
+    const paths: string[] = []
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        paths.push(new URL(req.url).pathname)
+        return new Response(null, { status: 200 })
+      },
+    })
+    try {
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href }, new Relay(access, quiet), quiet)
+      await line.handleEvent({ type: "join", timestamp: 0, replyToken: "rt", source: { type: "group", groupId: ROOM.slice(5) } })
+      paths.length = 0
+      await line.send(ROOM, "どうぞ")
+      expect(paths).toEqual(["/v2/bot/message/reply"])
+    } finally {
+      void api.stop()
+    }
   })
 })
 
@@ -350,13 +364,13 @@ describe("返すファイル", () => {
       writeFileSync(join(dir, "a.png"), png(16, 16, [0, 0, 0]))
       const relay = new Relay(access, quiet)
       const media = new MediaStore(join(dir, "media"))
-      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay)
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media, publicUrl: "https://example.test" }, relay, quiet)
       await line.send(ROOM, "どうぞ", { files: [join(dir, "a.png")] })
       const msgs = posted[0]!.body.messages
       expect(msgs.map((m) => m.type)).toEqual(["text", "image"])
       expect(msgs[1]!.originalContentUrl).toMatch(/^https:\/\/example\.test\/media\/[A-Za-z0-9_-]{43}\.png$/)
       // 公開 URL が分からなければ送らない
-      const noUrl = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media }, relay)
+      const noUrl = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href, media }, relay, quiet)
       await expect(noUrl.send(ROOM, "", { files: [join(dir, "a.png")] })).rejects.toThrow("URL が分からない")
     } finally {
       void api.stop()
@@ -365,19 +379,19 @@ describe("返すファイル", () => {
 })
 
 describe("chatwork", () => {
-  const BOT = { id: 100, name: "AI係" }
+  const ME = { id: BOT.account_id, name: BOT.name }
   const CW_ROOM = 7000
   const CW_DM = 7001
 
   test("Bot へのメンションと返信だけを取り除き、添付を取り出す", () => {
-    expect(parseBody("[To:100]AI係さん\n調べて", BOT)).toMatchObject({ text: "調べて", mentioned: true })
-    expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", BOT)).toMatchObject({ text: "ありがとう", mentioned: true })
+    expect(parseBody("[To:100]AI係さん\n調べて", ME)).toMatchObject({ text: "調べて", mentioned: true })
+    expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", ME)).toMatchObject({ text: "ありがとう", mentioned: true })
     // ほかの人宛ての To と、全員宛て（[toall]）はメンションに数えない
-    expect(parseBody("[To:200]ボブさん\n確認して", BOT)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
-    expect(parseBody("[toall]お知らせ", BOT).mentioned).toBe(false)
-    const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", BOT)
+    expect(parseBody("[To:200]ボブさん\n確認して", ME)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
+    expect(parseBody("[toall]お知らせ", ME).mentioned).toBe(false)
+    const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", ME)
     expect(file).toEqual({ text: "（画像）", attachments: [{ name: "図 1.png", type: "image" }], mentioned: false })
-    expect(parseBody("見て[info][title][dtext:file_uploaded][/title][download:8]a.pdf (1 MB)[/download][/info]", BOT).attachments).toEqual([{ name: "a.pdf", type: "file" }])
+    expect(parseBody("見て[info][title][dtext:file_uploaded][/title][download:8]a.pdf (1 MB)[/download][/info]", ME).attachments).toEqual([{ name: "a.pdf", type: "file" }])
   })
 
   async function setup() {

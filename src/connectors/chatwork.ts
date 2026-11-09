@@ -40,8 +40,9 @@ export class ChatworkConnector implements Connector {
   readonly service = SERVICE
   readonly label = "Chatwork"
   readonly capabilities: Capabilities = {
-    files: { maxBytes: 5 * 1024 * 1024, maxCount: 10 },
-    text: { max: MAX_TEXT, parts: 10 },
+    // ルームごとの投稿の制限（10 秒に 10 回）に当たらないよう、1 回の返事の投稿（本文とファイル）を 8 回までにする
+    files: { maxBytes: 5 * 1024 * 1024, maxCount: 5 },
+    text: { max: MAX_TEXT, parts: 3 },
   }
   private readonly api: ApiClient
   private me?: { id: number; name: string; mention: RegExp }
@@ -67,7 +68,7 @@ export class ChatworkConnector implements Connector {
     private readonly now: () => number = Date.now,
   ) {
     this.api = new ApiClient({
-      label: "Chatwork",
+      label: this.label,
       base: cfg.apiBase ?? "https://api.chatwork.com/v2",
       auth: () => ({ "x-chatworktoken": cfg.apiToken }),
       errorMessage: (raw) => jsonError(raw, (b) => (b.errors as string[] | undefined)?.join(", ")),
@@ -160,9 +161,10 @@ export class ChatworkConnector implements Connector {
   async send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]> {
     const rid = await this.roomId(room)
     const files = opts?.files ?? []
-    const parts = splitText(text, MAX_TEXT, this.capabilities.text.parts)
-    const author = opts?.replyTo ? this.messages.get(`${rid}-${opts.replyTo}`)?.author : undefined
-    if (parts.length > 0 && author !== undefined) parts[0] = `[rp aid=${author} to=${rid}-${opts!.replyTo}]\n${parts[0]}`
+    const parts = splitText(text, this.capabilities.text.max, this.capabilities.text.parts)
+    const replyTo = opts?.replyTo
+    const author = replyTo ? this.messages.get(`${rid}-${replyTo}`)?.author : undefined
+    if (parts.length > 0 && author !== undefined) parts[0] = `[rp aid=${author} to=${rid}-${replyTo}]\n${parts[0]}`
     if (parts.length === 0 && files.length === 0) throw new Error("本文が空です")
     // 本文の最後の 1 通は、1 つ目のファイルに添える。ファイルの投稿は、メッセージ ID を返さない
     const caption = files.length > 0 ? parts.pop() : undefined
@@ -211,7 +213,7 @@ export class ChatworkConnector implements Connector {
   async edit(room: string, messageId: string, text: string): Promise<void> {
     assertNumericId(messageId)
     const rid = await this.roomId(room)
-    await this.api.call("PUT", `/rooms/${rid}/messages/${messageId}`, new URLSearchParams({ body: truncate(text.trim(), MAX_TEXT) }))
+    await this.api.call("PUT", `/rooms/${rid}/messages/${messageId}`, new URLSearchParams({ body: truncate(text.trim(), this.capabilities.text.max) }))
   }
 
   private async post(rid: number, body: string): Promise<string> {

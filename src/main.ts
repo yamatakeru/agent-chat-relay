@@ -11,12 +11,12 @@ import { AccessStore, localId, serviceOf } from "./core/access.ts"
 import { chatworkFromEnv } from "./connectors/chatwork.ts"
 import { lineFromEnv } from "./connectors/line.ts"
 import { startHarness, type HarnessConfig } from "./harness/harness.ts"
-import { pruneOld, RETENTION_MS } from "./core/retention.ts"
+import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
-import { type Connector, type ConnectorDeps, type Log, Relay, type Routes } from "./core/relay.ts"
+import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
 
 /** 接続部の一覧。秘密情報のあるものだけを動かす */
-const CONNECTORS: ((env: Record<string, string | undefined>, deps: ConnectorDeps) => Connector | undefined)[] = [lineFromEnv, chatworkFromEnv]
+const CONNECTORS: ConnectorFactory[] = [lineFromEnv, chatworkFromEnv]
 
 const home = resolve(process.env.RELAY_HOME ?? ".local/relay")
 const accessPath = join(home, "access.json")
@@ -99,13 +99,8 @@ async function serve(access: AccessStore): Promise<void> {
   }
   const inbox = join(workspace, ".relay", "inbox")
 
-  // 受け取った添付は 7 日で消す（起動時と 1 時間ごと。ADR 0005）
-  const prune = () => {
-    const removed = pruneOld(inbox, RETENTION_MS)
-    if (removed > 0) log.info("7 日を過ぎた添付を消しました", { removed })
-  }
-  prune()
-  setInterval(prune, 60 * 60 * 1000).unref()
+  // 受け取った添付は 7 日で消す（ADR 0005）
+  schedulePrune(inbox, "受け取った添付", log)
 
   const relay = new Relay(access, log, workspace)
   const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
@@ -126,8 +121,14 @@ async function serve(access: AccessStore): Promise<void> {
   const closers: (() => void)[] = [() => void mcp.stop()]
   log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
 
-  // 接続部の受け口（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する
-  const routes: Routes = Object.assign({}, ...connectors.map((c) => c.routes ?? {}))
+  // 接続部の受け口（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じ道を 2 つの接続部が出したら起動しない
+  const routes: Routes = {}
+  for (const c of connectors) {
+    for (const [path, route] of Object.entries(c.routes ?? {})) {
+      if (path in routes) throw new Error(`受け口の道が重なっています: ${path}（${c.label}）`)
+      routes[path] = route
+    }
+  }
   if (Object.keys(routes).length > 0) {
     const http = Bun.serve({
       hostname: "127.0.0.1",
@@ -138,10 +139,8 @@ async function serve(access: AccessStore): Promise<void> {
     closers.push(() => void http.stop())
     log.info("接続部の受け口を開きました", { url: http.url.href, routes: Object.keys(routes) })
   }
-  for (const c of connectors) {
-    await c.start()
-    closers.push(() => c.stop())
-  }
+  await Promise.all(connectors.map((c) => c.start()))
+  for (const c of connectors) closers.push(() => c.stop())
 
   const harnessName = process.env.RELAY_HARNESS ?? "claude"
   const harnessLog = join(home, "harness.log")

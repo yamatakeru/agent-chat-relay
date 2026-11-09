@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { RETENTION_MS } from "../core/retention.ts"
 
 // LINE の画像メッセージの上限（本体 10MB、プレビュー 1MB）
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_PREVIEW_BYTES = 1024 * 1024
 // 小さいファイルが巨大な画像に展開される（圧縮爆弾）のを防ぐ
 const MAX_PIXELS = 40_000_000

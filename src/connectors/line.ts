@@ -2,9 +2,9 @@
 
 import { extname, join } from "node:path"
 import { localId } from "../core/access.ts"
-import { pruneOld, RETENTION_MS } from "../core/retention.ts"
-import { MediaStore } from "./line-media.ts"
-import { assertNumericId, remember, saveDownload, splitText } from "./common.ts"
+import { schedulePrune } from "../core/retention.ts"
+import { MAX_IMAGE_BYTES, MediaStore } from "./line-media.ts"
+import { assertNumericId, remember, saveDownload, splitText, truncate } from "./common.ts"
 import { ApiClient, ApiError, jsonError, verifySignature } from "./http.ts"
 import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay, Routes, Verdict } from "../core/relay.ts"
 
@@ -74,8 +74,8 @@ export class LineConnector implements Connector {
   readonly label = "LINE"
   readonly capabilities: Capabilities = {
     // 1 回の送信に入る吹き出しは 5 つ。本文に 1 つ残す
-    files: { kinds: "JPEG と PNG の画像", maxBytes: 10 * 1024 * 1024, maxCount: MAX_BUBBLES - 1 },
-    // 分けた本文も 1 回の送信に入れるので、通数は増えない
+    files: { kinds: "JPEG と PNG の画像", maxBytes: MAX_IMAGE_BYTES, maxCount: MAX_BUBBLES - 1 },
+    // 分けた本文も 1 回の送信に入れるので、通数は増えない。画像を添えると、分けられる数はその分減る
     text: { max: MAX_BUBBLE_UNITS, parts: MAX_BUBBLES },
   }
   readonly routes: Routes
@@ -89,17 +89,17 @@ export class LineConnector implements Connector {
   /** ファイルの元の名前。取得したファイルの拡張子に使う */
   private readonly fileNames = new Map<string, string>()
   private publicBase?: string
-  private pruneTimer?: Timer
+  private stopPrune?: () => void
 
   constructor(
     private readonly cfg: LineConfig,
     private readonly relay: Relay,
-    private readonly log: Log = { info: () => {}, error: (m, e) => console.error(`line: ${m}`, e ?? "") },
+    private readonly log: Log,
     private readonly now: () => number = Date.now,
   ) {
     const client = (base: string) =>
       new ApiClient({
-        label: "LINE",
+        label: this.label,
         base,
         auth: () => ({ Authorization: `Bearer ${cfg.channelToken}` }),
         errorMessage: (raw) => jsonError(raw, (b) => b.message),
@@ -115,21 +115,13 @@ export class LineConnector implements Connector {
     }
   }
 
-  /** Webhook は受け口で受けるので、ここでは返した画像の掃除だけを始める（起動時と 1 時間ごとに、7 日を過ぎたものを消す。ADR 0005） */
+  /** Webhook は受け口で受けるので、ここでは返した画像の掃除だけを始める（ADR 0005） */
   async start(): Promise<void> {
-    const dir = this.cfg.media?.dir
-    if (!dir) return
-    const prune = () => {
-      const removed = pruneOld(dir, RETENTION_MS)
-      if (removed > 0) this.log.info("7 日を過ぎた画像を消しました", { removed })
-    }
-    prune()
-    this.pruneTimer = setInterval(prune, 60 * 60 * 1000)
-    this.pruneTimer.unref()
+    if (this.cfg.media) this.stopPrune = schedulePrune(this.cfg.media.dir, "公開した画像", this.log)
   }
 
   stop(): void {
-    clearInterval(this.pruneTimer)
+    this.stopPrune?.()
   }
 
   /** 署名を確かめ、すぐ 200 を返す。イベントはその後で処理する */
@@ -225,7 +217,7 @@ export class LineConnector implements Connector {
     const files = opts?.files ?? []
     // 画像を先に公開する。送れないものがあれば、何も送らずにエラーを返す
     const images = await Promise.all(files.map((f) => this.publish(f)))
-    const bubbles = splitBubbles(text, MAX_BUBBLES - images.length)
+    const bubbles = splitText(text, this.capabilities.text.max, this.capabilities.text.parts - images.length)
     if (bubbles.length === 0 && images.length === 0) throw new Error("本文が空です")
     const quoteToken = opts?.replyTo ? this.quoteTokens.get(opts.replyTo) : undefined
     const messages: object[] = bubbles.map((t, i) => ({ type: "text", text: t, ...(i === 0 && quoteToken ? { quoteToken } : {}) }))
@@ -248,7 +240,7 @@ export class LineConnector implements Connector {
     ].map((b) => ({ type: "action", action: { type: "postback", label: b.label, data: b.data, displayText: b.label } }))
     await this.post("/v2/bot/message/push", {
       to: localId(user),
-      messages: [{ type: "text", text: splitBubbles(text)[0], quickReply: { items } }],
+      messages: [{ type: "text", text: truncate(text, this.capabilities.text.max), quickReply: { items } }],
     })
   }
 
@@ -261,7 +253,7 @@ export class LineConnector implements Connector {
 
   async download(_room: string, messageId: string, dir: string): Promise<string[]> {
     assertNumericId(messageId)
-    const res = await this.dataApi.download(`${this.dataApi.base}/v2/bot/message/${messageId}/content`, "first")
+    const res = await this.dataApi.download(`/v2/bot/message/${messageId}/content`, "first")
     // 元の名前の拡張子が使えなければ（記号だけなど）、Content-Type から決める
     const named = extname(this.fileNames.get(messageId) ?? "").replace(/[^.a-zA-Z0-9]/g, "")
     const ext = named.length > 1 ? named : extension(res.headers.get("content-type") ?? "")
@@ -298,20 +290,25 @@ export class LineConnector implements Connector {
   private async deliver(room: string, messages: object[]): Promise<string[]> {
     const token = this.takeToken(room)
     let res: unknown
+    // 応答の本文がなくても（null）、Reply で届いていれば Push しない（二重に届き、通数も使う）
+    let delivered = false
     if (token) {
       try {
         res = await this.post("/v2/bot/message/reply", { replyToken: token, messages })
+        delivered = true
       } catch (err) {
         // 期限切れなどで使えない Reply トークンなら、Push に回す
         if (!(err instanceof ApiError && err.status === 400 && /reply token/i.test(err.apiMessage))) throw err
       }
     }
-    res ??= await this.post("/v2/bot/message/push", { to: localId(room), messages }).catch((err) => {
-      if (err instanceof ApiError && err.status === 429 && /monthly limit/i.test(err.apiMessage)) {
-        throw new Error("LINE の今月の送信数の上限に達したため、送れませんでした。次に発言があれば、その返事として送れます")
-      }
-      throw err
-    })
+    if (!delivered) {
+      res = await this.post("/v2/bot/message/push", { to: localId(room), messages }).catch((err) => {
+        if (err instanceof ApiError && err.status === 429 && /monthly limit/i.test(err.apiMessage)) {
+          throw new Error("LINE の今月の送信数の上限に達したため、送れませんでした。次に発言があれば、その返事として送れます")
+        }
+        throw err
+      })
+    }
     return ((res as { sentMessages?: { id: string; quoteToken?: string }[] } | null)?.sentMessages ?? []).map((s) => {
       remember(this.sentIds, s.id)
       if (s.quoteToken) remember(this.quoteTokens, s.id, s.quoteToken)
@@ -363,10 +360,6 @@ export function stripSelfMentions(text: string, mentionees: Mentionee[]): string
     .trim()
 }
 
-/** 吹き出し max 個（既定は LINE の上限の 5。画像を添えるときは、その分を減らす）に分ける。あふれた分は切り、省略したことを書き添える */
-export function splitBubbles(text: string, max = MAX_BUBBLES): string[] {
-  return splitText(text, MAX_BUBBLE_UNITS, max)
-}
 
 function extension(contentType: string): string {
   const t = contentType.split(";")[0]!.trim()

@@ -46,7 +46,7 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
   server.registerTool(
     "fetch_messages",
     {
-      description: "ルームの最近の発言を、古い順に取得する。Bot に向けられていない発言も含む。サービスの履歴を読めないもの（LINE、Chatwork）は、中継が起動してからの分だけ。",
+      description: "ルームの最近の発言を、古い順に取得する。Bot に向けられていない発言も含む。サービスによっては、中継が起動してからの分だけ。",
       inputSchema: { chat_id: z.string(), limit: z.number().int().optional().describe("最大件数（既定 20、最大 100）") },
     },
     ({ chat_id, limit }) =>
