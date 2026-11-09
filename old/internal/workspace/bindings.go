@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/jsonfile"
+	"github.com/yamatakeru/agent-chat-relay/old/internal/jsonfile"
 )
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)

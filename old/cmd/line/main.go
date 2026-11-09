@@ -25,9 +25,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/cloudweb"
-	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/line"
-	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/workspace"
+	"github.com/yamatakeru/agent-chat-relay/old/internal/cloudweb"
+	"github.com/yamatakeru/agent-chat-relay/old/internal/line"
+	"github.com/yamatakeru/agent-chat-relay/old/internal/workspace"
 )
 
 func main() {
