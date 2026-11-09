@@ -90,8 +90,11 @@ Push は、グループでは人数分、承認依頼は承認者 1 人につき
 
 ## モックでの確認
 
-Chatwork は `test/e2e/run-chatwork.sh claude` で、API をモックにして流す（ペアリング、返事、画像の説明、停止中に届いた依頼、承認とファイルの返送、ルームへの追加）。
+e2e のスクリプトは、チャットサービスごとに `test/e2e/<サービス>.sh` に置く（モックは `mock-<サービス>.ts`）。
 
-`test/e2e/run.sh claude` で、LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。実際のハーネスを動かすので、契約の利用枠を少し使う。記録は `.local/e2e/` に残る。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
+- `test/e2e/chatwork.sh claude`：Chatwork の API をモックにして流す（ペアリング、返事、画像の説明、停止中に届いた依頼、承認とファイルの返送、ルームへの追加）。
+- `test/e2e/line.sh claude`：LINE の API をモックにして、上の項目のうち主なものを流す（ペアリング、返事、別のルームへの投稿、画像の説明と返送、承認）。
 
-開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（`scripts/webhook.ts`）。
+どちらも実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は `.local/e2e/` に、サービスの名前を付けて残る（例：`relay-line-claude/`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` の `local-e2e` を含むもの）を消す。
+
+開発中に Webhook を 1 つずつ送るときは、`scripts/relay.sh webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使う（LINE だけ。`scripts/line-webhook.ts`）。

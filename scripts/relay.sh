@@ -9,7 +9,7 @@
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
 #   scripts/relay.sh tunnel             LINE の Webhook を Cloudflare Quick Tunnel で公開する（Chatwork には要らない）
 #   scripts/relay.sh quota              LINE の今月の送信数
-#   scripts/relay.sh webhook <種類> ... 署名付きの Webhook をローカルへ送る（開発用。scripts/webhook.ts）
+#   scripts/relay.sh webhook <種類> ... 署名付きの LINE の Webhook をローカルへ送る（開発用。scripts/line-webhook.ts）
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -119,7 +119,7 @@ case "$cmd" in
     ;;
   webhook)
     with_env webhook "$@"
-    exec mise exec -- bun scripts/webhook.ts "$@"
+    exec mise exec -- bun scripts/line-webhook.ts "$@"
     ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

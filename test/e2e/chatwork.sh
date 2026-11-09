@@ -69,12 +69,12 @@ say $GROUP $ALICE "$(mention "作業場所に report.csv を作って a,b と 1 
 for _ in $(seq 200); do
   grep -q '"kind":"file"' "$LOG" && break
   id="$(grep -o 'yes [a-km-z]\{5\}' "$LOG" | tail -1 | awk '{print $2}')"
-  if [ -n "$id" ] && ! grep -q "answered $id" "$E/answered-$H" 2>/dev/null; then
-    echo "approve $id"; say $DM $ALICE "yes $id"; echo "answered $id" >>"$E/answered-$H"
+  if [ -n "$id" ] && ! grep -q "answered $id" "$E/answered-chatwork-$H" 2>/dev/null; then
+    echo "approve $id"; say $DM $ALICE "yes $id"; echo "answered $id" >>"$E/answered-chatwork-$H"
   fi
   sleep 1
 done
-rm -f "$E/answered-$H"
+rm -f "$E/answered-chatwork-$H"
 
 echo "== bot added to a new room"
 n="$(lines)"; curl -s -o /dev/null "$MOCK_URL/_join" --data-urlencode "room=7004" --data-urlencode "name=新しいルーム"; waitfor "$n" 15
