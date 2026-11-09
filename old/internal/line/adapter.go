@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/cloudweb"
+	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/cloudweb"
 )
 
 // ルームへ返す案内。

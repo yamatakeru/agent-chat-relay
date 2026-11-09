@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/prune"
+	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/prune"
 )
 
 // PruneAttachments は、各ルームの作業場所で cc-connect が保存した添付（.cc-connect/attachments）のうち、

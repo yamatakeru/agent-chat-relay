@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yamatakeru/cc-connect-jtc-adapters/internal/cloudweb"
+	"github.com/yamatakeru/cc-connect-jtc-adapters/old/internal/cloudweb"
 )
 
 const (

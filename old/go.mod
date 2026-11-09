@@ -1,4 +1,4 @@
-module github.com/yamatakeru/cc-connect-jtc-adapters
+module github.com/yamatakeru/cc-connect-jtc-adapters/old
 
 go 1.27.3
 
