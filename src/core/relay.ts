@@ -54,6 +54,11 @@ export interface Connector {
   /** 案内に出すサービスの名前 */
   readonly label: string
   readonly capabilities: Capabilities
+  /**
+   * 「親/子」の ID（Discord のスレッドなど）を使うか。使う接続部は、子が本当にその親の中にあるかを、送るときに確かめる
+   * （中核は、子の ID を親の登録で通すため）。使わない接続部へは、その形の ID で送らない
+   */
+  readonly nestedRooms?: boolean
   /** HTTP の受け口が要るなら、その道 */
   readonly routes?: Routes
   /** 受け取りを始める（定期取得、常時の接続など）。受け口だけで受けるなら、何もしなくてよい */
@@ -335,6 +340,7 @@ export class Relay {
   private allowedConnector(room: string): Connector {
     const c = this.connector(room)
     if (!c) throw new Error(`知らないチャットサービスです: ${room}`)
+    if (room.includes("/") && !c.nestedRooms) throw new Error(`${c.label} の ID の形が違います: ${room}`)
     if (!canSendTo(this.access.load(), room)) throw new Error(`${room} は登録されていません（list_rooms で送れるルームが分かります）`)
     return c
   }

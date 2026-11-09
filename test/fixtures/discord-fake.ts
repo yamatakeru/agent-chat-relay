@@ -15,7 +15,7 @@ type FakeAttachment = { id: string; name: string; size: number; contentType: str
 export function fakeDiscord() {
   const emitter = new EventEmitter()
   const channels = new Map<string, ReturnType<typeof channel>>()
-  const messages = new Map<string, { id: string; channel: unknown }>()
+  const messages = new Map<string, { id: string; channel: unknown; author: { id: string } }>()
   const sent: Sent[] = []
   const typing: string[] = []
   let seq = 5000
@@ -77,12 +77,8 @@ export function fakeDiscord() {
         roles: new Map(Object.entries(extra.roles ?? {}).map(([id, name]) => [id, { id, name }])),
         channels: new Map(),
         everyone: !!extra.everyone,
-        repliedUser: null,
-      },
-      async fetchReference() {
-        const r: unknown = extra.replyTo && messages.get(extra.replyTo)
-        if (!r) throw new Error("Unknown Message")
-        return r
+        // discord.js は、返信先の発言の送り主を入れる
+        repliedUser: extra.replyTo ? user(messages.get(extra.replyTo)!.author.id) : null,
       },
       async react(emoji: string) {
         sent.push({ channel: ch.id, content: `react:${emoji}` })

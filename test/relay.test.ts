@@ -100,6 +100,8 @@ describe("access", () => {
     expect(access.gate({ room: thread, sender: ALICE, isDM: false, mentioned: false }).action).toBe("record")
     expect(canSendTo(access.load(), thread)).toBe(true)
     expect(canSendTo(access.load(), "discord:c300/200")).toBe(false)
+    // 親/子 の形でないものは、親の登録を引き継がない
+    for (const bad of ["discord:c100/200/300", "discord:c100/", "discord:c100/..", "discord:c100/.x"]) expect(canSendTo(access.load(), bad)).toBe(false)
   })
 
   test("ルームの allowFrom があれば、その人の発言だけを渡す", () => {
@@ -183,6 +185,8 @@ describe("relay", () => {
   test("登録していないルームへは送れない", async () => {
     const { relay, conn } = setup()
     await expect(relay.reply("line:C0000000000000000000000000000000f", "x")).rejects.toThrow("登録されていません")
+    // 親/子 の ID を使わない接続部へは、登録したルームの子の形でも送らない
+    await expect(relay.reply(`${ROOM}/x`, "x")).rejects.toThrow("ID の形が違います")
     await relay.reply(ROOM, "ok")
     expect(conn.sent).toEqual([{ room: ROOM, text: "ok" }])
     expect((await relay.fetchMessages(ROOM)).at(-1)).toMatchObject({ fromMe: true, text: "ok" })
@@ -576,6 +580,16 @@ describe("discord", () => {
     await conn.handleInteraction(alice.interaction)
     expect(await verdict).toBe("deny")
     expect(alice.replies).toMatchObject([{ update: { components: [], content: expect.stringContaining("❌ 拒否しました") } }])
+  })
+
+  test("リアクションは付けられ、編集は Bot が送った発言だけ", async () => {
+    const { d, dc, dev } = await setup()
+    const [mine] = await dc.send("discord:c100", "途中経過")
+    const theirs = d.say(dev, "1", "人の発言")
+    await dc.react("discord:c100", theirs.id, "👀")
+    await dc.edit("discord:c100", mine!, "完了")
+    await expect(dc.edit("discord:c100", theirs.id, "x")).rejects.toThrow("Bot が送った発言だけ")
+    expect(d.sent.slice(1).map((x) => x.content)).toEqual(["react:👀", "edit:完了"])
   })
 
   test("メンションとチャンネルの記法を名前にし、Bot へのメンションは取り除く", () => {

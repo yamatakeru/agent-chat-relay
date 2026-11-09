@@ -114,8 +114,9 @@ export class AccessStore {
   joined(room: string): GateResult {
     const a = this.load()
     this.pruneExpired(a)
-    if (a.rooms[room]) return { action: "drop" }
-    const r = this.pair(a, "room", room)
+    const key = registrationOf(room)
+    if (a.rooms[key]) return { action: "drop" }
+    const r = this.pair(a, "room", key)
     this.save(a)
     return r
   }
@@ -163,15 +164,17 @@ export class AccessStore {
   }
 }
 
-/** 送信先の制限：登録したルーム（とその中のスレッド）と、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる */
+/**
+ * 送信先の制限：登録したルーム（と、ID が「その ID/子」のもの）と、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる。
+ * 中核は ID の文字列しか見ない。子が本当にその親の中にあるかは、入れ子の ID を使う接続部が送るときに確かめる（Connector.nestedRooms）
+ */
 export function canSendTo(a: Access, room: string): boolean {
   return registrationOf(room) in a.rooms || a.allowFrom.includes(room)
 }
 
-/** 登録を引くルームの ID。「親/子」の形なら親 */
+/** 登録を引くルームの ID。「親/子」（どちらも空でなく、/ は 1 つだけ）の形なら親。ほかの形はそのまま（登録と一致しない） */
 export function registrationOf(room: string): string {
-  const i = room.indexOf("/")
-  return i < 0 ? room : room.slice(0, i)
+  return /^([^/]+)\/[^/.]+$/.exec(room)?.[1] ?? room
 }
 
 export function serviceOf(id: string): string {
