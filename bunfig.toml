@@ -1,0 +1,3 @@
+[install]
+# Agent SDK に同梱の Claude CLI（約 320MB）は入れない。インストール済みの claude を使う（docs/relay.md）
+optional = false

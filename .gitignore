@@ -3,6 +3,9 @@ mise.local.toml
 *.env
 .env*
 
+# 依存パッケージ
+node_modules/
+
 # ビルド成果物
 /bin/
 /dist/

@@ -8,3 +8,5 @@ go = "1.27.3" # old/ を動かすためだけに残す（ADR 0007）
 GOPATH = "{{config_root}}/.local/go"
 GOMODCACHE = "{{config_root}}/.local/go/pkg/mod"
 GOCACHE = "{{config_root}}/.local/go/cache"
+# Bun のパッケージのキャッシュも、リポジトリ内に置く
+BUN_INSTALL_CACHE_DIR = "{{config_root}}/.local/bun/cache"
