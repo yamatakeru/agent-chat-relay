@@ -2,7 +2,7 @@
 # 再開の e2e（LINE の API はモック）。引数：ハーネス名（既定は claude）。
 # 新しいセッションで合言葉を覚えさせ、中継を止めてから --session-id で再開し、
 # 合言葉を覚えているか、返事と実行承認が働くかを確かめる。
-# 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は .local/e2e/ に作る。
+# 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
 # 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
 set -uo pipefail
 
@@ -74,7 +74,7 @@ grep -E "セッションを再開しました|モードを" "$RLOG-2.log" | cut 
 n="$(lines)"; wh text "$G1" "$A" "さっきの合言葉を一言で" --mention; waitfor "$n"
 
 echo "== approval after resume"
-wh text "$G1" "$A" "作業場所に note.txt を作って ok と書いて。終わったら一言で報告して" --mention
+wh text "$G1" "$A" "作業ディレクトリに note.txt を作って ok と書いて。終わったら一言で報告して" --mention
 id=""
 for _ in $(seq 150); do
   id="$(grep -o 'yes [a-km-z]\{5\}' "$LOG" | tail -1 | awk '{print $2}')"

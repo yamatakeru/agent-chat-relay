@@ -1,4 +1,4 @@
-// Chatwork の接続部。API の定期取得で受け、REST API で送る（ADR 0010）。
+// Chatwork のコネクター。API の定期取得で受け、REST API で送る（ADR 0010）。
 // Bot は、専用の Chatwork アカウントの API トークンで発言する。
 
 import { basename, extname } from "node:path"
@@ -28,7 +28,7 @@ type ChatworkConfig = {
 const roomKey = (roomId: number) => `${SERVICE}:r${roomId}`
 const userKey = (accountId: number) => `${SERVICE}:u${accountId}`
 
-/** API トークンがあれば、接続部を作る */
+/** API トークンがあれば、コネクターを作る */
 export function chatworkFromEnv(env: Record<string, string | undefined>, deps: ConnectorDeps): ChatworkConnector | undefined {
   const apiToken = env.RELAY_CHATWORK_API_TOKEN
   if (!apiToken) return undefined

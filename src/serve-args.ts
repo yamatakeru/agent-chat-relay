@@ -1,4 +1,4 @@
-// serve の引数：[harness] [--session-id <id>]。不正な引数は、接続部やハーネスを起動する前に拒否する。
+// serve の引数：[harness] [--session-id <id>]。不正な引数は、コネクターやハーネスを起動する前に拒否する。
 
 export const HARNESSES = ["claude", "opencode"] as const
 export type HarnessName = (typeof HARNESSES)[number]

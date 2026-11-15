@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 中継の e2e（LINE の API はモック）。引数：ハーネス名（claude か opencode）。
-# 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は .local/e2e/ に作る。
+# 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
 # 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
 set -uo pipefail
 
@@ -10,7 +10,7 @@ LOG="$E/sent-line-$H.jsonl"
 RLOG="$E/relay-line-$H.log"
 mkdir -p "$E"
 : >"$LOG"
-# 前回の作業場所が残っていると、承認の要らない結果になる（ファイルがすでにある）ので、作り直す
+# 前回の作業ディレクトリが残っていると、承認の要らない結果になる（ファイルがすでにある）ので、作り直す
 rm -rf "$E/relay-line-$H"
 # モックの Webhook には X-Forwarded-Proto が付かないので、画像の公開 URL は固定で渡す
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-line-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
@@ -73,7 +73,7 @@ echo "image url: ${url:-none}"
 [ -n "$url" ] && curl -s -o /dev/null -w "GET /media -> %{http_code} %{content_type} %{size_download}B\n" "$url"
 
 echo "== approval"
-wh text "$G1" "$A" "作業場所に note.txt を作って ok と書いて。終わったら一言で報告して" --mention
+wh text "$G1" "$A" "作業ディレクトリに note.txt を作って ok と書いて。終わったら一言で報告して" --mention
 id=""
 for _ in $(seq 150); do
   id="$(grep -o 'yes [a-km-z]\{5\}' "$LOG" | tail -1 | awk '{print $2}')"

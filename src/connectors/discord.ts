@@ -1,4 +1,4 @@
-// Discord の接続部。Gateway（常時の接続）で受け、REST で送る。どちらも discord.js が受け持つ（ADR 0011）。
+// Discord のコネクター。Gateway（常時の接続）で受け、REST で送る。どちらも discord.js が受け持つ（ADR 0011）。
 // 公式の Claude Code Discord プラグイン（external_plugins/discord）を手本にした。
 
 import { once } from "node:events"
@@ -40,7 +40,7 @@ const channelKey = (id: string) => `${SERVICE}:c${id}`
 const threadKey = (parentId: string, id: string) => `${SERVICE}:c${parentId}/${id}`
 const userKey = (id: string) => `${SERVICE}:u${id}`
 
-/** Bot のトークンがあれば、接続部を作る */
+/** Bot のトークンがあれば、コネクターを作る */
 export function discordFromEnv(env: Record<string, string | undefined>, deps: ConnectorDeps): DiscordConnector | undefined {
   const token = env.RELAY_DISCORD_BOT_TOKEN
   return token ? new DiscordConnector({ token }, deps.relay, deps.log) : undefined

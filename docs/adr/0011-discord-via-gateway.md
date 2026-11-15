@@ -4,7 +4,7 @@ status: accepted
 
 # Discord は Gateway を discord.js で受信し、スレッドは親チャンネルの登録を引き継ぐ
 
-Discord の接続部は、公式の Claude Code Discord プラグイン（`claude-plugins-official` の `external_plugins/discord`）を手本にします（2026-11-09）。Gateway（常時接続の WebSocket）で受信し、REST で送信します。どちらも discord.js（14.28.1）に任せます。これは、ADR 0007 で TypeScript を選んだ理由の 1 つでもあります。
+Discord のコネクターは、公式の Claude Code Discord プラグイン（`claude-plugins-official` の `external_plugins/discord`）を手本にします（2026-11-09）。Gateway（常時接続の WebSocket）で受信し、REST で送信します。どちらも discord.js（14.28.1）に任せます。これは、ADR 0007 で TypeScript を選んだ理由の 1 つでもあります。
 
 ## 決めたこと
 
@@ -32,14 +32,14 @@ Discord の接続部は、公式の Claude Code Discord プラグイン（`claud
 
 ## Considered Options
 
-- **スレッドの親を接続部に問い合わせる**（ID はスレッドだけにする）。ID は短くなる。ただし、送信できるかどうかの判定が非同期になり、中核と接続部の間の取り決めが増える。
+- **スレッドの親をコネクターに問い合わせる**（ID はスレッドだけにする）。ID は短くなる。ただし、送信できるかどうかの判定が非同期になり、中核とコネクターの間の取り決めが増える。
 - **スレッドごとに登録する**。中核は今のままで済む。ただし、スレッドを作るたびに管理者の操作が必要になる。
 - **Gateway のモックで e2e テストを作る**。LINE・Chatwork と同じ形で全体を通して確認できる。ただし、作成に手間がかかる。
 
 ## Consequences
 
 - 中核の `access.ts` に `registrationOf` を追加しました。`親/子`（どちらも空でなく、`/` が 1 つだけ）の形式なら親を返し、それ以外の形式は登録と一致させません。
-- 中核は ID の文字列しか見ません。入れ子の ID を使う接続部は `nestedRooms` を申告し、送信時に、子が実際にその親に属しているかを確認します。申告していない接続部には、`/` を含む ID で送信しません。ほかのサービスに入れ子の場があれば、同じ取り決めで扱えます。
+- 中核は ID の文字列しか見ません。入れ子の ID を使うコネクターは `nestedRooms` を申告し、送信時に、子が実際にその親に属しているかを確認します。申告していないコネクターには、`/` を含む ID で送信しません。ほかのサービスに入れ子の場があれば、同じ取り決めで扱えます。
 - 依存関係に discord.js が加わります。
 - Discord Developer Portal で、Message Content の特権インテントをオンにする必要があります。Bot の利用者が 1 万ユーザー未満のうちは、審査は不要です（2026-06 の変更）。
 - 停止中の発言は、中継の記録にも残りません。`fetch_messages` で Discord の履歴から読みます。
