@@ -99,7 +99,7 @@ export class LineConnector implements Connector {
   /** ファイルの元の名前。取得したファイルの拡張子に使う */
   private readonly fileNames = new Map<string, string>()
   /** 動画と音声の発言。取得の前に、LINE 側の変換が済んだかを確かめる */
-  private readonly transcoded = new Map<string, true>()
+  private readonly transcoding = new Map<string, true>()
   private publicBase?: string
   private stopPrune?: () => void
   private readonly acknowledge: ReturnType<typeof acknowledger>
@@ -215,7 +215,7 @@ export class LineConnector implements Connector {
       case "audio":
         // 外部の URL にあるもの（contentProvider が line 以外）は、LINE から取得できない
         if (msg.contentProvider?.type !== "line") return undefined
-        if (msg.type !== "image") remember(this.transcoded, msg.id, true)
+        if (msg.type !== "image") remember(this.transcoding, msg.id, true)
         return { text: MEDIA_TEXT[msg.type], attachments: [{ name: `${msg.type}-${msg.id}`, type: msg.type }], mentioned: false }
       case "file":
         if (msg.fileName) remember(this.fileNames, msg.id, msg.fileName)
@@ -223,10 +223,9 @@ export class LineConnector implements Connector {
       case "location":
         return { text: `（位置情報）${[msg.title, msg.address].filter(Boolean).join(" ")} (${msg.latitude}, ${msg.longitude})`, attachments: [], mentioned: false }
       case "sticker": {
-        // メッセージスタンプでは、入力した文字が text に入る。キーワードは最大 15 個あるので、先頭だけを書く
-        const keywords = (msg.keywords ?? []).slice(0, 5).join("、")
-        const text = msg.text ? `（スタンプ）${msg.text}` : `（スタンプ${keywords ? `：${keywords}` : ""}）`
-        return { text, attachments: [], mentioned: this.quotesMe(msg) }
+        // text はメッセージスタンプに入力した文字。キーワードは最大 15 個あるので、先頭だけを書く
+        const label = msg.text || (msg.keywords ?? []).slice(0, 5).join("、")
+        return { text: label ? `（スタンプ：${label}）` : "（スタンプ）", attachments: [], mentioned: this.quotesMe(msg) }
       }
       default:
         return undefined
@@ -286,7 +285,7 @@ export class LineConnector implements Connector {
 
   async download(_room: string, messageId: string, dir: string): Promise<string[]> {
     assertNumericId(messageId)
-    if (this.transcoded.has(messageId)) {
+    if (this.transcoding.has(messageId)) {
       const { status } = (await this.dataApi.call("GET", `/v2/bot/message/${messageId}/content/transcoding`)) as { status: string }
       if (status === "processing") throw new Error("LINE で動画・音声を準備しているところです。しばらくしてから取得してください")
       if (status !== "succeeded") throw new Error("LINE で動画・音声の準備に失敗したため、取得できません")
@@ -395,18 +394,17 @@ export function stripSelfMentions(text: string, mentionees: Mentionee[]): string
 }
 
 
+const EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "video/mp4": ".mp4",
+  "audio/x-m4a": ".m4a",
+  "audio/mp4": ".m4a",
+  "application/pdf": ".pdf",
+  "text/plain": ".txt",
+}
+
 function extension(contentType: string): string {
-  const t = contentType.split(";")[0]!.trim()
-  const known: Record<string, string> = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "video/mp4": ".mp4",
-    "audio/x-m4a": ".m4a",
-    "audio/m4a": ".m4a",
-    "audio/mp4": ".m4a",
-    "application/pdf": ".pdf",
-    "text/plain": ".txt",
-  }
-  return known[t] ?? ".bin"
+  return EXTENSIONS[contentType.split(";")[0]!.trim()] ?? ".bin"
 }
