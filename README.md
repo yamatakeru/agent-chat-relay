@@ -2,7 +2,7 @@
 
 LINE・Chatwork・Discord のルームから、Claude Code などのコーディングエージェントに作業を依頼するための中継サーバーです。
 
-ルームでの発言をエージェントのセッションに渡し、エージェントは MCP ツールを使ってルームに返信します。エージェント（このリポジトリでは「ハーネス」と呼びます）とは ACP（Agent Client Protocol）でやり取りするので、特定のエージェントに固有の機能には依存しません。設計の経緯は [ADR 0006](docs/adr/0006-own-core-drives-any-harness-over-acp.md) にあります。
+ルームでの発言をエージェントのセッションに渡し、エージェントは MCP ツールを使ってルームに返信します。エージェントとは ACP（Agent Client Protocol）でやり取りするので、特定のエージェントに固有の機能には依存しません。設計の経緯は [ADR 0006](docs/adr/0006-own-core-drives-any-harness-over-acp.md) にあります。
 
 ## 主な機能
 
