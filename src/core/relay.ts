@@ -44,6 +44,9 @@ export type Capabilities = {
   text: { max: number; parts: number }
 }
 
+/** receive の結果。acknowledge なら、コネクターが受け取りの合図を出す（ADR 0012） */
+export type ReceiveResult = GateResult & { acknowledge?: boolean }
+
 /** 中継の HTTP サーバーに追加するルート（Webhook など）。中継が 1 つのサーバーにまとめて開く */
 export type Routes = Bun.Serve.Routes<undefined, string>
 
@@ -157,7 +160,7 @@ export class Relay {
   }
 
   /** コネクターが受けた発言 */
-  receive(m: Incoming): GateResult {
+  receive(m: Incoming): ReceiveResult {
     // 古い依頼の実行、古い承認の返事、ペアリングのコードを出さないよう、許可の判定（gate）を通さない
     if (m.stale) {
       if (!canSendTo(this.access.load(), m.room)) return { action: "drop" }
@@ -177,7 +180,8 @@ export class Relay {
     this.record(m)
     this.queue.push(m)
     this.kick()
-    return r
+    // 受信モードが「すべて」のルームの、メンションのない発言には出さない
+    return { ...r, acknowledge: m.mentioned }
   }
 
   joined(room: string): void {

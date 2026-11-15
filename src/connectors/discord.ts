@@ -19,7 +19,7 @@ import {
   type SendableChannels,
 } from "discord.js"
 import { localId } from "../core/access.ts"
-import { assertNumericId, attachmentOnlyText, parsePermissionData, permissionData, saveDownload, splitText, truncate, verdictText } from "./common.ts"
+import { acknowledger, assertNumericId, attachmentOnlyText, parsePermissionData, permissionData, saveDownload, splitText, truncate, verdictText } from "./common.ts"
 import { ApiClient } from "./http.ts"
 import type { Attachment, Capabilities, ChatMessage, Connector, ConnectorDeps, Log, Relay } from "../core/relay.ts"
 
@@ -29,6 +29,8 @@ const LOGIN_TIMEOUT_SEC = 30
 const AGENT_MENTIONS: MessageMentionOptions = { parse: ["users"], repliedUser: true }
 // 中継が決めた文面（承認の依頼、コード）では、誰にも通知を飛ばさない
 const NO_MENTIONS: MessageMentionOptions = { parse: [] }
+/** 受け取りの合図に付けるリアクション（ADR 0012） */
+const ACK_EMOJI = "👀"
 
 type DiscordConfig = { token: string }
 
@@ -58,6 +60,7 @@ export class DiscordConnector implements Connector {
   readonly nestedRooms = true
   /** 添付の取得用。添付は Discord の CDN にあり、認証は不要 */
   private readonly cdn = new ApiClient({ label: "Discord", base: "https://cdn.discordapp.com", auth: () => ({}), errorMessage: (raw) => raw.slice(0, 200) })
+  private readonly acknowledge: ReturnType<typeof acknowledger>
 
   constructor(
     private readonly cfg: DiscordConfig,
@@ -72,6 +75,7 @@ export class DiscordConnector implements Connector {
     }),
     private readonly now: () => number = Date.now,
   ) {
+    this.acknowledge = acknowledger(log, this.label)
     this.client.on(Events.MessageCreate, (msg) => {
       this.handleMessage(msg).catch((err) => this.log.error("Discord の発言の処理に失敗しました", { error: String(err) }))
     })
@@ -117,8 +121,8 @@ export class DiscordConnector implements Connector {
       isDM,
       mentioned: isDM || isMentioned(msg, me, role),
     })
-    // 作業中であることを示す（返事を送るか、10 秒たつと消える）
-    if (result.action === "deliver" && "sendTyping" in msg.channel) void msg.channel.sendTyping().catch(() => {})
+    // 入力中の表示は、返事を送るか 10 秒たつと消える。リアクションには Add Reactions の権限が要る
+    if (result.acknowledge) this.acknowledge(() => Promise.all([msg.react(ACK_EMOJI), "sendTyping" in msg.channel ? msg.channel.sendTyping() : undefined]))
   }
 
   async handleInteraction(i: Interaction): Promise<void> {
