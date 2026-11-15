@@ -510,11 +510,15 @@ describe("line の受け取りの合図", () => {
       await say({ type: "group", groupId: GROUP }, "雑談")
       await say({ type: "user" }, "DM です")
       await Bun.sleep(10)
-      expect(calls).toEqual([
-        { path: "/v2/bot/chat/markAsRead", body: { markAsReadToken: "read-@bot 調べて" } },
-        { path: "/v2/bot/chat/markAsRead", body: { markAsReadToken: "read-DM です" } },
-        { path: "/v2/bot/chat/loading/start", body: { chatId: USER, loadingSeconds: 60 } },
-      ])
+      // 既読とローディングは並行して送るので、届く順は決まらない
+      expect(calls).toHaveLength(3)
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          { path: "/v2/bot/chat/markAsRead", body: { markAsReadToken: "read-@bot 調べて" } },
+          { path: "/v2/bot/chat/markAsRead", body: { markAsReadToken: "read-DM です" } },
+          { path: "/v2/bot/chat/loading/start", body: { chatId: USER, loadingSeconds: 60 } },
+        ]),
+      )
     } finally {
       void api.stop()
     }
