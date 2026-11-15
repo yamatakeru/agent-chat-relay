@@ -1,6 +1,6 @@
 // Chatwork の API のモック。単体テストと e2e（test/e2e/mock-chatwork.ts）で使う。
 // force=0 の差分は、ルームごとに、前回の取得より後に入った発言を返す（Bot 自身の投稿も含む）。
-// Bot の投稿は sent に記録する。POST /_say・/_join で、発言とルームを足せる（e2e から呼ぶ）
+// Bot の投稿は sent に記録する。POST /_say・/_join で、発言とルームを追加できる（e2e から呼ぶ）
 
 export const BOT = { account_id: 100, name: "AI係" }
 const NAMES: Record<number, string> = { 1: "アリス", 2: "ボブ", [BOT.account_id]: BOT.name }
@@ -25,7 +25,7 @@ export function chatworkApi(opts: { port?: number; onSent?: (s: Sent) => void } 
   let gets = 0
   const now = () => Math.floor(Date.now() / 1000)
 
-  /** 発言を足し、そのメッセージ ID を返す。at は Unix 秒 */
+  /** 発言を追加し、そのメッセージ ID を返す。at は Unix 秒 */
   function say(roomId: number, account: number, body: string, at = now()): string {
     const id = String(++seq)
     const msg = { message_id: id, account: { account_id: account, name: NAMES[account] ?? "?" }, body, send_time: at, update_time: 0 }
@@ -35,7 +35,7 @@ export function chatworkApi(opts: { port?: number; onSent?: (s: Sent) => void } 
     return id
   }
 
-  /** 取得できるファイルを置く。発言の [download:<fid>] から取れる */
+  /** 取得できるファイルを置く。発言の [download:<fid>] から取得できる */
   function addFile(fid: string, name: string, data: Uint8Array | string): void {
     files.set(fid, { name, data })
   }

@@ -109,7 +109,7 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
   return server
 }
 
-/** /mcp の受け口。リクエストごとにツールの一式を作る（状態を持たない形） */
+/** /mcp のエンドポイント。リクエストごとにツールの一式を作る（状態を持たない形） */
 export function mcpHandler(relay: Relay, inboxDir: string, token: string): (req: Request) => Promise<Response> {
   const expected = Buffer.from(`Bearer ${token}`)
   return async (req) => {

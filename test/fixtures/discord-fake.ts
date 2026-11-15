@@ -77,7 +77,7 @@ export function fakeDiscord() {
         roles: new Map(Object.entries(extra.roles ?? {}).map(([id, name]) => [id, { id, name }])),
         channels: new Map(),
         everyone: !!extra.everyone,
-        // discord.js は、返信先の発言の送り主を入れる
+        // discord.js は、返信先の発言の送信者を入れる
         repliedUser: extra.replyTo ? user(messages.get(extra.replyTo)!.author.id) : null,
       },
       async react(emoji: string) {

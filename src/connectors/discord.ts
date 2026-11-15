@@ -1,4 +1,4 @@
-// Discord のコネクター。Gateway（常時の接続）で受け、REST で送る。どちらも discord.js が受け持つ（ADR 0011）。
+// Discord のコネクター。Gateway（常時接続）で受け、REST で送る。どちらも discord.js が担当する（ADR 0011）。
 // 公式の Claude Code Discord プラグイン（external_plugins/discord）を手本にした。
 
 import { once } from "node:events"
@@ -25,9 +25,9 @@ import type { Attachment, Capabilities, ChatMessage, Connector, ConnectorDeps, L
 
 const SERVICE = "discord"
 const LOGIN_TIMEOUT_SEC = 30
-// エージェントの本文で、@everyone・@here やロールの通知を鳴らさない（プロンプトインジェクションで大勢に鳴らされるのを防ぐ）
+// エージェントの本文で、@everyone・@here やロールの通知を飛ばさない（プロンプトインジェクションで大勢に通知が飛ぶのを防ぐ）
 const AGENT_MENTIONS: MessageMentionOptions = { parse: ["users"], repliedUser: true }
-// 中継が決めた文面（承認の依頼、コード）では、誰の通知も鳴らさない
+// 中継が決めた文面（承認の依頼、コード）では、誰にも通知を飛ばさない
 const NO_MENTIONS: MessageMentionOptions = { parse: [] }
 
 type DiscordConfig = { token: string }
@@ -54,9 +54,9 @@ export class DiscordConnector implements Connector {
     files: { maxBytes: 10 * 1024 * 1024, maxCount: 10 },
     text: { max: 2000, parts: 10 },
   }
-  // スレッドは c<親>/<スレッド>。送るときに、実際の親を確かめる（channel()）
+  // スレッドは c<親>/<スレッド>。送るときに、実際の親を確認する（channel()）
   readonly nestedRooms = true
-  /** 添付の取得用。添付は Discord の CDN にあり、認証は要らない */
+  /** 添付の取得用。添付は Discord の CDN にあり、認証は不要 */
   private readonly cdn = new ApiClient({ label: "Discord", base: "https://cdn.discordapp.com", auth: () => ({}), errorMessage: (raw) => raw.slice(0, 200) })
 
   constructor(
@@ -130,7 +130,7 @@ export class DiscordConnector implements Connector {
       await i.reply({ content: verdictText(false, p.verdict), flags: MessageFlags.Ephemeral })
       return
     }
-    // ボタンを外して結果を書き足す。同じ依頼に二度答えられないようにし、履歴にも残す。上限を超えないよう、元の文面を詰める
+    // ボタンを外して結果を追記する。同じ依頼に二度答えられないようにし、履歴にも残す。上限を超えないよう、元の文面を短くする
     const suffix = `\n\n${verdictText(true, p.verdict)}`
     await i.update({ content: truncate(i.message.content, this.capabilities.text.max - suffix.length) + suffix, components: [] })
   }
@@ -260,8 +260,8 @@ function roomOf(ch: Message["channel"]): string | undefined {
 }
 
 /**
- * Bot への @、Bot 専用のロールへの @、Bot の発言への返信。@everyone・@here・ほかのロールは数えない（GLOSSARY）。
- * repliedUser は、返信の通知を鳴らしたかによらず、返信先の発言の送り主になる（discord.js の Message._patch）
+ * Bot への @、Bot 専用のロールへの @、Bot の発言への返信。@everyone・@here・ほかのロールはメンションとして扱わない（GLOSSARY）。
+ * repliedUser は、返信の通知をオンにしたかによらず、返信先の発言の送信者になる（discord.js の Message._patch）
  */
 function isMentioned(msg: Message, me: string, botRole: string | undefined): boolean {
   return msg.mentions.users.has(me) || (botRole !== undefined && msg.mentions.roles.has(botRole)) || msg.mentions.repliedUser?.id === me

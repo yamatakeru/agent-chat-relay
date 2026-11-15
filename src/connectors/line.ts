@@ -1,4 +1,4 @@
-// LINE のコネクター。Webhook の受信と、Messaging API での送信を受け持つ。
+// LINE のコネクター。Webhook の受信と、Messaging API での送信を担当する。
 
 import { extname, join } from "node:path"
 import { localId } from "../core/access.ts"
@@ -9,7 +9,7 @@ import { ApiClient, ApiError, jsonError, verifySignature } from "./http.ts"
 import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay, Routes } from "../core/relay.ts"
 
 const SERVICE = "line"
-const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンは 1 分で切れる。余裕を見て 50 秒
+const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンの有効期限は 1 分。余裕を見て 50 秒
 const MAX_BUBBLES = 5 // 1 回の送信に入れられるメッセージの数（本文の吹き出しと画像を合わせて）
 const MAX_BUBBLE_UNITS = 5000 // 吹き出し 1 つの最大文字数（UTF-16 の単位）
 // 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形。ヘッダーの値をそのまま URL に入れるので絞る
@@ -45,7 +45,7 @@ type LineConfig = {
   dataApiBase?: string
   /** 返す画像を公開する場所（ADR 0005）。ないと画像を送れない */
   media?: MediaStore
-  /** 画像を公開する URL の先頭（例：https://example.com）。なければ、署名を確かめた Webhook が届いたホスト名を使う */
+  /** 画像を公開する URL の先頭（例：https://example.com）。なければ、署名を確認した Webhook が届いたホスト名を使う */
   publicUrl?: string
 }
 
@@ -115,7 +115,7 @@ export class LineConnector implements Connector {
     }
   }
 
-  /** Webhook は受け口で受けるので、ここでは返した画像の掃除だけを始める（ADR 0005） */
+  /** Webhook はエンドポイントで受けるので、ここでは返した画像の定期削除だけを始める（ADR 0005） */
   async start(): Promise<void> {
     if (this.cfg.media) this.stopPrune = schedulePrune(this.cfg.media.dir, "公開した画像", this.log)
   }
@@ -124,7 +124,7 @@ export class LineConnector implements Connector {
     this.stopPrune?.()
   }
 
-  /** 署名を確かめ、すぐ 200 を返す。イベントはその後で処理する */
+  /** 署名を確認し、すぐ 200 を返す。イベントはその後で処理する */
   async handleWebhook(req: Request): Promise<Response> {
     const body = await req.text()
     if (!verifySignature(this.cfg.channelSecret, body, req.headers.get("x-line-signature") ?? "")) {

@@ -123,7 +123,7 @@ describe("relay", () => {
     return { relay, conn }
   }
 
-  test("作業中に届いた発言は、ターンが終わってからまとめて入れる", async () => {
+  test("作業中に届いた発言は、ターンが終わってからまとめて渡す", async () => {
     const { relay } = setup()
     const prompts: string[] = []
     let finish!: () => void
@@ -161,7 +161,7 @@ describe("relay", () => {
     expect(conn.approvals).toHaveLength(1)
     const id = conn.approvals[0]!.id
     expect(relay.answer(BOB, id, "allow")).toBe(false)
-    // DM の「yes <id>」は、セッションには入れずに承認として扱う
+    // DM の「yes <id>」は、セッションには渡さずに承認として扱う
     relay.receive(msg({ room: ALICE, sender: ALICE, isDM: true, text: `yes ${id}` }))
     expect(await verdict).toBe("allow")
   })
@@ -277,7 +277,7 @@ describe("コネクターの共通の部分", () => {
       expect(await (await api.download(`${server.url.origin}/file`, "all")).text()).toBe("data")
       await api.download(`${server.url.origin}/file`, "first")
       expect(seen.map((s) => s.auth)).toEqual(["Bearer t", "Bearer t", "Bearer t", null])
-      // https でも API と同じ origin でもない URL は取りに行かない
+      // https でも API と同じ origin でもない URL は取得しない
       await expect(api.download("http://example.test/x", "none")).rejects.toThrow("URL が使えません")
     } finally {
       void server.stop()
@@ -294,7 +294,7 @@ describe("ハーネスの起動と再開", () => {
   const MCP = { url: "http://127.0.0.1:1/mcp", token: "launch-token" }
   const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
 
-  /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ入れる。エージェントが受けた要求と、中継のログを返す */
+  /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ渡す。エージェントが受けた要求と、中継のログを返す */
   async function run(fake: FakeAcpConfig, sessionId?: string) {
     const logs: { msg: string; extra?: Record<string, unknown> }[] = []
     const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
@@ -540,7 +540,7 @@ describe("chatwork", () => {
   test("Bot へのメンションと返信だけを取り除き、添付を取り出す", () => {
     expect(parseBody("[To:100]AI係さん\n調べて", ME)).toMatchObject({ text: "調べて", mentioned: true })
     expect(parseBody("[rp aid=100 to=7000-55]AI係さん\nありがとう", ME)).toMatchObject({ text: "ありがとう", mentioned: true })
-    // ほかの人宛ての To と、全員宛て（[toall]）はメンションに数えない
+    // ほかの人宛ての To と、全員宛て（[toall]）はメンションとして扱わない
     expect(parseBody("[To:200]ボブさん\n確認して", ME)).toMatchObject({ text: "[To:200]ボブさん\n確認して", mentioned: false })
     expect(parseBody("[toall]お知らせ", ME).mentioned).toBe(false)
     const file = parseBody("[info][title][dtext:file_uploaded][/title][preview id=9 ht=150][download:9]図 1.png (12.34 KB)[/download][/info]", ME)
@@ -572,7 +572,7 @@ describe("chatwork", () => {
       const now = api.say(CW_ROOM, 2, "[To:100]AI係さん\n今の依頼", 1001)
       api.say(CW_ROOM, 100, "Bot の発言", 1001)
       await cw.poll()
-      await cw.poll() // 同じ秒に届いた発言を取りこぼさないよう、もう一度だけ取る
+      await cw.poll() // 同じ秒に届いた発言を取りこぼさないよう、もう一度だけ取得する
       await cw.poll()
       expect(api.gets()).toBe(2)
       await Bun.sleep(0)

@@ -1,5 +1,5 @@
 // 中核（ADR 0006）。コネクターから受けた発言を、ルームの登録と送信者の許可で絞って記録し、
-// セッションへまとめて入れる。チャット用ツール（MCP）からの送信と、実行承認の中継も受け持つ。
+// セッションにまとめて渡す。チャット用ツール（MCP）からの送信と、実行承認の中継も担当する。
 
 import { randomInt } from "node:crypto"
 import { realpathSync, statSync } from "node:fs"
@@ -7,7 +7,7 @@ import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import { AccessStore, canSendTo, serviceOf, type GateResult } from "./access.ts"
 
 type LogFn = (msg: string, extra?: Record<string, unknown>) => void
-/** info は普段の知らせ、error は失敗 */
+/** info は通常の通知、error は失敗 */
 export type Log = { info: LogFn; error: LogFn }
 
 export type Attachment = { name: string; type: string; size?: number }
@@ -30,7 +30,7 @@ export type Incoming = ChatMessage & {
   stale?: boolean
 }
 
-/** コネクターが申告する、送れるものの上限。中核は、これで送る前に確かめ、エージェントへの案内を組み立てる */
+/** コネクターが申告する、送れるものの上限。中核は、これで送る前に確認し、エージェントへの案内を組み立てる */
 export type Capabilities = {
   /** 送れるファイル。送れなければ書かない */
   files?: {
@@ -44,7 +44,7 @@ export type Capabilities = {
   text: { max: number; parts: number }
 }
 
-/** 中継の HTTP の受け口に足す道（Webhook など）。中継が 1 つのサーバーにまとめて開く */
+/** 中継の HTTP サーバーに追加するルート（Webhook など）。中継が 1 つのサーバーにまとめて開く */
 export type Routes = Bun.Serve.Routes<undefined, string>
 
 /** チャットサービスごとのコネクター */
@@ -55,16 +55,16 @@ export interface Connector {
   readonly label: string
   readonly capabilities: Capabilities
   /**
-   * 「親/子」の ID（Discord のスレッドなど）を使うか。使うコネクターは、子が本当にその親の中にあるかを、送るときに確かめる
+   * 「親/子」の ID（Discord のスレッドなど）を使うか。使うコネクターは、子が本当にその親の中にあるかを、送るときに確認する
    * （中核は、子の ID を親の登録で通すため）。使わないコネクターへは、その形の ID で送らない
    */
   readonly nestedRooms?: boolean
-  /** HTTP の受け口が要るなら、その道 */
+  /** HTTP のエンドポイントが必要なら、そのルート */
   readonly routes?: Routes
-  /** 受け取りを始める（定期取得、常時の接続など）。受け口だけで受けるなら、何もしなくてよい */
+  /** 受け取りを始める（ポーリング、常時接続など）。エンドポイントだけで受けるなら、何もしなくてよい */
   start(): Promise<void>
   stop(): void
-  /** ルームへ送る。files は中継が確かめた、作業ディレクトリの中のファイルの実パス。送ったメッセージの ID を返す */
+  /** ルームへ送る。files は中継が確認した、作業ディレクトリの中のファイルの実パス。送ったメッセージの ID を返す */
   send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]>
   /** 承認者の DM へ、実行承認の依頼を送る */
   sendApproval(user: string, text: string, requestId: string): Promise<void>
@@ -90,7 +90,7 @@ export type ConnectorDeps = {
   home: string
 }
 
-/** セッションへの入口（ACP のハーネス）。prompt はターンが終わると解決する */
+/** 発言を渡す先のセッション（ACP のハーネス）。prompt はターンが終わると解決する */
 export interface Session {
   prompt(text: string): Promise<void>
 }
@@ -122,7 +122,7 @@ type PendingPermission = { resolve: (v: Verdict) => void; timer: Timer }
 
 export class Relay {
   private readonly connectors = new Map<string, Connector>()
-  /** 中継が受けた発言と送った発言の記録（メモリだけ）。どのサービスでも取るが、fetch_messages で読むのは、履歴を読めないコネクターのときだけ */
+  /** 中継が受けた発言と送った発言の記録（メモリだけ）。どのサービスでも記録するが、fetch_messages で読むのは、履歴を読めないコネクターのときだけ */
   private readonly records = new Map<string, ChatMessage[]>()
   private readonly queue: ChatMessage[] = []
   private readonly permissions = new Map<string, PendingPermission>()
@@ -274,7 +274,7 @@ export class Relay {
 
   private async run(): Promise<void> {
     try {
-      // 作業中に届いた発言は、ターンが終わってからまとめて入れる
+      // 作業中に届いた発言は、ターンが終わってからまとめて渡す
       while (this.session && this.queue.length > 0) {
         const batch = this.queue.splice(0)
         const text = await this.render(batch)
@@ -346,7 +346,7 @@ export class Relay {
   }
 }
 
-/** 送るファイルを確かめ、実パスを返す。作業ディレクトリの外（リンクで外を指すものも含む）は送らない（ADR 0009） */
+/** 送るファイルを確認し、実パスを返す。作業ディレクトリの外（リンクで外を指すものも含む）は送らない（ADR 0009） */
 export function sendablePaths(files: string[], workspace: string | undefined): string[] {
   if (files.length === 0) return []
   if (!workspace) throw new Error("ファイルは送れません")
@@ -365,7 +365,7 @@ export function sendablePaths(files: string[], workspace: string | undefined): s
   })
 }
 
-/** コネクターが申告した上限で、送るファイルを確かめる。送れないものがあれば、何も送らずにエラーにする */
+/** コネクターが申告した上限で、送るファイルを確認する。送れないものがあれば、何も送らずにエラーにする */
 function checkFiles(c: Connector, paths: string[]): void {
   if (paths.length === 0) return
   const f = c.capabilities.files
@@ -398,7 +398,7 @@ function escapeXml(s: string): string {
 }
 
 function describeAttachment(a: Attachment): string {
-  // 名前は送り主が決められる。区切り文字で枠を壊されないよう置き換える
+  // 名前は送信者が決められる。区切り文字で枠を壊されないよう置き換える
   const name = a.name.replace(/[[\]\r\n;]/g, "_")
   return a.size === undefined ? `${name} (${a.type})` : `${name} (${a.type}, ${Math.ceil(a.size / 1024)}KB)`
 }
