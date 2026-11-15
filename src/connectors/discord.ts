@@ -121,7 +121,8 @@ export class DiscordConnector implements Connector {
       isDM,
       mentioned: isDM || isMentioned(msg, me, role),
     })
-    if (result.acknowledge) this.acknowledge(() => acknowledgeMessage(msg))
+    // 入力中の表示は、返事を送るか 10 秒たつと消える。リアクションには Add Reactions の権限が要る
+    if (result.acknowledge) this.acknowledge(() => Promise.all([msg.react(ACK_EMOJI), "sendTyping" in msg.channel ? msg.channel.sendTyping() : undefined]))
   }
 
   async handleInteraction(i: Interaction): Promise<void> {
@@ -244,14 +245,6 @@ export class DiscordConnector implements Connector {
     if (!ok) throw new Error(`Discord のチャンネルが見つからないか、送れません: ${room}`)
     return ch
   }
-}
-
-/**
- * 受け取りの合図（ADR 0012）。👀 を付け、入力中の表示を出す（返事を送るか、10 秒たつと消える）。
- * リアクションには、チャンネルで Add Reactions の権限が要る
- */
-async function acknowledgeMessage(msg: Message): Promise<void> {
-  await Promise.all([msg.react(ACK_EMOJI), "sendTyping" in msg.channel ? msg.channel.sendTyping() : undefined])
 }
 
 /** ルームの ID を読む。channelKey・threadKey・userKey の逆 */

@@ -29,7 +29,7 @@ type LineEvent = {
     type: string
     text?: string
     quoteToken?: string
-    /** 既読を付けるためのトークン。期限はない */
+    /** 既読を付けるためのトークン（期限なし） */
     markAsReadToken?: string
     quotedMessageId?: string
     mention?: { mentionees: Mentionee[] }
@@ -215,14 +215,10 @@ export class LineConnector implements Connector {
     if (result.acknowledge) this.acknowledge(() => this.acknowledgeMessage(msg.markAsReadToken, isDM ? localId(sender) : undefined))
   }
 
-  /**
-   * 受け取りの合図（ADR 0012）。既読を付け、1 対 1 のトークではローディングも出す。
-   * 既読を API で付けるには、OAM の［チャット］をオンにする（オフだと、LINE が受けた時点で自動で付く）
-   */
+  /** 受け取りの合図（ADR 0012）。既読は、OAM の［チャット］がオンでないと API で付けられない */
   private async acknowledgeMessage(markAsReadToken: string | undefined, dmUser: string | undefined): Promise<void> {
     await Promise.all([
       markAsReadToken ? this.post("/v2/bot/chat/markAsRead", { markAsReadToken }) : undefined,
-      // 表示は、返事を送るか 60 秒たつと消える。相手がトーク画面を開いていなければ、何も起きない
       dmUser ? this.post("/v2/bot/chat/loading/start", { chatId: dmUser, loadingSeconds: 60 }) : undefined,
     ])
   }

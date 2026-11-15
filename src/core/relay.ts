@@ -44,10 +44,7 @@ export type Capabilities = {
   text: { max: number; parts: number }
 }
 
-/**
- * receive の結果。acknowledge が true なら、コネクターは受け取りの合図を出す（ADR 0012）。
- * いつ出すかは中核が決め、どう出すかはコネクターが決める
- */
+/** receive の結果。acknowledge なら、コネクターが受け取りの合図を出す（ADR 0012） */
 export type ReceiveResult = GateResult & { acknowledge?: boolean }
 
 /** 中継の HTTP サーバーに追加するルート（Webhook など）。中継が 1 つのサーバーにまとめて開く */
@@ -183,7 +180,7 @@ export class Relay {
     this.record(m)
     this.queue.push(m)
     this.kick()
-    // 合図を出すのは、依頼者が返事を待つメンションだけ。受信モードが「すべて」のルームでも、メンションのない発言には出さない
+    // 受信モードが「すべて」のルームの、メンションのない発言には出さない
     return { ...r, acknowledge: m.mentioned }
   }
 
