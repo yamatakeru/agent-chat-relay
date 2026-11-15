@@ -67,7 +67,7 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
   server.registerTool(
     "download_attachment",
     {
-      description: "発言の添付（画像・ファイル）を取得し、読めるパスを返す。attachments 属性のある発言や、fetch_messages で +Natt と出た発言に使う。",
+      description: "発言の添付（画像・動画・音声・ファイル）を取得し、読めるパスを返す。attachments 属性のある発言や、fetch_messages で +Natt と出た発言に使う。",
       inputSchema: { chat_id: z.string(), message_id: z.string() },
     },
     ({ chat_id, message_id }) =>
