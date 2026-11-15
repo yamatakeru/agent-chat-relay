@@ -71,7 +71,7 @@ export class AccessStore {
       const a = JSON.parse(raw) as Partial<Access>
       return { allowFrom: a.allowFrom ?? [], rooms: a.rooms ?? {}, pending: a.pending ?? {} }
     } catch {
-      // 壊れたファイルは退避して、空の状態から始める。誰の発言も渡さない側に倒す（フェイルクローズ）
+      // 壊れたファイルは退避して、空の状態から始める。誰の発言も渡さない状態で動く（フェイルクローズ）
       renameSync(this.path, `${this.path}.corrupt-${this.now()}`)
       console.error(`relay: ${this.path} が壊れていたため脇へ移しました`)
       return emptyAccess()
