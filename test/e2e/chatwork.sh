@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 中継の e2e（Chatwork の API はモック）。引数：ハーネス名（既定は claude）。
-# 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業場所は .local/e2e/ に作る。
+# 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
 # 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
 set -uo pipefail
 
@@ -65,7 +65,7 @@ echo "== stale request is readable but was not delivered"
 n="$(lines)"; say $GROUP $ALICE "$(mention "このルームで、停止中に送られていた依頼の合言葉を fetch_messages で調べて、一語で答えて")"; waitfor "$n" 200
 
 echo "== file return with approval (DM text)"
-say $GROUP $ALICE "$(mention "作業場所に report.csv を作って a,b と 1 行だけ書き、それをこのルームにファイルで送って")"
+say $GROUP $ALICE "$(mention "作業ディレクトリに report.csv を作って a,b と 1 行だけ書き、それをこのルームにファイルで送って")"
 for _ in $(seq 200); do
   grep -q '"kind":"file"' "$LOG" && break
   id="$(grep -o 'yes [a-km-z]\{5\}' "$LOG" | tail -1 | awk '{print $2}')"

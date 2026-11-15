@@ -4,7 +4,7 @@ status: accepted
 
 # Chatwork の発言は、API のポーリングで受信する
 
-Chatwork の接続部は、Webhook を使わず、REST API を数秒ごとに呼び出して新しい発言を受信します（2026-11-09）。
+Chatwork のコネクターは、Webhook を使わず、REST API を数秒ごとに呼び出して新しい発言を受信します（2026-11-09）。
 
 Chatwork の Webhook には、次の制約があります。
 

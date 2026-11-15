@@ -166,7 +166,7 @@ export class AccessStore {
 
 /**
  * 送信先の制限：登録したルーム（と、ID が「その ID/子」のもの）と、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる。
- * 中核は ID の文字列しか見ない。子が本当にその親の中にあるかは、入れ子の ID を使う接続部が送るときに確かめる（Connector.nestedRooms）
+ * 中核は ID の文字列しか見ない。子が本当にその親の中にあるかは、入れ子の ID を使うコネクターが送るときに確かめる（Connector.nestedRooms）
  */
 export function canSendTo(a: Access, room: string): boolean {
   return registrationOf(room) in a.rooms || a.allowFrom.includes(room)

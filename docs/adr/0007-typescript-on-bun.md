@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-# 中核と接続部は TypeScript で書き、Bun で動かす
+# 中核とコネクターは TypeScript で書き、Bun で動かす
 
 ADR 0002 で Go を選んだ理由は 3 つありました。そのうち、cc-connect 本体と突き合わせやすいことと、本体に移植しやすいことの 2 つは、ADR 0006 で cc-connect の利用をやめたことでなくなりました。残る「単一のバイナリで常駐させやすい」という理由も弱まりました。ハーネスの側で Node か Bun が必要になるからです（`claude-agent-acp` は npm パッケージ、OpenCode は Bun 製）。
 

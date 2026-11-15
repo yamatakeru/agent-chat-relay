@@ -1,7 +1,7 @@
 // agent-chat-relay の入口。scripts/relay.sh から、秘密情報を環境変数に入れた状態で呼ばれる。
 //
 //   serve [harness] [--session-id <id>]
-//                  中継を起動する（チャットサービスの接続部、チャット用ツールの MCP、ハーネス）。
+//                  中継を起動する（チャットサービスのコネクター、チャット用ツールの MCP、ハーネス）。
 //                  harness の既定は RELAY_HARNESS、なければ claude。--session-id で、そのセッションを再開する
 //   pair <code>    ペアリングのコードを承認する（ルームの登録、DM の相手の許可）
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
@@ -20,7 +20,7 @@ import { type HarnessName, parseServeArgs, type ServeArgs } from "./serve-args.t
 import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
 import { initWorkspace } from "./workspace.ts"
 
-/** 接続部の一覧。秘密情報のあるものだけを動かす */
+/** コネクターの一覧。秘密情報のあるものだけを動かす */
 const CONNECTORS: ConnectorFactory[] = [lineFromEnv, chatworkFromEnv, discordFromEnv]
 
 const home = resolve(process.env.RELAY_HOME ?? ".local/relay")
@@ -81,7 +81,7 @@ function harnessConfig(name: HarnessName, cwd: string, mcp: HarnessConfig["mcp"]
               { action: "chat_*", resource: "*", effect: "allow" },
               // 選択肢での質問は中継しない。チャットで尋ねさせる
               { action: "question", resource: "*", effect: "deny" },
-              // 作業場所の外は、読み取りでも尋ねる
+              // 作業ディレクトリの外は、読み取りでも尋ねる
               { action: "external_directory", resource: "*", effect: "ask" },
             ],
           },
@@ -120,7 +120,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const closers: (() => void)[] = [() => void mcp.stop()]
   log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
 
-  // 接続部の受け口（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じ道を 2 つの接続部が出したら起動しない
+  // コネクターの受け口（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じ道を 2 つのコネクターが出したら起動しない
   const routes: Routes = {}
   for (const c of connectors) {
     for (const [path, route] of Object.entries(c.routes ?? {})) {
@@ -136,7 +136,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
       fetch: () => new Response("not found", { status: 404 }),
     })
     closers.push(() => void http.stop())
-    log.info("接続部の受け口を開きました", { url: http.url.href, routes: Object.keys(routes) })
+    log.info("コネクターの受け口を開きました", { url: http.url.href, routes: Object.keys(routes) })
   }
   await Promise.all(connectors.map((c) => c.start()))
   for (const c of connectors) closers.push(() => c.stop())

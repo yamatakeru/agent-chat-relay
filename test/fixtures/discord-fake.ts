@@ -1,5 +1,5 @@
-// discord.js の Client の代わり。接続部が使う形だけを持つ（Gateway のモックは作らない。ADR 0011）。
-// 発言は say で作り、接続部の handleMessage に渡す。Bot の送信は sent に記録する
+// discord.js の Client の代わり。コネクターが使う形だけを持つ（Gateway のモックは作らない。ADR 0011）。
+// 発言は say で作り、コネクターの handleMessage に渡す。Bot の送信は sent に記録する
 
 import { EventEmitter } from "node:events"
 import { ChannelType, type Client, type Interaction, type Message } from "discord.js"
@@ -104,7 +104,7 @@ export function fakeDiscord() {
     },
   })
 
-  /** 人の発言を作る。接続部の handleMessage に渡す */
+  /** 人の発言を作る。コネクターの handleMessage に渡す */
   const say = (ch: ReturnType<typeof channel>, author: string, content: string, extra?: Parameters<typeof makeMessage>[3]) =>
     makeMessage(ch, author, content, extra) as unknown as Message
 

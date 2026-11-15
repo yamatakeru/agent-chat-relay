@@ -8,10 +8,10 @@ import { RotatingFile } from "./log-file.ts"
 export type HarnessConfig = {
   command: string[]
   env?: Record<string, string>
-  /** セッションの作業場所（絶対パス） */
+  /** セッションの作業ディレクトリ（絶対パス） */
   cwd: string
   mcp: { url: string; token: string }
-  /** 再開するセッションの ID。なければ新しく作る。作業場所（cwd）で作ったセッションだけを再開する */
+  /** 再開するセッションの ID。なければ新しく作る。作業ディレクトリ（cwd）で作ったセッションだけを再開する */
   sessionId?: string
   /** session/new・session/resume・session/load の _meta（ハーネス固有の設定。Claude Code の設定の読み込みなど） */
   meta?: Record<string, unknown>
@@ -169,11 +169,11 @@ async function openSession(
 
   const start = caps?.sessionCapabilities?.resume ? "resume" : caps?.loadSession ? "load" : undefined
   if (!start) throw new Error("このハーネスは、セッションの再開（session/resume・session/load）に対応していません")
-  // 作業場所で作ったセッションだけを再開する。一覧で確かめられなければハーネスに任せる
+  // 作業ディレクトリで作ったセッションだけを再開する。一覧で確かめられなければハーネスに任せる
   if (!caps?.sessionCapabilities?.list) {
-    log.info("ハーネスがセッションの一覧に対応していないため、作業場所のセッションかどうかは確かめずに再開します", { sessionId })
+    log.info("ハーネスがセッションの一覧に対応していないため、作業ディレクトリのセッションかどうかは確かめずに再開します", { sessionId })
   } else if (!(await listed(ctx, sessionId, cfg.cwd))) {
-    throw new Error(`作業場所のセッションに ${sessionId} がありません。再開できるのは、中継の作業場所（${cfg.cwd}）で作ったセッションだけです`)
+    throw new Error(`作業ディレクトリのセッションに ${sessionId} がありません。再開できるのは、中継の作業ディレクトリ（${cfg.cwd}）で作ったセッションだけです`)
   }
   try {
     if (start === "resume") return { sessionId, modes: (await ctx.request("session/resume", { sessionId, ...setup })).modes, start }
@@ -188,7 +188,7 @@ async function openSession(
   }
 }
 
-/** 作業場所を cwd にした session/list に、その ID があるか。全ページを読む */
+/** 作業ディレクトリを cwd にした session/list に、その ID があるか。全ページを読む */
 async function listed(ctx: acp.ClientContext, sessionId: string, cwd: string): Promise<boolean> {
   const seen = new Set<string>()
   let cursor: string | undefined

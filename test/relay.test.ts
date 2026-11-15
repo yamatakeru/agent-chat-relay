@@ -188,14 +188,14 @@ describe("relay", () => {
   test("登録していないルームへは送れない", async () => {
     const { relay, conn } = setup()
     await expect(relay.reply("line:C0000000000000000000000000000000f", "x")).rejects.toThrow("登録されていません")
-    // 親/子 の ID を使わない接続部へは、登録したルームの子の形でも送らない
+    // 親/子 の ID を使わないコネクターへは、登録したルームの子の形でも送らない
     await expect(relay.reply(`${ROOM}/x`, "x")).rejects.toThrow("ID の形が違います")
     await relay.reply(ROOM, "ok")
     expect(conn.sent).toEqual([{ room: ROOM, text: "ok" }])
     expect((await relay.fetchMessages(ROOM)).at(-1)).toMatchObject({ fromMe: true, text: "ok" })
   })
 
-  test("送るファイルは、接続部が申告した数と大きさで確かめる", async () => {
+  test("送るファイルは、コネクターが申告した数と大きさで確かめる", async () => {
     access.save({ allowFrom: [], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
     const ws = join(dir, "ws")
     mkdirSync(ws)
@@ -219,7 +219,7 @@ describe("relay", () => {
     expect(text).not.toContain("{sending}")
   })
 
-  test("履歴を読める接続部なら、fetch_messages はそちらを使う", async () => {
+  test("履歴を読めるコネクターなら、fetch_messages はそちらを使う", async () => {
     const { relay, conn } = setup()
     relay.receive(msg({ text: "記録" }))
     expect((await relay.fetchMessages(ROOM)).map((m) => m.text)).toEqual(["記録"])
@@ -228,7 +228,7 @@ describe("relay", () => {
   })
 })
 
-describe("接続部の共通の部分", () => {
+describe("コネクターの共通の部分", () => {
   test("長い本文は、段落の切れ目で分け、入りきらない分は省略を書き添える", () => {
     const para = "あ".repeat(60)
     expect(splitText(`${para}\n\n${para}`, 100, 3)).toEqual([para, para])
@@ -342,7 +342,7 @@ describe("ハーネスの起動と再開", () => {
     expect(logs.find((l) => l.msg === "セッションを開始しました")?.extra).toMatchObject({ sessionId: "new-session", start: "new", mode: "default" })
   })
 
-  test("resume に対応していれば、作業場所の一覧を確かめて session/resume で再開し、会話記録のモードを default に戻す", async () => {
+  test("resume に対応していれば、作業ディレクトリの一覧を確かめて session/resume で再開し、会話記録のモードを default に戻す", async () => {
     const sessions = [
       { id: "other", cwd: dir, mode: "default" },
       { id: "s1", cwd: dir, mode: "acceptEdits" },
@@ -366,7 +366,7 @@ describe("ハーネスの起動と再開", () => {
     // 一覧に対応していないので確かめずに進む。モードは既に default
     expect(methods(requests)).toEqual(["initialize", "session/load", "session/prompt"])
     expect(requests[1]!.params).toMatchObject({ sessionId: "s1", cwd: dir, mcpServers: chatServer, _meta: META })
-    expect(logs.map((l) => l.msg)).toContain("ハーネスがセッションの一覧に対応していないため、作業場所のセッションかどうかは確かめずに再開します")
+    expect(logs.map((l) => l.msg)).toContain("ハーネスがセッションの一覧に対応していないため、作業ディレクトリのセッションかどうかは確かめずに再開します")
     expect(logs.find((l) => l.msg === "セッションを再開しました")?.extra).toMatchObject({ start: "load" })
     // 履歴のツールはログに出さず、ターンの出力には新しい応答だけが入る
     expect(logs.some((l) => l.msg.includes("OLD"))).toBe(false)
@@ -379,11 +379,11 @@ describe("ハーネスの起動と再開", () => {
     expect(methods(requests)).toEqual(["initialize"])
   })
 
-  test("作業場所の一覧にない ID（別の作業場所のセッションを含む）は、再開を試みずに起動を失敗させる", async () => {
+  test("作業ディレクトリの一覧にない ID（別の作業ディレクトリのセッションを含む）は、再開を試みずに起動を失敗させる", async () => {
     const sessions = [{ id: "elsewhere", cwd: "/somewhere/else", mode: "bypassPermissions" }]
     for (const id of ["missing", "elsewhere"]) {
       const { error, requests } = await run({ resume: true, list: true, sessions }, id)
-      expect(error?.message).toContain(`作業場所のセッションに ${id} がありません`)
+      expect(error?.message).toContain(`作業ディレクトリのセッションに ${id} がありません`)
       expect(methods(requests)).toEqual(["initialize", "session/list"])
       rmSync(join(dir, "harness.log"), { force: true })
     }
@@ -459,16 +459,16 @@ describe("line", () => {
 })
 
 describe("返すファイル", () => {
-  test("作業場所の中のファイルだけを送れる", () => {
+  test("作業ディレクトリの中のファイルだけを送れる", () => {
     const ws = join(dir, "ws")
     mkdirSync(join(ws, "out"), { recursive: true })
     writeFileSync(join(ws, "out", "a.png"), "x")
     writeFileSync(join(dir, "secret.txt"), "s")
     symlinkSync(join(dir, "secret.txt"), join(ws, "link.txt"))
     expect(sendablePaths(["out/a.png"], ws)).toEqual([join(ws, "out", "a.png")])
-    expect(() => sendablePaths([join(dir, "secret.txt")], ws)).toThrow("作業場所の外")
-    expect(() => sendablePaths(["../secret.txt"], ws)).toThrow("作業場所の外")
-    expect(() => sendablePaths(["link.txt"], ws)).toThrow("作業場所の外")
+    expect(() => sendablePaths([join(dir, "secret.txt")], ws)).toThrow("作業ディレクトリの外")
+    expect(() => sendablePaths(["../secret.txt"], ws)).toThrow("作業ディレクトリの外")
+    expect(() => sendablePaths(["link.txt"], ws)).toThrow("作業ディレクトリの外")
     expect(() => sendablePaths(["out"], ws)).toThrow("ファイルではありません")
     expect(() => sendablePaths(["none.png"], ws)).toThrow("見つかりません")
     expect(() => sendablePaths(["out/a.png"], undefined)).toThrow("送れません")
@@ -737,7 +737,7 @@ describe("discord", () => {
   })
 })
 
-describe("作業場所", () => {
+describe("作業ディレクトリ", () => {
   test("独立した git リポジトリにする", () => {
     const ws = join(dir, "ws")
     initWorkspace(ws)

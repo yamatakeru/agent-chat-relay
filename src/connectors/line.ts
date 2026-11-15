@@ -1,4 +1,4 @@
-// LINE の接続部。Webhook の受信と、Messaging API での送信を受け持つ。
+// LINE のコネクター。Webhook の受信と、Messaging API での送信を受け持つ。
 
 import { extname, join } from "node:path"
 import { localId } from "../core/access.ts"
@@ -49,7 +49,7 @@ type LineConfig = {
   publicUrl?: string
 }
 
-/** チャネルシークレットとアクセストークンがあれば、接続部を作る */
+/** チャネルシークレットとアクセストークンがあれば、コネクターを作る */
 export function lineFromEnv(env: Record<string, string | undefined>, deps: ConnectorDeps): LineConnector | undefined {
   const channelSecret = env.RELAY_LINE_CHANNEL_SECRET
   const channelToken = env.RELAY_LINE_CHANNEL_TOKEN
@@ -60,7 +60,7 @@ export function lineFromEnv(env: Record<string, string | undefined>, deps: Conne
       channelToken,
       apiBase: env.RELAY_LINE_API_BASE,
       dataApiBase: env.RELAY_LINE_DATA_API_BASE,
-      // 返す画像の公開場所。作業場所の外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
+      // 返す画像の公開場所。作業ディレクトリの外に置き、reply の files で送れる範囲（ADR 0009）や作業物と混ざらないようにする
       media: new MediaStore(join(deps.home, "media")),
       publicUrl: env.RELAY_PUBLIC_URL,
     },

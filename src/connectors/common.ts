@@ -1,4 +1,4 @@
-// 接続部が共通で使う小物。
+// コネクターが共通で使う小物。
 
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -64,7 +64,7 @@ export async function saveDownload(res: Response, dir: string, stem: string, ext
   return path
 }
 
-/** 接続部の API が受け付けるメッセージ ID か（数字だけ）。パスに入れる前に確かめる */
+/** コネクターの API が受け付けるメッセージ ID か（数字だけ）。パスに入れる前に確かめる */
 export function assertNumericId(id: string): void {
   if (!/^\d+$/.test(id)) throw new Error("message_id の形が違います")
 }
