@@ -166,6 +166,21 @@ describe("relay", () => {
     expect(await verdict).toBe("allow")
   })
 
+  test("受け取りの合図は、エージェントに渡すメンションだけに出す（承認の返事・停止中の発言には出さない）", async () => {
+    const { relay, conn } = setup()
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: false, allowFrom: [] } }, pending: {} })
+    relay.attach({ prompt: async () => {} })
+    expect(relay.receive(msg())).toEqual({ action: "deliver", acknowledge: true })
+    // 受信モードが「すべて」のルームの、メンションのない発言
+    expect(relay.receive(msg({ mentioned: false }))).toEqual({ action: "deliver", acknowledge: false })
+    expect(relay.receive(msg({ stale: true }))).toEqual({ action: "record" })
+    const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
+    await Bun.sleep(0)
+    const id = conn.approvals[0]!.id
+    expect(relay.receive(msg({ room: ALICE, isDM: true, text: `yes ${id}` }))).toEqual({ action: "deliver" })
+    expect(await verdict).toBe("allow")
+  })
+
   test("承認者がいなければ拒否する", async () => {
     const { relay } = setup()
     access.save({ allowFrom: [], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
@@ -458,6 +473,67 @@ describe("line", () => {
   })
 })
 
+describe("line の受け取りの合図", () => {
+  const GROUP = ROOM.slice(5)
+  const USER = ALICE.slice(5)
+
+  async function setup(status = 200) {
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    const calls: { path: string; body: Record<string, unknown> }[] = []
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname
+        if (req.method === "POST") calls.push({ path, body: (await req.json()) as Record<string, unknown> })
+        return Response.json(path.includes("/member/") || path.includes("/profile/") ? { displayName: "アリス" } : {}, { status: path.startsWith("/v2/bot/chat/") ? status : 200 })
+      },
+    })
+    const errors: string[] = []
+    const relay = new Relay(access, quiet)
+    relay.attach({ prompt: async () => {} })
+    const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href }, relay, { info: () => {}, error: (m) => void errors.push(m) })
+    const say = (source: { type: "user" | "group"; groupId?: string }, text: string, mention = false) =>
+      line.handleEvent({
+        type: "message",
+        timestamp: 0,
+        source: { ...source, userId: USER },
+        message: { id: String(now++), type: "text", text, markAsReadToken: `read-${text}`, mention: mention ? { mentionees: [{ index: 0, length: 4, isSelf: true }] } : undefined },
+      })
+    return { api, calls, errors, say }
+  }
+
+  test("メンションには既読を付け、1 対 1 のトークではローディングも出す。メンションのない発言には出さない", async () => {
+    const { api, calls, say } = await setup()
+    try {
+      await say({ type: "group", groupId: GROUP }, "@bot 調べて", true)
+      await say({ type: "group", groupId: GROUP }, "雑談")
+      await say({ type: "user" }, "DM です")
+      await Bun.sleep(10)
+      expect(calls).toEqual([
+        { path: "/v2/bot/chat/markAsRead", body: { markAsReadToken: "read-@bot 調べて" } },
+        { path: "/v2/bot/chat/markAsRead", body: { markAsReadToken: "read-DM です" } },
+        { path: "/v2/bot/chat/loading/start", body: { chatId: USER, loadingSeconds: 60 } },
+      ])
+    } finally {
+      void api.stop()
+    }
+  })
+
+  test("合図を出せなくても発言は渡し、同じ失敗は続けてログに書かない", async () => {
+    const { api, errors, say } = await setup(403)
+    try {
+      await say({ type: "group", groupId: GROUP }, "@bot 1", true)
+      await Bun.sleep(10)
+      await say({ type: "group", groupId: GROUP }, "@bot 2", true)
+      await Bun.sleep(10)
+      expect(errors).toEqual(["LINE で受け取りの合図を出せませんでした"])
+    } finally {
+      void api.stop()
+    }
+  })
+})
+
 describe("返すファイル", () => {
   test("作業ディレクトリの中のファイルだけを送れる", () => {
     const ws = join(dir, "ws")
@@ -674,6 +750,8 @@ describe("discord", () => {
     expect(all).toContain('chat_id="discord:c100/200" chat="#開発 › 調査"')
     expect(all).toContain('chat_id="discord:u1"')
     expect(d.typing).toContain("100")
+    // 受け取りの合図（ADR 0012）は、エージェントに渡したメンションにだけ付ける
+    expect(d.sent.filter((s) => s.content === "react:👀")).toHaveLength(5)
     // 渡さない発言も、記録には残る（Discord は履歴を読むので、fetch_messages は Discord から）
     expect((await relay.fetchMessages("discord:c100")).map((m) => m.text)).toContain("@everyone お知らせ")
   })

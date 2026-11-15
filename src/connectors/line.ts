@@ -4,7 +4,7 @@ import { extname, join } from "node:path"
 import { localId } from "../core/access.ts"
 import { schedulePrune } from "../core/retention.ts"
 import { MAX_IMAGE_BYTES, MediaStore } from "./line-media.ts"
-import { assertNumericId, parsePermissionData, permissionData, remember, saveDownload, splitText, truncate, verdictText } from "./common.ts"
+import { acknowledger, assertNumericId, parsePermissionData, permissionData, remember, saveDownload, splitText, truncate, verdictText } from "./common.ts"
 import { ApiClient, ApiError, jsonError, verifySignature } from "./http.ts"
 import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay, Routes } from "../core/relay.ts"
 
@@ -29,6 +29,8 @@ type LineEvent = {
     type: string
     text?: string
     quoteToken?: string
+    /** 既読を付けるためのトークン。期限はない */
+    markAsReadToken?: string
     quotedMessageId?: string
     mention?: { mentionees: Mentionee[] }
     fileName?: string
@@ -90,6 +92,7 @@ export class LineConnector implements Connector {
   private readonly fileNames = new Map<string, string>()
   private publicBase?: string
   private stopPrune?: () => void
+  private readonly acknowledge: ReturnType<typeof acknowledger>
 
   constructor(
     private readonly cfg: LineConfig,
@@ -107,6 +110,7 @@ export class LineConnector implements Connector {
     this.api = client(cfg.apiBase ?? "https://api.line.me")
     this.dataApi = client(cfg.dataApiBase ?? cfg.apiBase ?? "https://api-data.line.me")
     this.publicBase = cfg.publicUrl?.replace(/\/$/, "")
+    this.acknowledge = acknowledger(log, this.label)
     const media = cfg.media
     this.routes = {
       "/line/webhook": { POST: (req) => this.handleWebhook(req) },
@@ -208,7 +212,19 @@ export class LineConnector implements Connector {
       isDM,
       mentioned,
     })
-    if (result.action === "deliver" && isDM) void this.loading(localId(sender))
+    if (result.acknowledge) this.acknowledge(() => this.acknowledgeMessage(msg.markAsReadToken, isDM ? localId(sender) : undefined))
+  }
+
+  /**
+   * 受け取りの合図（ADR 0012）。既読を付け、1 対 1 のトークではローディングも出す。
+   * 既読を API で付けるには、OAM の［チャット］をオンにする（オフだと、LINE が受けた時点で自動で付く）
+   */
+  private async acknowledgeMessage(markAsReadToken: string | undefined, dmUser: string | undefined): Promise<void> {
+    await Promise.all([
+      markAsReadToken ? this.post("/v2/bot/chat/markAsRead", { markAsReadToken }) : undefined,
+      // 表示は、返事を送るか 60 秒たつと消える。相手がトーク画面を開いていなければ、何も起きない
+      dmUser ? this.post("/v2/bot/chat/loading/start", { chatId: dmUser, loadingSeconds: 60 }) : undefined,
+    ])
   }
 
   async send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]> {
@@ -327,10 +343,6 @@ export class LineConnector implements Connector {
     const t = list.pop()
     this.tokens.set(room, list)
     return t?.token
-  }
-
-  private async loading(userId: string): Promise<void> {
-    await this.post("/v2/bot/chat/loading/start", { chatId: userId, loadingSeconds: 60 }).catch(() => {})
   }
 
   private post(path: string, payload: object): Promise<unknown> {

@@ -2,7 +2,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import type { Attachment, Verdict } from "../core/relay.ts"
+import type { Attachment, Log, Verdict } from "../core/relay.ts"
 
 const CACHE_CAP = 1000
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
@@ -73,6 +73,24 @@ export function assertNumericId(id: string): void {
 export function attachmentOnlyText(attachments: Attachment[]): string {
   if (attachments.length === 0) return ""
   return attachments.every((a) => a.type === "image") ? "（画像）" : "（ファイル）"
+}
+
+/**
+ * 受け取りの合図を出す関数を作る（ADR 0012）。合図を出せなくても、発言の処理は止めない。
+ * 失敗はログに書くが、同じ失敗は続けて書かない（権限や設定の誤りでは、発言のたびに同じように失敗する）
+ */
+export function acknowledger(log: Log, label: string): (run: () => Promise<unknown>) => void {
+  let last = ""
+  return (run) => {
+    run().then(
+      () => (last = ""),
+      (err) => {
+        const msg = String(err)
+        if (msg !== last) log.error(`${label} で受け取りの合図を出せませんでした`, { error: msg })
+        last = msg
+      },
+    )
+  }
 }
 
 /** 承認のボタンに載せる値（perm:allow:<ID>・perm:deny:<ID>） */

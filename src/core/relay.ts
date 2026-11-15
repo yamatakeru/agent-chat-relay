@@ -44,6 +44,12 @@ export type Capabilities = {
   text: { max: number; parts: number }
 }
 
+/**
+ * receive の結果。acknowledge が true なら、コネクターは受け取りの合図を出す（ADR 0012）。
+ * いつ出すかは中核が決め、どう出すかはコネクターが決める
+ */
+export type ReceiveResult = GateResult & { acknowledge?: boolean }
+
 /** 中継の HTTP サーバーに追加するルート（Webhook など）。中継が 1 つのサーバーにまとめて開く */
 export type Routes = Bun.Serve.Routes<undefined, string>
 
@@ -157,7 +163,7 @@ export class Relay {
   }
 
   /** コネクターが受けた発言 */
-  receive(m: Incoming): GateResult {
+  receive(m: Incoming): ReceiveResult {
     // 古い依頼の実行、古い承認の返事、ペアリングのコードを出さないよう、許可の判定（gate）を通さない
     if (m.stale) {
       if (!canSendTo(this.access.load(), m.room)) return { action: "drop" }
@@ -177,7 +183,8 @@ export class Relay {
     this.record(m)
     this.queue.push(m)
     this.kick()
-    return r
+    // 合図を出すのは、依頼者が返事を待つメンションだけ。受信モードが「すべて」のルームでも、メンションのない発言には出さない
+    return { ...r, acknowledge: m.mentioned }
   }
 
   joined(room: string): void {

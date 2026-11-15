@@ -144,6 +144,7 @@ export class ChatworkConnector implements Connector {
     const isDM = r.type === "direct"
     if (isDM) this.dmRooms.set(author, r.room_id)
     const parsed = parseBody(m.body, this.me, this.me.mention)
+    // 受け取りの合図は出さない。リアクションの API がなく、既読はほかの人に見えない（ADR 0012）
     this.relay.receive({
       id: m.message_id,
       room: isDM ? userKey(author) : roomKey(r.room_id),
