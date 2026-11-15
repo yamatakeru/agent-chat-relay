@@ -10,7 +10,7 @@ LOG="$E/sent-line-$H.jsonl"
 RLOG="$E/relay-line-$H.log"
 mkdir -p "$E"
 : >"$LOG"
-# 前回の作業ディレクトリが残っていると、承認の要らない結果になる（ファイルがすでにある）ので、作り直す
+# 前回の作業ディレクトリが残っていると、承認が不要な結果になる（ファイルがすでにある）ので、作り直す
 rm -rf "$E/relay-line-$H"
 # モックの Webhook には X-Forwarded-Proto が付かないので、画像の公開 URL は固定で渡す
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-line-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \

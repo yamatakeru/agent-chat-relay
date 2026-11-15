@@ -71,13 +71,13 @@ export class ApiClient {
    * 添付を取得する。url は API の中のパス（/ で始まる）か、保存先の完全な URL。保存先が API の外のホストのこともあるので、
    * https か、API と同じ origin（モック）の URL だけを許す。転送（3xx）は自分でたどる。
    * auth は、認証を付ける範囲。none：付けない（Chatwork の取得用 URL）、first：最初の URL だけ（LINE）、
-   * all：転送先にも（LINE WORKS は、転送先の保存先にも認証が要る）
+   * all：転送先にも（LINE WORKS は、転送先の保存先にも認証が必要）
    */
   async download(url: string, auth: "none" | "first" | "all", timeoutMs = 120_000): Promise<Response> {
     this.checkPaused()
     const signal = AbortSignal.timeout(timeoutMs)
     let target = URL.parse(url.startsWith("/") ? `${this.base}${url}` : url)
-    // 転送は、ふつう 1 回（API → 保存先）。それより多ければ、おかしいものとして止める
+    // 転送は通常 1 回（API → 保存先）。それより多ければ異常とみなして止める
     for (let hop = 0; hop < 3 && target; hop++) {
       if (target.protocol !== "https:" && target.origin !== this.origin) break
       const withAuth = auth === "all" || (auth === "first" && hop === 0)

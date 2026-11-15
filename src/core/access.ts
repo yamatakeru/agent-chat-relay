@@ -58,7 +58,7 @@ export class AccessStore {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** 受信のたびに読み直すので、登録や許可の変更に再起動は要らない */
+  /** 受信のたびに読み直すので、登録や許可の変更に再起動は不要 */
   load(): Access {
     let raw: string
     try {
@@ -71,7 +71,7 @@ export class AccessStore {
       const a = JSON.parse(raw) as Partial<Access>
       return { allowFrom: a.allowFrom ?? [], rooms: a.rooms ?? {}, pending: a.pending ?? {} }
     } catch {
-      // 壊れたファイルは脇へ移して、空から始める。誰の発言も渡さない側に倒れる
+      // 壊れたファイルは退避して、空の状態から始める。誰の発言も渡さない側に倒す（フェイルクローズ）
       renameSync(this.path, `${this.path}.corrupt-${this.now()}`)
       console.error(`relay: ${this.path} が壊れていたため脇へ移しました`)
       return emptyAccess()
@@ -121,7 +121,7 @@ export class AccessStore {
     return r
   }
 
-  /** 管理者が端末で打ったコードを確かめ、登録する。登録したものを返す */
+  /** 管理者が端末で打ったコードを確認し、登録する。登録したものを返す */
   approve(code: string): Pending {
     const a = this.load()
     this.pruneExpired(a)
@@ -166,13 +166,13 @@ export class AccessStore {
 
 /**
  * 送信先の制限：登録したルーム（と、ID が「その ID/子」のもの）と、許可した人の DM にだけ送れる。1 対 1 のトークでは、相手の ID がルームになる。
- * 中核は ID の文字列しか見ない。子が本当にその親の中にあるかは、入れ子の ID を使うコネクターが送るときに確かめる（Connector.nestedRooms）
+ * 中核は ID の文字列しか見ない。子が本当にその親の中にあるかは、入れ子の ID を使うコネクターが送るときに確認する（Connector.nestedRooms）
  */
 export function canSendTo(a: Access, room: string): boolean {
   return registrationOf(room) in a.rooms || a.allowFrom.includes(room)
 }
 
-/** 登録を引くルームの ID。「親/子」（どちらも空でなく、/ は 1 つだけ）の形なら親。ほかの形はそのまま（登録と一致しない） */
+/** 登録を参照するルームの ID。「親/子」（どちらも空でなく、/ は 1 つだけ）の形なら親。ほかの形はそのまま（登録と一致しない） */
 export function registrationOf(room: string): string {
   return /^([^/]+)\/[^/.]+$/.exec(room)?.[1] ?? room
 }

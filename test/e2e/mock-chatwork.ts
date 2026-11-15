@@ -9,7 +9,7 @@ const api = chatworkApi({
   // 長い本文は、記録では先頭だけにする
   onSent: (s) => appendFileSync(log, JSON.stringify({ ...s, body: s.body.slice(0, 300) }) + "\n"),
 })
-// ボブが送る画像（e2e の本文の [download:55] から取る）
+// ボブが送る画像（e2e の本文の [download:55] から取得する）
 api.addFile("55", "photo.png", png(32, 32, [220, 20, 20]))
 // 中継の起動前に届いていた依頼（記録だけされ、エージェントには渡らないはず）
 api.say(7000, 1, "[To:100]AI係さん\n停止中に送った依頼：合言葉は「すずらん」", Math.floor(Date.now() / 1000) - 600)

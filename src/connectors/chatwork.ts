@@ -1,4 +1,4 @@
-// Chatwork のコネクター。API の定期取得で受け、REST API で送る（ADR 0010）。
+// Chatwork のコネクター。API のポーリングで受け、REST API で送る（ADR 0010）。
 // Bot は、専用の Chatwork アカウントの API トークンで発言する。
 
 import { basename, extname } from "node:path"
@@ -10,7 +10,7 @@ import type { Attachment, Capabilities, Connector, ConnectorDeps, Log, Relay } f
 const SERVICE = "chatwork"
 // 本文の上限は 65535 字。返信の記法を付ける分を残す
 const MAX_TEXT = 65000
-// 取得は 1 回ごとに、ルーム一覧 1 回と、更新のあったルームごとに 2 回。回数制限（5 分に 300 回）を送信と分け合うので、2 秒より詰めない
+// 取得は 1 回ごとに、ルーム一覧 1 回と、更新のあったルームごとに 2 回。回数制限（5 分に 300 回）を送信と分け合うので、間隔を 2 秒より短くしない
 const MIN_POLL_MS = 2000
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"])
 
@@ -20,7 +20,7 @@ type CwMessage = { message_id: string; account: { account_id: number; name: stri
 type ChatworkConfig = {
   apiToken: string
   apiBase?: string
-  /** 定期取得の間隔（ミリ秒）。既定は 5 秒 */
+  /** ポーリングの間隔（ミリ秒）。既定は 5 秒 */
   pollMs?: number
 }
 
@@ -50,13 +50,13 @@ export class ChatworkConnector implements Connector {
   private startedAt = 0
   private readonly roomNames = new Map<number, string>()
   /**
-   * ルームごとの、最後に差分を取ったときの last_update_time。last_update_time は秒単位なので、同じ秒のうちに
-   * 後から届いた発言を取りこぼさないよう、同じ時刻でもう一度だけ取る（done が false の間）
+   * ルームごとの、最後に差分を取得したときの last_update_time。last_update_time は秒単位なので、同じ秒のうちに
+   * 後から届いた発言を取りこぼさないよう、同じ時刻でもう一度だけ取得する（done が false の間）
    */
   private readonly fetched = new Map<number, { t: number; done: boolean }>()
   /** DM の相手 → ダイレクトチャットのルーム ID */
   private readonly dmRooms = new Map<number, number>()
-  /** 受け取った発言（ルーム ID-メッセージ ID）→ 送り主と本文。重複の除去、返信の記法、添付の取得に使う */
+  /** 受け取った発言（ルーム ID-メッセージ ID）→ 送信者と本文。重複の除去、返信の記法、添付の取得に使う */
   private readonly messages = new Map<string, { author: number; body: string }>()
   private timer?: Timer
   private lastError = ""
@@ -83,7 +83,7 @@ export class ChatworkConnector implements Connector {
   }
 
   /**
-   * Bot のアカウントを確かめ、定期取得を始める。今あるルームの更新時刻を起点にし、起動時には差分を取りに行かない。
+   * Bot のアカウントを確認し、ポーリングを始める。今あるルームの更新時刻を起点にし、起動時には差分を取得しない。
    * force=0 の差分の起点は Chatwork がトークンごとに覚えているので、停止中の発言は、そのルームの次の差分に含まれて届く
    */
   async start(): Promise<void> {
@@ -119,7 +119,7 @@ export class ChatworkConnector implements Connector {
     )
   }
 
-  /** ルーム一覧で更新のあったルームだけ、前回からの差分を取る */
+  /** ルーム一覧で更新のあったルームだけ、前回からの差分を取得する */
   async poll(): Promise<void> {
     if (this.api.paused) return
     for (const r of await this.listRooms()) {
@@ -198,7 +198,7 @@ export class ChatworkConnector implements Connector {
     const paths: string[] = []
     for (const fid of ids) {
       const file = (await this.api.call("GET", `/rooms/${rid}/files/${fid}?create_download_url=1`)) as { filename: string; download_url?: string }
-      // 取得用の URL は 30 秒で切れる。API トークンは付けない（別のホストへ渡さない）
+      // 取得用の URL の有効期限は 30 秒。API トークンは付けない（別のホストへ渡さない）
       const res = await this.api.download(file.download_url ?? "", "none")
       paths.push(await saveDownload(res, dir, `${this.now()}-${messageId}-${fid}`, extname(file.filename)))
     }

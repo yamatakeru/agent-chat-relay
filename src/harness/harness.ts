@@ -1,5 +1,5 @@
 // ハーネスを ACP で動かす（ADR 0006）。中継が ACP のクライアントになり、ハーネスを子プロセスとして起動する。
-// セッションは 1 つ。チャット用ツールの MCP サーバーを session/new（再開なら session/resume か session/load）で渡し、発言は session/prompt で入れる。
+// セッションは 1 つ。チャット用ツールの MCP サーバーを session/new（再開なら session/resume か session/load）で渡し、発言は session/prompt で渡す。
 
 import * as acp from "@agentclientprotocol/sdk"
 import type { Log, PermissionRequest, Session, Verdict } from "../core/relay.ts"
@@ -31,7 +31,7 @@ export async function startHarness(
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
   log: Log,
 ): Promise<{ session: Session; exited: Promise<number>; stop: () => void }> {
-  // stderr はファイルへ直接つながず、中継が受けて書く。大きさを数えて入れ替えるため
+  // stderr はファイルへ直接つながず、中継が受けて書く。サイズを数えてローテーションするため
   const stderrLog = new RotatingFile(cfg.stderrPath, MAX_STDERR_BYTES)
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
@@ -136,7 +136,7 @@ export async function startHarness(
       proc.kill()
     })
 
-  // stderr を書き終えてから終了を知らせる（異常終了のとき、呼び出し側がログの末尾を読む）
+  // stderr を書き終えてから終了を通知する（異常終了のとき、呼び出し側がログの末尾を読む）
   const exited = Promise.all([proc.exited, stderrDrained.catch(() => {})]).then(([code]) => {
     done.resolve()
     ready.reject(new Error(`ハーネスが終了しました（終了コード ${code}）`))
@@ -169,7 +169,7 @@ async function openSession(
 
   const start = caps?.sessionCapabilities?.resume ? "resume" : caps?.loadSession ? "load" : undefined
   if (!start) throw new Error("このハーネスは、セッションの再開（session/resume・session/load）に対応していません")
-  // 作業ディレクトリで作ったセッションだけを再開する。一覧で確かめられなければハーネスに任せる
+  // 作業ディレクトリで作ったセッションだけを再開する。一覧で確認できなければハーネスに任せる
   if (!caps?.sessionCapabilities?.list) {
     log.info("ハーネスがセッションの一覧に対応していないため、作業ディレクトリのセッションかどうかは確かめずに再開します", { sessionId })
   } else if (!(await listed(ctx, sessionId, cfg.cwd))) {

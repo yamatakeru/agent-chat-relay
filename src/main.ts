@@ -1,4 +1,4 @@
-// agent-chat-relay の入口。scripts/relay.sh から、秘密情報を環境変数に入れた状態で呼ばれる。
+// agent-chat-relay のエントリーポイント。scripts/relay.sh から、秘密情報を環境変数に設定した状態で呼ばれる。
 //
 //   serve [harness] [--session-id <id>]
 //                  中継を起動する（チャットサービスのコネクター、チャット用ツールの MCP、ハーネス）。
@@ -120,7 +120,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const closers: (() => void)[] = [() => void mcp.stop()]
   log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
 
-  // コネクターの受け口（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じ道を 2 つのコネクターが出したら起動しない
+  // コネクターのエンドポイント（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じパスを 2 つのコネクターが出したら起動しない
   const routes: Routes = {}
   for (const c of connectors) {
     for (const [path, route] of Object.entries(c.routes ?? {})) {

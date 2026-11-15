@@ -1,4 +1,4 @@
-// コネクターが共通で使う小物。
+// コネクターが共通で使うユーティリティ。
 
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -9,7 +9,7 @@ const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 const TOO_LARGE = "大きすぎるため取得しません（25MB まで）"
 export const TRUNCATED_NOTE = "\n\n（長すぎるため、ここから先は省略しました）"
 
-/** 入れて、上限を超えたら最初に入れたものから捨てる。プロセスのメモリにだけ置く覚え書き（重複の除去、ID の対応など）に使う */
+/** 追加し、上限を超えたら古いものから捨てる。プロセスのメモリ上にだけ置くキャッシュ（重複の除去、ID の対応など）に使う */
 export function remember(c: Set<string>, key: string): void
 export function remember<V>(c: Map<string, V>, key: string, value: V): void
 export function remember<V>(c: Set<string> | Map<string, V>, key: string, value?: V): void {
@@ -64,7 +64,7 @@ export async function saveDownload(res: Response, dir: string, stem: string, ext
   return path
 }
 
-/** コネクターの API が受け付けるメッセージ ID か（数字だけ）。パスに入れる前に確かめる */
+/** コネクターの API が受け付けるメッセージ ID か（数字だけ）。パスに入れる前に確認する */
 export function assertNumericId(id: string): void {
   if (!/^\d+$/.test(id)) throw new Error("message_id の形が違います")
 }

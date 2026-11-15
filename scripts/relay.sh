@@ -21,7 +21,7 @@ die() { echo "error: $*" >&2; exit 1; }
 
 require_dotenvx() { command -v dotenvx >/dev/null || die "dotenvx が見つかりません（導入方法と、使わずに動かす方法は README.md）"; }
 
-# public リポジトリに誤ってコミットしないよう、.env と .env.keys が git の無視対象か確かめる
+# public リポジトリに誤ってコミットしないよう、.env と .env.keys が git の無視対象か確認する
 ensure_ignored() {
   local f
   for f in "$ENV_FILE" "$KEYS_FILE"; do
@@ -93,7 +93,7 @@ secrets_line() {
   store_value RELAY_LINE_CHANNEL_TOKEN "$token"
 }
 
-# .env を復号して環境変数に入れてから、自分自身を呼び直す。既存の環境変数が優先される
+# .env を復号して環境変数に設定してから、自分自身を呼び直す。既存の環境変数が優先される
 with_env() {
   if [[ -z "${RELAY_ENV_LOADED:-}" && -f "$ENV_FILE" ]]; then
     require_dotenvx
