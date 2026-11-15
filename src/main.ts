@@ -7,7 +7,7 @@
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
 
 import { randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { AccessStore, localId, serviceOf } from "./core/access.ts"
 import { chatworkFromEnv } from "./connectors/chatwork.ts"
@@ -18,6 +18,7 @@ import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { type HarnessName, parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
+import { initWorkspace } from "./workspace.ts"
 
 /** 接続部の一覧。秘密情報のあるものだけを動かす */
 const CONNECTORS: ConnectorFactory[] = [lineFromEnv, chatworkFromEnv, discordFromEnv]
@@ -38,7 +39,7 @@ function harnessConfig(name: HarnessName, cwd: string, mcp: HarnessConfig["mcp"]
       const claude = Bun.which("claude")
       if (!claude) throw new Error("claude が見つかりません")
       return {
-        // Agent SDK に同梱の CLI は入れていない（bunfig.toml）。インストール済みの claude を使う
+        // Agent SDK に同梱の CLI ではなく、インストール済みの claude を使う
         command: [process.execPath, resolve("node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js")],
         env: { CLAUDE_CODE_EXECUTABLE: claude },
         cwd,
@@ -94,11 +95,7 @@ function harnessConfig(name: HarnessName, cwd: string, mcp: HarnessConfig["mcp"]
 
 async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const workspace = join(home, "workspace")
-  if (!existsSync(join(workspace, ".git"))) {
-    // 作業場所を独立した git リポジトリにして、上位（このリポジトリ）の設定や AGENTS.md を拾わせない
-    mkdirSync(workspace, { recursive: true, mode: 0o700 })
-    Bun.spawnSync(["git", "init", "-q", workspace])
-  }
+  initWorkspace(workspace)
   const inbox = join(workspace, ".relay", "inbox")
 
   // 受け取った添付は 7 日で消す（ADR 0005）

@@ -19,7 +19,7 @@ RELAY_HTTP_PORT="${RELAY_HTTP_PORT:-18080}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-require_dotenvx() { command -v dotenvx >/dev/null || die "dotenvx が見つかりません"; }
+require_dotenvx() { command -v dotenvx >/dev/null || die "dotenvx が見つかりません（導入方法と、使わずに動かす方法は README.md）"; }
 
 # public リポジトリに誤ってコミットしないよう、.env と .env.keys が git の無視対象か確かめる
 ensure_ignored() {
@@ -32,24 +32,35 @@ ensure_ignored() {
   done
 }
 
-# 値を .env に書き、そのキーだけをすぐ暗号化する。dotenvx set は値をコマンド引数で受け取るため使わない
+# 値を暗号化して .env に保存する。dotenvx set は値をコマンド引数で受け取るため使わない。
+# 一時ディレクトリで暗号化し、復号できたときだけ .env と入れ替える。失敗しても .env は元のまま
+STORE_TMP=""
+trap '[[ -z "$STORE_TMP" ]] || rm -rf "$STORE_TMP"' EXIT
 store_value() {
-  local key="$1" value="$2"
+  local key="$1" value="$2" tmp_env
   [[ -n "$value" ]] || die "入力が空です"
   [[ "$value" =~ ^[A-Za-z0-9+/=._-]+$ ]] || die "想定外の文字が含まれています（前後の空白など）"
-  touch "$ENV_FILE"
-  sed -i '' "/^$key=/d" "$ENV_FILE"
-  printf "%s='%s'\n" "$key" "$value" >>"$ENV_FILE"
-  if ! dotenvx encrypt -f "$ENV_FILE" -k "$key" >/dev/null 2>&1 \
-    || ! grep -q "^$key='encrypted:" "$ENV_FILE"; then
-    sed -i '' "/^$key=/d" "$ENV_FILE"
-    die "$key の暗号化に失敗したため、保存しませんでした"
+  # dotenvx は鍵の名前をファイル名から決めるので、一時ファイルも同じ名前にする
+  STORE_TMP="$(mktemp -d "$(dirname "$ENV_FILE")/$(basename "$ENV_FILE").update.XXXXXX")"
+  tmp_env="$STORE_TMP/$(basename "$ENV_FILE")"
+  [[ ! -f "$ENV_FILE" ]] || awk -v prefix="$key=" 'index($0, prefix) != 1' "$ENV_FILE" >"$tmp_env"
+  printf "%s='%s'\n" "$key" "$value" >>"$tmp_env"
+  # dotenvx の出力には秘密鍵が含まれることがあるので、画面に出さない
+  if ! dotenvx encrypt -f "$tmp_env" -fk "$KEYS_FILE" -k "$key" >/dev/null 2>&1 \
+    || ! grep -q "^$key='encrypted:" "$tmp_env" \
+    || [[ "$(dotenvx get "$key" --overload --strict -f "$tmp_env" -fk "$KEYS_FILE" 2>/dev/null)" != "$value" ]]; then
+    die "$key の暗号化に失敗したため、保存しませんでした（.env は元のまま）"
   fi
+  mv -f "$tmp_env" "$ENV_FILE"
+  rm -rf "$STORE_TMP"; STORE_TMP=""
 }
 
 cmd_secrets() {
   require_dotenvx
   ensure_ignored
+  umask 077
+  # 環境変数の DOTENV_PUBLIC_KEY などは .env.keys より優先されるので外す
+  unset "${!DOTENV_@}"
   case "${1:-line}" in
     line) secrets_line ;;
     chatwork) secrets_chatwork ;;

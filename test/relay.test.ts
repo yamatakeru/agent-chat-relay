@@ -17,6 +17,7 @@ import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
+import { initWorkspace } from "../src/workspace.ts"
 
 let dir: string
 let access: AccessStore
@@ -733,6 +734,19 @@ describe("discord", () => {
       mentions: { users: new Map([["2", { displayName: "ボブ" }]]), members: null, roles: new Map([["951", { name: "営業" }]]), channels: new Map([["100", { name: "開発" }]]) },
     } as unknown as Parameters<typeof renderContent>[0]
     expect(renderContent(msg, BOT_ID, BOT_ROLE)).toBe("@ボブ と @営業 は #開発 へ <@3>")
+  })
+})
+
+describe("作業場所", () => {
+  test("独立した git リポジトリにする", () => {
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    expect(existsSync(join(ws, ".git"))).toBe(true)
+  })
+
+  test("git init に失敗したら、または git が無ければ起動しない", () => {
+    expect(() => initWorkspace(join(dir, "ws"), "false")).toThrow("起動しません")
+    expect(() => initWorkspace(join(dir, "ws"), "/nonexistent/git")).toThrow("起動しません")
   })
 })
 

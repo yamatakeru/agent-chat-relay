@@ -1,6 +1,6 @@
 # 中継の動かし方
 
-仕様は `docs/relay.md` にある。ここでは、手元の Mac で動かす手順と、確かめる項目を書く。
+仕様は `docs/relay.md` にある。ここでは、手元（macOS か Ubuntu）で動かす手順と、確かめる項目を書く。必要な道具と入れ方は `README.md` にある。
 
 ## LINE 公式アカウントとチャネルの準備（初回だけ）
 
@@ -39,9 +39,10 @@ Messaging API のチャネルは、LINE Developers コンソールで直接は�
 
 ## 用意
 
-- `mise install` と `mise exec -- bun install`。Agent SDK に同梱の Claude CLI（約 320MB）は入れない（`bunfig.toml`）。
-- Claude Code（`claude`）がインストールされ、ログインしていること。中継は、このコマンドを `claude-agent-acp` 経由で動かす。
-- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork`、Discord は `scripts/relay.sh secrets discord` で入力する。1 つだけでも動く。
+- `mise install` と `mise exec -- bun install`。Agent SDK に同梱の Claude CLI（約 300MB）も `node_modules` に入るが、使わない。
+- Claude Code（`claude`）がインストールされ、ログインしていること。中継は、PATH にあるこのコマンドを `claude-agent-acp` 経由で動かす。
+- 秘密情報：LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork`、Discord は `scripts/relay.sh secrets discord` で入力する。1 つだけでも動く。dotenvx が要る。使わないときは、下の表の名前の環境変数で渡す（`README.md`）。
+- 作業場所を独立した git リポジトリにできなければ（git が無いなど）、中継は起動しない。
 
 | 場所 | 中身 |
 |---|---|

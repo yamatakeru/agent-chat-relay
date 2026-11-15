@@ -1,0 +1,28 @@
+# 新しい Ubuntu で、依存の導入・型検査・単体テストを確かめる。e2e は実際のハーネスを使うので入れない
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .local/bun/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: mise exec -- bun install --frozen-lockfile
+      - run: mise exec -- bun run check
+      # dotenvx は任意の道具なので mise.toml には入れず、secrets のテストのためにここで入れる
+      - run: mise exec dotenvx@2.38.2 -- bun test
+        env:
+          RELAY_TEST_REQUIRE_DOTENVX: "1"
