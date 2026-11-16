@@ -152,7 +152,7 @@ export class Relay {
     return INSTRUCTIONS.replace("{sending}", this.sendingGuide())
   }
 
-  /** コネクターによっては使えない操作を、使えるサービスと使えないサービスに分ける（ツールの説明とエラーに書く。#28） */
+  /** コネクターによっては使えない操作を、使えるサービスと使えないサービスに分ける（ツールの説明とエラーに書く。ADR 0013） */
   servicesFor(op: OptionalOperation): { supported: string[]; unsupported: string[] } {
     const r = { supported: [] as string[], unsupported: [] as string[] }
     for (const c of this.connectors.values()) (c[op] ? r.supported : r.unsupported).push(`${c.label}（${c.service}:）`)
