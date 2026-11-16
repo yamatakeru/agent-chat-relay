@@ -538,6 +538,67 @@ describe("line の受け取りの合図", () => {
   })
 })
 
+describe("line で受け取る種類", () => {
+  test("動画・音声は添付に、位置情報・スタンプは本文にする。スタンプで Bot に返信したらメンションとして扱う", async () => {
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    let transcoding = "processing"
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname
+        if (path.endsWith("/content/transcoding")) return Response.json({ status: transcoding })
+        if (path.endsWith("/content")) return new Response("mp4", { headers: { "Content-Type": "video/mp4" } })
+        if (req.method === "GET") return Response.json({ displayName: "アリス" })
+        return Response.json({ sentMessages: [{ id: "900" }] })
+      },
+    })
+    try {
+      const relay = new Relay(access, quiet)
+      const delivered: string[] = []
+      relay.attach({ prompt: async (text: string) => void delivered.push(text) })
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href }, relay, quiet)
+      relay.addConnector(line)
+      const say = (source: { type: "user" | "group"; groupId?: string }, message: Record<string, unknown>) =>
+        line.handleEvent({ type: "message", timestamp: now, source: { ...source, userId: ALICE.slice(5) }, message: { id: String(now++), ...message } as { id: string; type: string } })
+      const dm = { type: "user" as const }
+      const group = { type: "group" as const, groupId: ROOM.slice(5) }
+      await say(dm, { type: "video", contentProvider: { type: "line" }, duration: 1000 })
+      await say(dm, { type: "audio", contentProvider: { type: "line" }, duration: 1000 })
+      await say(dm, { type: "video", contentProvider: { type: "external" } })
+      await say(dm, { type: "location", title: "東京駅", address: "東京都千代田区丸の内", latitude: 35.68, longitude: 139.76 })
+      await say(dm, { type: "sticker", keywords: ["OK", "了解", "a", "b", "c", "d"] })
+      await say(dm, { type: "sticker", text: "よろしく" })
+      await say(dm, { type: "unknown" })
+      expect((await relay.fetchMessages(ALICE)).map((m) => [m.text, m.attachments.map((a) => a.type)])).toEqual([
+        ["（動画）", ["video"]],
+        ["（音声）", ["audio"]],
+        ["（位置情報）東京駅 東京都千代田区丸の内 (35.68, 139.76)", []],
+        ["（スタンプ：OK、了解、a、b、c）", []],
+        ["（スタンプ：よろしく）", []],
+      ])
+
+      // 動画・音声は、LINE 側の変換が済むまで取得しない
+      const video = (await relay.fetchMessages(ALICE))[0]!.id
+      await expect(line.download(ALICE, video, dir)).rejects.toThrow("準備している")
+      transcoding = "failed"
+      await expect(line.download(ALICE, video, dir)).rejects.toThrow("準備に失敗")
+      transcoding = "succeeded"
+      expect((await line.download(ALICE, video, dir))[0]).toEndWith(`${video}.mp4`)
+
+      // グループでは、Bot の発言へのスタンプの返信だけを渡す
+      await line.send(ROOM, "どうぞ")
+      await say(group, { type: "sticker", keywords: ["雑談"] })
+      await say(group, { type: "sticker", keywords: ["了解"], quotedMessageId: "900" })
+      await Bun.sleep(10)
+      expect(delivered.join("\n")).toContain("（スタンプ：了解）")
+      expect(delivered.join("\n")).not.toContain("（スタンプ：雑談）")
+    } finally {
+      void api.stop()
+    }
+  })
+})
+
 describe("返すファイル", () => {
   test("作業ディレクトリの中のファイルだけを送れる", () => {
     const ws = join(dir, "ws")

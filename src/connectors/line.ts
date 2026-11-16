@@ -12,6 +12,7 @@ const SERVICE = "line"
 const REPLY_TOKEN_TTL_MS = 50 * 1000 // Reply トークンの有効期限は 1 分。余裕を見て 50 秒
 const MAX_BUBBLES = 5 // 1 回の送信に入れられるメッセージの数（本文の吹き出しと画像を合わせて）
 const MAX_BUBBLE_UNITS = 5000 // 吹き出し 1 つの最大文字数（UTF-16 の単位）
+const MEDIA_TEXT = { image: "（画像）", video: "（動画）", audio: "（音声）" }
 // 公開 URL に使うホスト名（Webhook の Host ヘッダー）の形。ヘッダーの値をそのまま URL に入れるので絞る
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/
 
@@ -36,9 +37,16 @@ type LineEvent = {
     fileName?: string
     fileSize?: number
     contentProvider?: { type: string }
+    title?: string
+    address?: string
+    latitude?: number
+    longitude?: number
+    keywords?: string[]
   }
   postback?: { data: string }
 }
+
+type LineMessage = NonNullable<LineEvent["message"]>
 
 type LineConfig = {
   channelSecret: string
@@ -90,6 +98,8 @@ export class LineConnector implements Connector {
   private readonly names = new Map<string, string>()
   /** ファイルの元の名前。取得したファイルの拡張子に使う */
   private readonly fileNames = new Map<string, string>()
+  /** 動画と音声の発言。取得の前に、LINE 側の変換が済んだかを確かめる */
+  private readonly transcoding = new Map<string, true>()
   private publicBase?: string
   private stopPrune?: () => void
   private readonly acknowledge: ReturnType<typeof acknowledger>
@@ -177,42 +187,54 @@ export class LineConnector implements Connector {
     const isDM = ev.source.type === "user"
     if (msg.quoteToken) remember(this.quoteTokens, msg.id, msg.quoteToken)
 
-    let text = ""
-    const attachments: Attachment[] = []
-    let mentioned = isDM
-    switch (msg.type) {
-      case "text": {
-        const mentionees = msg.mention?.mentionees ?? []
-        mentioned ||= mentionees.some((m) => m.isSelf) || (msg.quotedMessageId !== undefined && this.sentIds.has(msg.quotedMessageId))
-        text = stripSelfMentions(msg.text ?? "", mentionees)
-        break
-      }
-      case "image":
-        // 外部の URL にある画像（contentProvider が line 以外）は、LINE から取得できない
-        if (msg.contentProvider?.type !== "line") return
-        attachments.push({ name: `image-${msg.id}`, type: "image" })
-        text = "（画像）"
-        break
-      case "file":
-        if (msg.fileName) remember(this.fileNames, msg.id, msg.fileName)
-        attachments.push({ name: msg.fileName ?? `file-${msg.id}`, type: "file", size: msg.fileSize })
-        text = "（ファイル）"
-        break
-      default:
-        return
-    }
+    const content = this.content(msg)
+    if (!content) return
     const result = this.relay.receive({
       id: msg.id,
       room,
       sender,
       senderName: await this.memberName(ev.source).catch(() => undefined),
-      text,
+      text: content.text,
       ts: ev.timestamp,
-      attachments,
+      attachments: content.attachments,
       isDM,
-      mentioned,
+      mentioned: isDM || content.mentioned,
     })
     if (result.acknowledge) this.acknowledge(() => this.acknowledgeMessage(msg.markAsReadToken, isDM ? localId(sender) : undefined))
+  }
+
+  /** 発言の本文・添付と、Bot へのメンションか。扱わない種類なら undefined */
+  private content(msg: LineMessage): { text: string; attachments: Attachment[]; mentioned: boolean } | undefined {
+    switch (msg.type) {
+      case "text": {
+        const mentionees = msg.mention?.mentionees ?? []
+        return { text: stripSelfMentions(msg.text ?? "", mentionees), attachments: [], mentioned: mentionees.some((m) => m.isSelf) || this.quotesMe(msg) }
+      }
+      case "image":
+      case "video":
+      case "audio":
+        // 外部の URL にあるもの（contentProvider が line 以外）は、LINE から取得できない
+        if (msg.contentProvider?.type !== "line") return undefined
+        if (msg.type !== "image") remember(this.transcoding, msg.id, true)
+        return { text: MEDIA_TEXT[msg.type], attachments: [{ name: `${msg.type}-${msg.id}`, type: msg.type }], mentioned: false }
+      case "file":
+        if (msg.fileName) remember(this.fileNames, msg.id, msg.fileName)
+        return { text: "（ファイル）", attachments: [{ name: msg.fileName ?? `file-${msg.id}`, type: "file", size: msg.fileSize }], mentioned: false }
+      case "location":
+        return { text: `（位置情報）${[msg.title, msg.address].filter(Boolean).join(" ")} (${msg.latitude}, ${msg.longitude})`, attachments: [], mentioned: false }
+      case "sticker": {
+        // text はメッセージスタンプに入力した文字。キーワードは最大 15 個あるので、先頭だけを書く
+        const label = msg.text || (msg.keywords ?? []).slice(0, 5).join("、")
+        return { text: label ? `（スタンプ：${label}）` : "（スタンプ）", attachments: [], mentioned: this.quotesMe(msg) }
+      }
+      default:
+        return undefined
+    }
+  }
+
+  /** Bot の発言への返信か（メンションとして扱う） */
+  private quotesMe(msg: LineMessage): boolean {
+    return msg.quotedMessageId !== undefined && this.sentIds.has(msg.quotedMessageId)
   }
 
   /** 受け取りの合図（ADR 0012）。既読は、OAM の［チャット］がオンでないと API で付けられない */
@@ -263,6 +285,11 @@ export class LineConnector implements Connector {
 
   async download(_room: string, messageId: string, dir: string): Promise<string[]> {
     assertNumericId(messageId)
+    if (this.transcoding.has(messageId)) {
+      const { status } = (await this.dataApi.call("GET", `/v2/bot/message/${messageId}/content/transcoding`)) as { status: string }
+      if (status === "processing") throw new Error("LINE で動画・音声を準備しているところです。しばらくしてから取得してください")
+      if (status !== "succeeded") throw new Error("LINE で動画・音声の準備に失敗したため、取得できません")
+    }
     const res = await this.dataApi.download(`/v2/bot/message/${messageId}/content`, "first")
     // 元の名前の拡張子が使えなければ（記号だけなど）、Content-Type から決める
     const named = extname(this.fileNames.get(messageId) ?? "").replace(/[^.a-zA-Z0-9]/g, "")
@@ -367,7 +394,17 @@ export function stripSelfMentions(text: string, mentionees: Mentionee[]): string
 }
 
 
+const EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "video/mp4": ".mp4",
+  "audio/x-m4a": ".m4a",
+  "audio/mp4": ".m4a",
+  "application/pdf": ".pdf",
+  "text/plain": ".txt",
+}
+
 function extension(contentType: string): string {
-  const t = contentType.split(";")[0]!.trim()
-  return { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "application/pdf": ".pdf", "text/plain": ".txt" }[t] ?? ".bin"
+  return EXTENSIONS[contentType.split(";")[0]!.trim()] ?? ".bin"
 }
