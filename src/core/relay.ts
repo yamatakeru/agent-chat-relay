@@ -290,6 +290,8 @@ export class Relay {
 
   /** 答えを受け付けたあとに呼ぶ。答えていない束が残っていれば、いちばん古い束をその人へ出し直す */
   remindPending(user: string): void {
+    // 答えてから呼ばれるまでのあいだに、許可リストから外れたかもしれない
+    if (!this.access.load().allowFrom.includes(user)) return
     const pending = [...this.batches.values()]
     const oldest = pending[0]
     if (!oldest) return

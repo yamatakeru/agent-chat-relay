@@ -180,8 +180,11 @@ export class LineConnector implements Connector {
       const p = parsePermissionData(ev.postback?.data ?? "")
       if (!p || !sender) return
       const ok = this.relay.answer(sender, p.id, p.verdict)
-      await this.notice(room, verdictText(ok, p.verdict))
-      if (ok) this.relay.remindPending(sender)
+      try {
+        await this.notice(room, verdictText(ok, p.verdict))
+      } finally {
+        if (ok) this.relay.remindPending(sender)
+      }
       return
     }
     const msg = ev.message
