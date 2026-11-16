@@ -250,6 +250,11 @@ describe("relay", () => {
     // 文字で束全体に「常に許可」と答えると、示されていない依頼には今回だけの許可で答える
     expect(relay.answer(ALICE, b.id, "always")).toBe(true)
     expect(await Promise.all(mixed)).toEqual(["always", "allow"])
+
+    // 範囲は省略せずに見せる。長すぎれば「常に許可」を出さない
+    void relay.requestPermission({ title: "c", input: "", always: "x".repeat(201) })
+    await Bun.sleep(5)
+    expect(conn.approvals.at(-1)).toMatchObject({ always: false, text: expect.not.stringContaining("always") })
   })
 
   test("「常に許可」の選択肢は、モードの切り替えとファイルの編集には示さない。複数あれば先頭", () => {

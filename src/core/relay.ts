@@ -113,6 +113,8 @@ const PERMISSION_TIMEOUT_MS = 30 * 60 * 1000
 const BATCHING = { quietMs: 1000, maxMs: 3000 }
 /** 1 つの束に入れる依頼の数。文面が Discord の上限（2,000 字）に収まるようにする */
 const MAX_BATCH = 5
+/** 「常に許可」の範囲は省略せずに見せる。これより長ければ、「常に許可」を出さない */
+const MAX_ALWAYS_SCOPE = 200
 const RECORD_LIMIT = 200
 
 const INSTRUCTIONS = [
@@ -224,7 +226,8 @@ export class Relay {
     return new Promise<Verdict>((resolve) => {
       // 同時に届いた依頼は、1 通の束にまとめて送る（ADR 0014）
       const b = this.collecting ?? this.openBatch()
-      b.items.push({ id: this.newPermissionId(), req, resolve })
+      const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
+      b.items.push({ id: this.newPermissionId(), req: { ...req, always }, resolve })
       clearTimeout(b.flush)
       if (b.items.length >= MAX_BATCH) return this.sendBatch(b)
       const wait = Math.min(this.batching.quietMs, b.opened + this.batching.maxMs - Date.now())
@@ -492,14 +495,14 @@ function describeAttachment(a: Attachment): string {
 function approvalText(b: Batch): string {
   if (b.items.length === 1) {
     const { req } = b.items[0]!
-    const always = req.always ? [`常に許可：always ${b.id}（${truncate(req.always, 100)}）`] : []
+    const always = req.always ? [`常に許可：always ${b.id}（${req.always}）`] : []
     return [`🔐 実行の承認：${req.title}`, "", truncate(req.input, 1500), "", `許可：yes ${b.id}`, ...always, `拒否：no ${b.id}`].join("\n")
   }
   const items = b.items.map((i, n) =>
     [
       `${n + 1}. ${truncate(i.req.title, 100)}`,
       truncate(i.req.input, 200),
-      ...(i.req.always ? [`常に許可の範囲：${truncate(i.req.always, 100)}`] : []),
+      ...(i.req.always ? [`常に許可の範囲：${i.req.always}`] : []),
       `（この依頼だけ：yes ${i.id}・${i.req.always ? `always ${i.id}・` : ""}no ${i.id}）`,
     ].join("\n"),
   )
