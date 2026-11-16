@@ -26,6 +26,8 @@ let dir: string
 let access: AccessStore
 let now = 1_000_000
 const quiet = { info: () => {}, error: () => {} }
+/** 承認依頼の束を待たずに送る */
+const NO_WAIT = { quietMs: 0, maxMs: 0 }
 
 beforeEach(() => {
   // /tmp は使わない（AGENTS.md）
@@ -120,7 +122,7 @@ describe("access", () => {
 describe("relay", () => {
   function setup() {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, quiet)
+    const relay = new Relay(access, quiet, undefined, NO_WAIT)
     const conn = new FakeConnector()
     relay.addConnector(conn)
     return { relay, conn }
@@ -160,7 +162,7 @@ describe("relay", () => {
   test("実行承認は承認者の DM へ送り、その人の返事だけを受け付ける", async () => {
     const { relay, conn } = setup()
     const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
-    await Bun.sleep(0)
+    await Bun.sleep(5)
     expect(conn.approvals).toHaveLength(1)
     const id = conn.approvals[0]!.id
     expect(relay.answer(BOB, id, "allow")).toBe(false)
@@ -178,10 +180,56 @@ describe("relay", () => {
     expect(relay.receive(msg({ mentioned: false }))).toEqual({ action: "deliver", acknowledge: false })
     expect(relay.receive(msg({ stale: true }))).toEqual({ action: "record" })
     const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
-    await Bun.sleep(0)
+    await Bun.sleep(5)
     const id = conn.approvals[0]!.id
     expect(relay.receive(msg({ room: ALICE, isDM: true, text: `yes ${id}` }))).toEqual({ action: "deliver" })
     expect(await verdict).toBe("allow")
+  })
+
+  test("同時に届いた承認の依頼は 1 通の束にまとめ、束の ID で全部に、依頼の ID で 1 つに答えられる。答えたら、残りを出し直す", async () => {
+    access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
+    const relay = new Relay(access, quiet, undefined, { quietMs: 20, maxMs: 200 })
+    const conn = new FakeConnector()
+    relay.addConnector(conn)
+    const verdicts = ["a", "b", "c"].map((t) => relay.requestPermission({ title: t, input: t }))
+    await Bun.sleep(60)
+    expect(conn.approvals).toHaveLength(1)
+    const [first] = conn.approvals
+    expect(first!.text).toContain("実行の承認（3 件）")
+    const ids = [...first!.text.matchAll(/この依頼だけ：yes ([a-km-z]{5})/g)].map((m) => m[1]!)
+    expect(ids).toHaveLength(3)
+
+    // あとから届いた依頼は、別の束にする
+    const later = relay.requestPermission({ title: "d", input: "d" })
+    await Bun.sleep(60)
+    expect(conn.approvals).toHaveLength(2)
+
+    // 依頼の ID で 1 つだけ答えると、いちばん古い束の残りを出し直す
+    relay.receive(msg({ room: ALICE, sender: ALICE, isDM: true, text: `no ${ids[0]}` }))
+    expect(await verdicts[0]).toBe("deny")
+    await Bun.sleep(5)
+    expect(conn.approvals).toHaveLength(3)
+    expect(conn.approvals[2]!.text).toContain("残り 3 件")
+    expect(conn.approvals[2]!.id).toBe(first!.id)
+    expect(conn.approvals[2]!.text).not.toContain(ids[0])
+
+    // 束の ID で答えると、束に残っている依頼すべてに答える。あとの束には及ばない
+    expect(relay.answer(ALICE, first!.id, "allow")).toBe(true)
+    expect(await Promise.all(verdicts.slice(1))).toEqual(["allow", "allow"])
+    expect(relay.answer(ALICE, first!.id, "allow")).toBe(false)
+    expect(relay.answer(ALICE, conn.approvals[1]!.id, "deny")).toBe(true)
+    expect(await later).toBe("deny")
+  })
+
+  test("束に入れる依頼は 5 つまで。最初の依頼から maxMs たてば、続いていても送る", async () => {
+    access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
+    const relay = new Relay(access, quiet, undefined, { quietMs: 10_000, maxMs: 50 })
+    const conn = new FakeConnector()
+    relay.addConnector(conn)
+    for (let i = 0; i < 6; i++) void relay.requestPermission({ title: `t${i}`, input: "" })
+    expect(conn.approvals.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（5 件）"])
+    await Bun.sleep(150)
+    expect(conn.approvals.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（5 件）", "🔐 実行の承認：t5"])
   })
 
   test("承認者がいなければ拒否する", async () => {
@@ -823,7 +871,7 @@ describe("discord", () => {
   async function setup() {
     const d = fakeDiscord()
     access.save({ allowFrom: [ALICE_D], rooms: { "discord:c100": { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, quiet, dir)
+    const relay = new Relay(access, quiet, dir, NO_WAIT)
     const prompts: string[] = []
     relay.attach({ prompt: async (t) => void prompts.push(t) })
     const dc = new DiscordConnector({ token: "t" }, relay, quiet, d.client, () => 1_000_000)
@@ -885,7 +933,7 @@ describe("discord", () => {
   test("承認の依頼はボタン付きで DM に送り、許可リストの人の押下だけを受け付ける", async () => {
     const { d, relay, dc: conn } = await setup()
     const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
-    await Bun.sleep(0)
+    await Bun.sleep(5)
     const req = d.sent.at(-1)!
     expect(req.channel).toBe("dm-1")
     expect(req.components).toHaveLength(1)

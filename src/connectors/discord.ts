@@ -137,6 +137,7 @@ export class DiscordConnector implements Connector {
     // ボタンを外して結果を追記する。同じ依頼に二度答えられないようにし、履歴にも残す。上限を超えないよう、元の文面を短くする
     const suffix = `\n\n${verdictText(true, p.verdict)}`
     await i.update({ content: truncate(i.message.content, this.capabilities.text.max - suffix.length) + suffix, components: [] })
+    this.relay.remindPending(userKey(i.user.id))
   }
 
   async send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]> {
