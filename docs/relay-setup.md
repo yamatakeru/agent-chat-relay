@@ -76,6 +76,34 @@ Quick Tunnel の URL は、トンネルを起動し直すたびに変わりま�
 
 Chatwork と Discord だけを使う場合は、`scripts/relay.sh serve` だけで動きます（トンネルは不要です）。
 
+## 中継を分けて動かす
+
+登録したすべてのルームの発言は 1 つのセッションに入るので、互いを信頼しない集団どうしで 1 つの中継を共有しないでください（[docs/relay.md](relay.md#構成)）。集団ごとに Bot を用意し、次の環境変数を変えて、中継を別に起動します。`serve` だけでなく、`secrets`・`pair`・`access`・`line-tunnel` も、同じ値を付けて実行してください。
+
+| 環境変数 | 既定値 | 分ける理由 |
+|---|---|---|
+| `RELAY_ENV_FILE` | リポジトリ直下の `.env` | Bot の秘密情報を分ける。復号鍵は同じディレクトリの `.env.keys` になる。どちらも git の無視対象の場所に置く（例：`.local/relay-b/.env`） |
+| `RELAY_HOME` | `.local/relay` | ルームの登録、許可リスト、作業ディレクトリ、ログを分ける |
+| `RELAY_HTTP_PORT` | `18080` | Webhook と画像の配信のポートが重ならないようにする |
+| `RELAY_MCP_PORT` | `18090` | チャット用ツールの MCP サーバーのポートが重ならないようにする |
+
+例：
+
+```sh
+export RELAY_ENV_FILE=.local/relay-b/.env RELAY_HOME=.local/relay-b RELAY_HTTP_PORT=18081 RELAY_MCP_PORT=18091
+scripts/relay.sh secrets discord
+scripts/relay.sh serve
+```
+
+ほかに、次の環境変数で動きを変えられます。
+
+| 環境変数 | 内容 |
+|---|---|
+| `RELAY_HARNESS` | `serve` でハーネスを省略したときのハーネス（既定は `claude`） |
+| `RELAY_OPENCODE_MODEL` | OpenCode で使うモデル（省略すると OpenCode の設定に従う） |
+| `RELAY_CHATWORK_POLL_SEC` | Chatwork の API をポーリングする間隔（秒。既定は 5、最小は 2） |
+| `RELAY_PUBLIC_URL` | LINE に返す画像を公開する URL を固定する（省略すると、届いた Webhook のホスト名から決める） |
+
 ## ルームと承認者の登録（ペアリング）
 
 1. Bot に 1 対 1 でメッセージを送ります。コードが返ってくるので、端末で `scripts/relay.sh pair <コード>` を実行します。これで自分が許可リストに追加され、実行承認の依頼を受け取れるようになります。
