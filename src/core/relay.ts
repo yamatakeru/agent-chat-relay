@@ -44,6 +44,9 @@ export type Capabilities = {
   text: { max: number; parts: number }
 }
 
+/** コネクターによっては使えない操作（Connector の省略できるメソッド） */
+export type OptionalOperation = "react" | "edit" | "history"
+
 /** receive の結果。acknowledge なら、コネクターが受け取りの合図を出す（ADR 0012） */
 export type ReceiveResult = GateResult & { acknowledge?: boolean }
 
@@ -149,6 +152,13 @@ export class Relay {
     return INSTRUCTIONS.replace("{sending}", this.sendingGuide())
   }
 
+  /** コネクターによっては使えない操作を、使えるサービスと使えないサービスに分ける（ツールの説明とエラーに書く。#28） */
+  servicesFor(op: OptionalOperation): { supported: string[]; unsupported: string[] } {
+    const r = { supported: [] as string[], unsupported: [] as string[] }
+    for (const c of this.connectors.values()) (c[op] ? r.supported : r.unsupported).push(`${c.label}（${c.service}:）`)
+    return r
+  }
+
   /** サービスごとの、送れるファイルと本文の長さ */
   sendingGuide(): string {
     return [...this.connectors.values()].map((c) => `- ${c.label}（${c.service}:）：${describeCapabilities(c.capabilities)}`).join("\n")
@@ -252,13 +262,13 @@ export class Relay {
 
   async react(room: string, messageId: string, emoji: string): Promise<void> {
     const c = this.allowedConnector(room)
-    if (!c.react) throw new Error(`${c.label} ではリアクションを付けられません`)
+    if (!c.react) throw this.unsupported(c, "react", "リアクションを付けられません", "reply で伝えてください")
     await c.react(room, messageId, emoji)
   }
 
   async edit(room: string, messageId: string, text: string): Promise<void> {
     const c = this.allowedConnector(room)
-    if (!c.edit) throw new Error(`${c.label} では送った発言を編集できません`)
+    if (!c.edit) throw this.unsupported(c, "edit", "送った発言を編集できません", "新しく reply してください")
     await c.edit(room, messageId, text)
   }
 
@@ -339,6 +349,11 @@ export class Relay {
 
   private roomName(room: string): Promise<string | undefined> {
     return this.connector(room)?.roomName(room).catch(() => undefined) ?? Promise.resolve(undefined)
+  }
+
+  private unsupported(c: Connector, op: OptionalOperation, what: string, instead: string): Error {
+    const { supported } = this.servicesFor(op)
+    return new Error(`${c.label} では${what}${supported.length > 0 ? `（使えるのは ${supported.join("、")}）` : ""}。${instead}`)
   }
 
   private allowedConnector(room: string): Connector {

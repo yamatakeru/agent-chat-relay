@@ -21,7 +21,7 @@ async function run(name: string, op: () => Promise<string>): Promise<ToolResult>
   }
 }
 
-function buildTools(relay: Relay, inboxDir: string): McpServer {
+export function buildTools(relay: Relay, inboxDir: string): McpServer {
   const server = new McpServer({ name: "chat", version: "0.1.0" }, { instructions: relay.instructions() })
 
   server.registerTool(
@@ -46,7 +46,7 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
   server.registerTool(
     "fetch_messages",
     {
-      description: "ルームの最近の発言を、古い順に取得する。Bot に向けられていない発言も含む。サービスによっては、中継が起動してからの分だけ。",
+      description: `ルームの最近の発言を、古い順に取得する。Bot に向けられていない発言も含む。${historyNote(relay)}`,
       inputSchema: { chat_id: z.string(), limit: z.number().int().optional().describe("最大件数（既定 20、最大 100）") },
     },
     ({ chat_id, limit }) =>
@@ -83,30 +83,47 @@ function buildTools(relay: Relay, inboxDir: string): McpServer {
     () => run("list_rooms", async () => JSON.stringify(await relay.listRooms(), null, 2)),
   )
 
-  server.registerTool(
-    "react",
-    { description: "発言に絵文字のリアクションを付ける（対応していないチャットサービスもある）。", inputSchema: { chat_id: z.string(), message_id: z.string(), emoji: z.string() } },
-    ({ chat_id, message_id, emoji }) =>
-      run("react", async () => {
-        await relay.react(chat_id, message_id, emoji)
-        return "reacted"
-      }),
-  )
+  // 使えるサービスがなければ、ツールを出さない
+  const react = relay.servicesFor("react")
+  if (react.supported.length > 0) {
+    server.registerTool(
+      "react",
+      { description: `発言に絵文字のリアクションを付ける。${onlyIn(react)}`, inputSchema: { chat_id: z.string(), message_id: z.string(), emoji: z.string() } },
+      ({ chat_id, message_id, emoji }) =>
+        run("react", async () => {
+          await relay.react(chat_id, message_id, emoji)
+          return "reacted"
+        }),
+    )
+  }
 
-  server.registerTool(
-    "edit_message",
-    {
-      description: "Bot が送った発言を編集する（途中経過の更新などに。対応していないチャットサービスもある）。編集では通知が鳴らないので、作業が終わったら新しく reply する。",
-      inputSchema: { chat_id: z.string(), message_id: z.string(), text: z.string() },
-    },
-    ({ chat_id, message_id, text }) =>
-      run("edit_message", async () => {
-        await relay.edit(chat_id, message_id, text)
-        return "edited"
-      }),
-  )
+  const edit = relay.servicesFor("edit")
+  if (edit.supported.length > 0) {
+    server.registerTool(
+      "edit_message",
+      {
+        description: `Bot が送った発言を編集する（途中経過の更新などに）。${onlyIn(edit)}編集では通知が鳴らないので、作業が終わったら新しく reply する。`,
+        inputSchema: { chat_id: z.string(), message_id: z.string(), text: z.string() },
+      },
+      ({ chat_id, message_id, text }) =>
+        run("edit_message", async () => {
+          await relay.edit(chat_id, message_id, text)
+          return "edited"
+        }),
+    )
+  }
 
   return server
+}
+
+/** 使えないサービスがあるときだけ、使えるサービスを書く */
+function onlyIn(s: { supported: string[]; unsupported: string[] }): string {
+  return s.unsupported.length > 0 ? `使えるのは ${s.supported.join("、")} のルームだけ。` : ""
+}
+
+function historyNote(relay: Relay): string {
+  const { unsupported } = relay.servicesFor("history")
+  return unsupported.length > 0 ? `${unsupported.join("、")} では、中継が起動してからの分だけ。` : ""
 }
 
 /** /mcp のエンドポイント。リクエストごとにツールの一式を作る（状態を持たない形） */
