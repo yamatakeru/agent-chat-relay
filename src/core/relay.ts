@@ -240,10 +240,10 @@ export class Relay {
     // 依頼が 1 つなら、その依頼の ID をそのまま束の ID にする
     b.id = b.items.length === 1 ? b.items[0]!.id : this.newPermissionId()
     this.batches.set(b.id, b)
-    for (const user of this.access.load().allowFrom) this.sendApproval(user, b, "")
+    for (const user of this.access.load().allowFrom) this.sendBatchTo(user, b)
   }
 
-  private sendApproval(user: string, b: Batch, lead: string): void {
+  private sendBatchTo(user: string, b: Batch, lead = ""): void {
     this.connector(user)
       ?.sendApproval(user, lead + approvalText(b), b.id)
       .catch((err) => this.log.error("承認の依頼を送れませんでした", { user, error: String(err) }))
@@ -296,7 +296,7 @@ export class Relay {
     const oldest = pending[0]
     if (!oldest) return
     const left = pending.reduce((n, b) => n + b.items.length, 0)
-    this.sendApproval(user, oldest, `答えていない依頼が残っています（残り ${left} 件）\n\n`)
+    this.sendBatchTo(user, oldest, `答えていない依頼が残っています（残り ${left} 件）\n\n`)
   }
 
   // ---- チャット用ツール（MCP）から呼ばれる操作 ----
