@@ -213,4 +213,3 @@ export function alwaysOption(kind: acp.ToolKind | null | undefined, options: acp
   if (kind === "switch_mode" || kind === "edit") return undefined
   return options.find((o) => o.kind === "allow_always")
 }
-
