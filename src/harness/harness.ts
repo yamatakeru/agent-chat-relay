@@ -77,10 +77,9 @@ export async function startHarness(
       const tc = params.toolCall
       const title = tc.title ?? tc.kind ?? "ツールの実行"
       const input = tc.rawInput === undefined ? "" : JSON.stringify(tc.rawInput, null, 2)
-      const verdict = await onPermission({ title, input })
-      // 「常に許可」は選ばない。毎回、承認者に尋ねる
-      const kind = verdict === "allow" ? "allow_once" : "reject_once"
-      const option = params.options.find((o) => o.kind === kind)
+      const always = alwaysOption(tc.kind, params.options)
+      const verdict = await onPermission({ title, input, always: always?.name })
+      const option = verdict === "always" && always ? always : params.options.find((o) => o.kind === (verdict === "deny" ? "reject_once" : "allow_once"))
       log.info(`実行承認：${verdict}`, { tool: title })
       if (!option) return { outcome: { outcome: "cancelled" } }
       return { outcome: { outcome: "selected", optionId: option.optionId } }
@@ -204,4 +203,13 @@ async function listed(ctx: acp.ClientContext, sessionId: string, cwd: string): P
 
 export function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
   return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|DOTENV_)/.test(k)))
+}
+
+/**
+ * 承認者に示す「常に許可」の選択肢（ADR 0015）。複数あれば先頭の 1 つ。
+ * モードの切り替え（Claude Code では計画の承認から auto などに移る）と、ファイルの編集（セッションのあいだ編集をすべて許す）には示さない
+ */
+export function alwaysOption(kind: acp.ToolKind | null | undefined, options: acp.PermissionOption[]): acp.PermissionOption | undefined {
+  if (kind === "switch_mode" || kind === "edit") return undefined
+  return options.find((o) => o.kind === "allow_always")
 }

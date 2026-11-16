@@ -269,10 +269,11 @@ export class LineConnector implements Connector {
     return { original: `${this.publicBase}/media/${original}`, preview: `${this.publicBase}/media/${preview}` }
   }
 
-  async sendApproval(user: string, text: string, requestId: string): Promise<void> {
+  async sendApproval(user: string, text: string, requestId: string, opts?: { always?: boolean }): Promise<void> {
     // 承認者の DM へ Push で送る。ボタンでも、yes/no の文字でも答えられる
     const items = [
       { label: "許可", data: permissionData("allow", requestId) },
+      ...(opts?.always ? [{ label: "常に許可", data: permissionData("always", requestId) }] : []),
       { label: "拒否", data: permissionData("deny", requestId) },
     ].map((b) => ({ type: "action", action: { type: "postback", label: b.label, data: b.data, displayText: b.label } }))
     await this.post("/v2/bot/message/push", {
