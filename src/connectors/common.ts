@@ -95,12 +95,12 @@ export const permissionData = (verdict: Verdict, requestId: string) => `perm:${v
 
 /** ボタンの値から、答えと依頼の ID を読む。形が違えば undefined */
 export function parsePermissionData(data: string): { verdict: Verdict; id: string } | undefined {
-  const m = /^perm:(allow|deny):([a-km-z]{5})$/.exec(data)
+  const m = /^perm:(allow|always|deny):([a-km-z]{5})$/.exec(data)
   return m ? { verdict: m[1] as Verdict, id: m[2]! } : undefined
 }
 
 /** ボタンで答えたあとに見せる文言 */
 export function verdictText(ok: boolean, verdict: Verdict): string {
   if (!ok) return "その依頼は見つからないか、すでに答えが出ています"
-  return verdict === "allow" ? "✅ 許可しました" : "❌ 拒否しました"
+  return { allow: "✅ 許可しました", always: "✅ 常に許可しました", deny: "❌ 拒否しました" }[verdict]
 }

@@ -162,10 +162,11 @@ export class DiscordConnector implements Connector {
     return ids
   }
 
-  async sendApproval(user: string, text: string, requestId: string): Promise<void> {
+  async sendApproval(user: string, text: string, requestId: string, opts?: { always?: boolean }): Promise<void> {
     // ボタンでも、yes/no の文字でも答えられる
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(permissionData("allow", requestId)).setLabel("許可").setEmoji("✅").setStyle(ButtonStyle.Success),
+      ...(opts?.always ? [new ButtonBuilder().setCustomId(permissionData("always", requestId)).setLabel("常に許可").setEmoji("♾️").setStyle(ButtonStyle.Primary)] : []),
       new ButtonBuilder().setCustomId(permissionData("deny", requestId)).setLabel("拒否").setEmoji("❌").setStyle(ButtonStyle.Danger),
     )
     const ch = await this.channel(user)

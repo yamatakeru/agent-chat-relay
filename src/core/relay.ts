@@ -73,7 +73,7 @@ export interface Connector {
   /** ルームへ送る。files は中継が確認した、作業ディレクトリの中のファイルの実パス。送ったメッセージの ID を返す */
   send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]>
   /** 承認者の DM へ、実行承認の依頼を送る */
-  sendApproval(user: string, text: string, requestId: string): Promise<void>
+  sendApproval(user: string, text: string, requestId: string, opts?: { always?: boolean }): Promise<void>
   /** 直前の発言への返事として、短い案内を送る（ペアリングのコードなど）。送れないときは何もしない */
   notice(room: string, text: string): Promise<void>
   /** 添付をローカルに取得し、パスを返す */
@@ -101,11 +101,13 @@ export interface Session {
   prompt(text: string): Promise<void>
 }
 
-export type PermissionRequest = { title: string; input: string }
-export type Verdict = "allow" | "deny"
+/** always は、ハーネスが示した「常に許可」の範囲（選択肢の名前）。示されていなければ書かない */
+export type PermissionRequest = { title: string; input: string; always?: string }
+/** always は「常に許可」（ADR 0015） */
+export type Verdict = "allow" | "always" | "deny"
 
 // 承認の返事。ID は 5 文字で、l（1 と紛らわしい）は使わない
-const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
+const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no|always)\s+([a-km-z]{5})\s*$/i
 const PERMISSION_TIMEOUT_MS = 30 * 60 * 1000
 /** 承認依頼の束（ADR 0014）。最後の依頼からこの時間、次の依頼が来なければ送る。最初の依頼からは最大 maxMs 待つ */
 const BATCHING = { quietMs: 1000, maxMs: 3000 }
@@ -193,7 +195,8 @@ export class Relay {
     if (r.action !== "deliver") return r
     const p = PERMISSION_REPLY_RE.exec(m.text)
     if (m.isDM && p) {
-      const ok = this.answer(m.sender, p[2]!.toLowerCase(), p[1]!.toLowerCase().startsWith("y") ? "allow" : "deny")
+      const word = p[1]!.toLowerCase()
+      const ok = this.answer(m.sender, p[2]!.toLowerCase(), word === "always" ? "always" : word.startsWith("y") ? "allow" : "deny")
       void this.connector(m.room)
         ?.notice(m.room, ok ? "受け付けました" : "その依頼は見つからないか、すでに答えが出ています")
         .finally(() => ok && this.remindPending(m.sender))
@@ -245,7 +248,7 @@ export class Relay {
 
   private sendBatchTo(user: string, b: Batch, lead = ""): void {
     this.connector(user)
-      ?.sendApproval(user, lead + approvalText(b), b.id)
+      ?.sendApproval(user, lead + approvalText(b), b.id, { always: b.items.every((i) => i.req.always) })
       .catch((err) => this.log.error("承認の依頼を送れませんでした", { user, error: String(err) }))
   }
 
@@ -256,7 +259,8 @@ export class Relay {
   }
 
   private settle(b: Batch, items: PendingRequest[], verdict: Verdict): void {
-    for (const item of items) item.resolve(verdict)
+    // 「常に許可」が示されていない依頼には、今回だけの許可として答える
+    for (const item of items) item.resolve(verdict === "always" && !item.req.always ? "allow" : verdict)
     b.items = b.items.filter((i) => !items.includes(i))
     if (b.items.length > 0) return
     clearTimeout(b.timeout)
@@ -488,10 +492,19 @@ function describeAttachment(a: Attachment): string {
 function approvalText(b: Batch): string {
   if (b.items.length === 1) {
     const { req } = b.items[0]!
-    return [`🔐 実行の承認：${req.title}`, "", truncate(req.input, 1500), "", `許可：yes ${b.id}`, `拒否：no ${b.id}`].join("\n")
+    const always = req.always ? [`常に許可：always ${b.id}（${truncate(req.always, 100)}）`] : []
+    return [`🔐 実行の承認：${req.title}`, "", truncate(req.input, 1500), "", `許可：yes ${b.id}`, ...always, `拒否：no ${b.id}`].join("\n")
   }
-  const items = b.items.map((i, n) => [`${n + 1}. ${truncate(i.req.title, 100)}`, truncate(i.req.input, 200), `（この依頼だけ：yes ${i.id}・no ${i.id}）`].join("\n"))
-  return [`🔐 実行の承認（${b.items.length} 件）`, "", `すべて許可：yes ${b.id}`, `すべて拒否：no ${b.id}`, "", ...items.flatMap((t) => [t, ""])].join("\n").trimEnd()
+  const items = b.items.map((i, n) =>
+    [
+      `${n + 1}. ${truncate(i.req.title, 100)}`,
+      truncate(i.req.input, 200),
+      ...(i.req.always ? [`常に許可の範囲：${truncate(i.req.always, 100)}`] : []),
+      `（この依頼だけ：yes ${i.id}・${i.req.always ? `always ${i.id}・` : ""}no ${i.id}）`,
+    ].join("\n"),
+  )
+  const always = b.items.every((i) => i.req.always) ? [`すべて常に許可：always ${b.id}`] : []
+  return [`🔐 実行の承認（${b.items.length} 件）`, "", `すべて許可：yes ${b.id}`, ...always, `すべて拒否：no ${b.id}`, "", ...items.flatMap((t) => [t, ""])].join("\n").trimEnd()
 }
 
 function truncate(s: string, max: number): string {

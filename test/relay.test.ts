@@ -12,7 +12,7 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
-import { startHarness, withoutRelaySecrets } from "../src/harness/harness.ts"
+import { alwaysOption, startHarness, withoutRelaySecrets } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
@@ -55,13 +55,13 @@ class FakeConnector implements Connector {
   stop() {}
   sent: { room: string; text: string }[] = []
   notices: { room: string; text: string }[] = []
-  approvals: { user: string; text: string; id: string }[] = []
+  approvals: { user: string; text: string; id: string; always?: boolean }[] = []
   async send(room: string, text: string) {
     this.sent.push({ room, text })
     return [`s${this.sent.length}`]
   }
-  async sendApproval(user: string, text: string, id: string) {
-    this.approvals.push({ user, text, id })
+  async sendApproval(user: string, text: string, id: string, opts?: { always?: boolean }) {
+    this.approvals.push({ user, text, id, always: opts?.always })
   }
   async notice(room: string, text: string) {
     this.notices.push({ room, text })
@@ -230,6 +230,40 @@ describe("relay", () => {
     expect(conn.approvals.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（5 件）"])
     await Bun.sleep(150)
     expect(conn.approvals.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（5 件）", "🔐 実行の承認：t5"])
+  })
+
+  test("「常に許可」は、ハーネスが示した依頼にだけ出す。束では全件に示されたときだけ、束全体に出す", async () => {
+    const { relay, conn } = setup()
+    const scope = "Yes, and don't ask again for Probe Events commands"
+    const one = relay.requestPermission({ title: "mcp__x", input: "{}", always: scope })
+    await Bun.sleep(5)
+    expect(conn.approvals[0]).toMatchObject({ always: true, text: expect.stringContaining(`常に許可：always ${conn.approvals[0]!.id}（${scope}）`) })
+    relay.receive(msg({ room: ALICE, sender: ALICE, isDM: true, text: `always ${conn.approvals[0]!.id}` }))
+    expect(await one).toBe("always")
+
+    // 示された依頼と示されていない依頼が混ざった束
+    const mixed = [relay.requestPermission({ title: "a", input: "", always: scope }), relay.requestPermission({ title: "b", input: "" })]
+    await Bun.sleep(5)
+    const b = conn.approvals.at(-1)!
+    expect(b.always).toBe(false)
+    expect(b.text).not.toContain("すべて常に許可")
+    // 文字で束全体に「常に許可」と答えると、示されていない依頼には今回だけの許可で答える
+    expect(relay.answer(ALICE, b.id, "always")).toBe(true)
+    expect(await Promise.all(mixed)).toEqual(["always", "allow"])
+  })
+
+  test("「常に許可」の選択肢は、モードの切り替えとファイルの編集には示さない。複数あれば先頭", () => {
+    const options = [
+      { optionId: "1", name: "Yes", kind: "allow_once" },
+      { optionId: "2", name: "Yes, and don't ask again for x", kind: "allow_always" },
+      { optionId: "3", name: "Yes, and use auto mode", kind: "allow_always" },
+      { optionId: "4", name: "No", kind: "reject_once" },
+    ] as const
+    expect(alwaysOption("other", [...options])?.optionId).toBe("2")
+    expect(alwaysOption("execute", [...options])?.optionId).toBe("2")
+    expect(alwaysOption("switch_mode", [...options])).toBeUndefined()
+    expect(alwaysOption("edit", [...options])).toBeUndefined()
+    expect(alwaysOption("read", [options[0], options[3]])).toBeUndefined()
   })
 
   test("承認者がいなければ拒否する", async () => {
@@ -945,6 +979,19 @@ describe("discord", () => {
     await conn.handleInteraction(alice.interaction)
     expect(await verdict).toBe("deny")
     expect(alice.replies).toMatchObject([{ update: { components: [], content: expect.stringContaining("❌ 拒否しました") } }])
+  })
+
+  test("ハーネスが「常に許可」を示した依頼には、常に許可のボタンを付ける", async () => {
+    const { d, relay, dc: conn } = await setup()
+    const verdict = relay.requestPermission({ title: "mcp__x", input: "{}", always: "Yes, and don't ask again for x" })
+    await Bun.sleep(5)
+    const req = d.sent.at(-1)!
+    const ids = JSON.stringify(req.components).match(/perm:[a-z]+:[a-km-z]{5}/g)
+    expect(ids?.map((x) => x.split(":")[1])).toEqual(["allow", "always", "deny"])
+    const alice = d.press("1", ids![1]!, req.content)
+    await conn.handleInteraction(alice.interaction)
+    expect(await verdict).toBe("always")
+    expect(alice.replies).toMatchObject([{ update: { content: expect.stringContaining("✅ 常に許可しました") } }])
   })
 
   test("リアクションは付けられ、編集は Bot が送った発言だけ", async () => {
