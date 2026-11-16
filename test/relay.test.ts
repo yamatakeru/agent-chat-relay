@@ -18,6 +18,9 @@ import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
 import { initWorkspace } from "../src/workspace.ts"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { buildTools } from "../src/core/mcp.ts"
 
 let dir: string
 let access: AccessStore
@@ -535,6 +538,41 @@ describe("line の受け取りの合図", () => {
     } finally {
       void api.stop()
     }
+  })
+})
+
+describe("チャット用ツール", () => {
+  async function tools(relay: Relay) {
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: "test", version: "0" })
+    await Promise.all([buildTools(relay, dir).connect(a), client.connect(b)])
+    const list = (await client.listTools()).tools
+    await client.close()
+    return Object.fromEntries(list.map((t) => [t.name, t.description ?? ""]))
+  }
+
+  test("サービスによって使えない操作は、使えるサービスを説明とエラーに書き、使えるサービスがなければツールを出さない", async () => {
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    const relay = new Relay(access, quiet)
+    relay.addConnector(new FakeConnector())
+    const lineOnly = await tools(relay)
+    expect(lineOnly.react).toBeUndefined()
+    expect(lineOnly.edit_message).toBeUndefined()
+    expect(lineOnly.fetch_messages).toContain("LINE（line:） では、中継が起動してからの分だけ")
+
+    const discord = Object.assign(new FakeConnector(), { service: "discord", label: "Discord", react: async () => {}, edit: async () => {}, history: async () => [] })
+    relay.addConnector(discord)
+    const both = await tools(relay)
+    expect(both.react).toContain("使えるのは Discord（discord:） のルームだけ")
+    expect(both.edit_message).toContain("使えるのは Discord（discord:） のルームだけ")
+    await expect(relay.react(ROOM, "1", "👍")).rejects.toThrow("LINE ではリアクションを付けられません（使えるのは Discord（discord:））。reply で伝えてください")
+
+    // すべてのサービスで使えるなら、制限を書かない
+    const discordOnly = new Relay(access, quiet)
+    discordOnly.addConnector(discord)
+    const all = await tools(discordOnly)
+    expect(all.react).not.toContain("使えるのは")
+    expect(all.fetch_messages).not.toContain("中継が起動してから")
   })
 })
 
