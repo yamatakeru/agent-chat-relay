@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# agent-chat-relay の操作。秘密情報は dotenvx で暗号化したリポジトリ直下の .env に置き、
+# 開発用の agent-chat-relay の操作（ADR 0019）。インストールした agent-chat-relay と同じコマンドを、
+# データの置き場をリポジトリ内（.local/relay）にして動かす。秘密情報は dotenvx で暗号化したリポジトリ直下の .env に置き、
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
 #   scripts/relay.sh secrets [line|chatwork|discord]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン、Discord は Bot のトークン）
@@ -14,8 +15,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${RELAY_ENV_FILE:-$REPO_ROOT/.env}"
+# 中継の本体（src/main.ts）の既定（~/.agent-chat-relay と、その中の .env）ではなく、リポジトリ内を使う
+export RELAY_HOME="${RELAY_HOME:-.local/relay}" RELAY_ENV_FILE="$ENV_FILE"
 KEYS_FILE="$(dirname "$ENV_FILE")/.env.keys"
-RELAY_HTTP_PORT="${RELAY_HTTP_PORT:-18080}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -106,22 +108,14 @@ cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
   secrets) cmd_secrets "$@" ;;
-  serve)
-    with_env serve "$@"
-    # 引数の解釈と検証は main.ts がする（ハーネスの既定は RELAY_HARNESS、なければ claude）
-    exec mise exec -- bun src/main.ts serve "$@"
+  serve | line-quota)
+    with_env "$cmd" "$@"
+    # 引数の解釈と検証は main.ts がする（ハーネスの既定は RELAY_HARNESS、なければ claude）。
+    # Bun に、リポジトリ直下の（暗号化された）.env と bunfig.toml を読ませない（ADR 0019）
+    exec mise exec -- bun --no-env-file --config=/dev/null src/main.ts "$cmd" "$@"
     ;;
-  pair | access) exec mise exec -- bun src/main.ts "$cmd" "$@" ;;
-  line-tunnel) exec mise exec -- cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$RELAY_HTTP_PORT" ;;
-  line-quota)
-    with_env line-quota
-    for path in quota quota/consumption; do
-      printf '%s: ' "$path"
-      # トークンをコマンド引数に載せないよう、ヘッダーはプロセス置換で渡す
-      curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$RELAY_LINE_CHANNEL_TOKEN") "https://api.line.me/v2/bot/message/$path"
-      echo
-    done
-    ;;
+  # line-tunnel は、mise でインストールした cloudflared を使う
+  pair | access | line-tunnel) exec mise exec -- bun --no-env-file --config=/dev/null src/main.ts "$cmd" "$@" ;;
   line-webhook)
     with_env line-webhook "$@"
     exec mise exec -- bun scripts/line-webhook.ts "$@"

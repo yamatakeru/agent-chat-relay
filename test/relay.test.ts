@@ -617,6 +617,14 @@ describe("serve の引数", () => {
     expect(parseServeArgs(["--session-id", "s1", "claude"])).toEqual({ harness: "claude", sessionId: "s1" })
   })
 
+  test("--workspace・--harness-settings・--harness-memory は、同じ意味の環境変数の値にする", () => {
+    expect(parseServeArgs(["--workspace", "."])).toEqual({ harness: "claude", env: { RELAY_WORKSPACE: "." } })
+    expect(parseServeArgs(["opencode", "--workspace=~/w", "--harness-settings", "default", "--harness-memory"])).toEqual({
+      harness: "opencode",
+      env: { RELAY_WORKSPACE: "~/w", RELAY_HARNESS_SETTINGS: "default", RELAY_HARNESS_MEMORY: "1" },
+    })
+  })
+
   test("不正な引数は拒否する", () => {
     const bad: [string[], string][] = [
       [["--session-id"], "値がありません"],
@@ -629,6 +637,13 @@ describe("serve の引数", () => {
       [["--resume", "a"], "知らないオプション"],
       [["claude", "opencode"], "1 つだけ"],
       [["codex"], "知らないハーネス"],
+      [["--workspace"], "値がありません"],
+      [["--workspace="], "値が空です"],
+      [["--workspace", "a", "--workspace=b"], "2 回"],
+      [["--harness-memory", "--harness-memory"], "2 回"],
+      [["--harness-memory=1"], "知らないオプション"],
+      [["constructor", "x"], "1 つだけ"],
+      [["--toString"], "知らないオプション"],
     ]
     for (const [args, message] of bad) expect(() => parseServeArgs(args)).toThrow(message)
     expect(parseServeArgs(["--session-id", "x".repeat(256)]).sessionId).toHaveLength(256)
