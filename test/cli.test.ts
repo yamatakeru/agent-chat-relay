@@ -129,3 +129,13 @@ test("隠し入力は、\r\n がチャンクをまたいでも、空行を挟ま
   await proc.stdin.end()
   expect(JSON.parse(await new Response(proc.stdout).text())).toEqual(["sec", "tok", ""])
 })
+
+test("配布するパッケージには、入り口と本体だけを入れる（秘密情報・実行時のデータ・テストを入れない）", () => {
+  const r = Bun.spawnSync([process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"], { cwd: repo, stdout: "pipe", stderr: "pipe" })
+  expect(r.exitCode).toBe(0)
+  const files = [...r.stdout.toString().matchAll(/^packed \S+ (.+)$/gm)].map((m) => m[1]!)
+  expect(files).toContain("bin/agent-chat-relay")
+  expect(files).toContain("src/main.ts")
+  const allowed = (f: string) => /^(bin|src)\//.test(f) || ["package.json", "LICENSE", "README.md"].includes(f)
+  expect(files.filter((f) => !allowed(f))).toEqual([])
+})
