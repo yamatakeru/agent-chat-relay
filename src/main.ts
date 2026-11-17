@@ -38,6 +38,8 @@ const envFile = secretsFile(process.env, home)
 /** このパッケージ（開発時はリポジトリ）の置き場。開発時は、秘密情報（.env・.env.keys）もここに置く */
 const PACKAGE_ROOT = resolve(import.meta.dir, "..")
 const accessPath = join(home, "access.json")
+/** Webhook などのコネクターの受け口。line-tunnel は、ここを公開する */
+const HTTP_PORT = Number(process.env.RELAY_HTTP_PORT ?? 18080)
 
 const format = (msg: string, extra?: Record<string, unknown>) => `${new Date().toISOString()} relay: ${msg}${extra ? ` ${JSON.stringify(extra)}` : ""}`
 const log: Log = {
@@ -88,7 +90,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   if (Object.keys(routes).length > 0) {
     const http = Bun.serve({
       hostname: "127.0.0.1",
-      port: Number(process.env.RELAY_HTTP_PORT ?? 18080),
+      port: HTTP_PORT,
       routes,
       fetch: () => new Response("not found", { status: 404 }),
     })
@@ -148,12 +150,12 @@ const SECRETS: Record<string, { intro: string; items: [key: string, label: strin
   },
 }
 
-async function secrets(service: string | undefined): Promise<void> {
+function secrets(service: string | undefined): void {
   const spec = service ? SECRETS[service] : undefined
   if (!spec) throw new Error(`secrets の対象は ${Object.keys(SECRETS).join("・")} のどれかです`)
   process.stderr.write(`${spec.intro}\n`)
   const values: Record<string, string> = {}
-  for (const [key, label] of spec.items) values[key] = (await readSecret(label)).trim()
+  for (const [key, label] of spec.items) values[key] = readSecret(label).trim()
   storeSecrets(envFile, values)
   console.log(`保存しました: ${envFile}`)
 }
@@ -161,8 +163,7 @@ async function secrets(service: string | undefined): Promise<void> {
 function lineTunnel(): Promise<number> {
   const cloudflared = Bun.which("cloudflared")
   if (!cloudflared) throw new Error("cloudflared が見つかりません。インストールして PATH に置いてください")
-  const port = process.env.RELAY_HTTP_PORT ?? "18080"
-  return Bun.spawn([cloudflared, "tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`], { stdio: ["inherit", "inherit", "inherit"] }).exited
+  return Bun.spawn([cloudflared, "tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${HTTP_PORT}`], { stdio: ["inherit", "inherit", "inherit"] }).exited
 }
 
 async function lineQuota(): Promise<void> {

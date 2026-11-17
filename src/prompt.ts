@@ -1,64 +1,12 @@
 // 秘密情報を、画面に表示せずに入力してもらう。コマンドの引数に載せない（ps やシェルの履歴に残る）ため
 
-/** 読んだが、まだ使っていない入力（パイプで複数行がまとめて届いたときの残り） */
-let pending = ""
-let ended = false
-/** 直前の行が \r で終わった。\r\n が別々のチャンクで届いても、\n を空行にしない */
-let afterCR = false
-
-/** 1 行を読む。端末なら入力を表示しない。端末でなければ（パイプなど）、標準入力の次の行を読む */
-export async function readSecret(label: string): Promise<string> {
+/**
+ * 1 行を読む。bash の read -s に任せる（表示を消すことと、Ctrl+C で中断したときに端末を元に戻すことを、bash がする）。
+ * 端末でなければ（パイプなど）、標準入力の次の行を読む。値はパイプで受け取り、引数には載せない
+ */
+export function readSecret(label: string): string {
   process.stderr.write(label)
-  const stdin = process.stdin
-  const tty = stdin.isTTY
-  if (tty) stdin.setRawMode(true)
-  stdin.setEncoding("utf8")
-  try {
-    return await new Promise<string>((resolve, reject) => {
-      let value = ""
-      const take = (): boolean => {
-        while (pending) {
-          const ch = pending[0]!
-          pending = pending.slice(1)
-          const skip = afterCR && ch === "\n"
-          afterCR = false
-          if (skip) continue
-          if (ch === "\r" || ch === "\n") {
-            afterCR = ch === "\r"
-            resolve(value)
-            return true
-          }
-          if (ch === "\u0003") {
-            reject(new Error("中止しました"))
-            return true
-          }
-          if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1)
-          else value += ch
-        }
-        if (ended) resolve(value)
-        return ended
-      }
-      if (take()) return
-      const done = () => {
-        stdin.off("data", onData)
-        stdin.off("end", onEnd)
-      }
-      const onData = (chunk: string) => {
-        pending += chunk
-        if (take()) done()
-      }
-      const onEnd = () => {
-        ended = true
-        take()
-        done()
-      }
-      stdin.on("data", onData)
-      stdin.on("end", onEnd)
-      stdin.resume()
-    })
-  } finally {
-    if (tty) stdin.setRawMode(false)
-    stdin.pause()
-    process.stderr.write("\n")
-  }
+  const r = Bun.spawnSync(["bash", "-c", 'read -rs v; echo >&2; printf %s "$v"'], { stdin: "inherit", stdout: "pipe", stderr: "inherit" })
+  if (r.signalCode || r.exitCode === 130) throw new Error("中止しました")
+  return r.stdout.toString().replace(/\r$/, "")
 }

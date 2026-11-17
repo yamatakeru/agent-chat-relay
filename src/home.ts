@@ -49,10 +49,10 @@ export function storeSecrets(path: string, values: Record<string, string>): void
     if (/[\r\n]/.test(v)) throw new Error(`${k} に改行が含まれています`)
   }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  const lines = existsSync(path) ? readFileSync(path, "utf8").replace(/\n$/, "").split("\n") : []
-  const rest = lines.filter((l) => !Object.keys(values).some((k) => l.trim().startsWith(`${k}=`)))
+  // 同じ項目の行と空行を除いて残し、新しい値を末尾に足す
+  const rest = (existsSync(path) ? readFileSync(path, "utf8").split("\n") : []).filter((l) => l && !Object.keys(values).some((k) => l.trim().startsWith(`${k}=`)))
   const tmp = `${path}.${process.pid}.tmp`
-  const body = [...rest, ...Object.entries(values).map(([k, v]) => `${k}=${v}`)].filter((l) => l !== "").join("\n")
+  const body = [...rest, ...Object.entries(values).map(([k, v]) => `${k}=${v}`)].join("\n")
   writeFileSync(tmp, `${body}\n`, { mode: 0o600 })
   chmodSync(tmp, 0o600)
   renameSync(tmp, path)
