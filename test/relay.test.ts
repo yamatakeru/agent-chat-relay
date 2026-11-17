@@ -500,10 +500,13 @@ describe("ハーネスの起動と再開", () => {
         async () => "deny",
         log,
       )
-      await h.session.prompt("NEW REQUEST")
-      await use?.(h.session)
-      h.stop()
-      await h.exited
+      try {
+        await h.session.prompt("NEW REQUEST")
+        await use?.(h.session)
+      } finally {
+        h.stop()
+        await h.exited
+      }
     } catch (err) {
       error = err as Error
       // 失敗したときもハーネスは止められ、stderr を書き終えるまで少し待つ
