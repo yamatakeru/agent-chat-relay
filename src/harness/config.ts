@@ -1,10 +1,20 @@
 // ハーネスごとの起動方法。実行承認と設定の読み込みに関わる部分は安全境界（AGENTS.md、ADR 0017）。
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { HarnessConfig } from "./harness.ts"
 import type { HarnessName } from "../serve-args.ts"
 import type { Log } from "../core/relay.ts"
+
+/**
+ * Bun で別のプログラムを動かすときの先頭部分。Bun は、cwd の .env を環境変数に読み込み、cwd の bunfig.toml の preload を実行する。
+ * cwd は作業ディレクトリで、エージェントが書けるか、管理者のプロジェクトの .env がありうるので、どちらも読ませない（ADR 0019）
+ */
+export const BUN_ISOLATED = [process.execPath, "--no-env-file", "--config=/dev/null"]
+
+/** claude-agent-acp の入り口。起動したディレクトリではなく、このパッケージの依存から探す */
+const ADAPTER = fileURLToPath(import.meta.resolve("@agentclientprotocol/claude-agent-acp/dist/index.js"))
 
 /** 管理者が環境変数で選ぶ、ハーネスの設定の読み込み（ADR 0017） */
 export type HarnessOptions = {
@@ -45,7 +55,7 @@ export function harnessConfig(
       if (!claude) throw new Error("claude が見つかりません")
       return {
         // Agent SDK に同梱の CLI ではなく、インストール済みの claude を使う
-        command: [process.execPath, resolve("node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js")],
+        command: [...BUN_ISOLATED, ADAPTER],
         env: { CLAUDE_CODE_EXECUTABLE: claude },
         cwd,
         mcp,
