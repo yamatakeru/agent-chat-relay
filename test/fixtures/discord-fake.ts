@@ -18,6 +18,7 @@ export function fakeDiscord() {
   const messages = new Map<string, { id: string; channel: unknown; author: { id: string } }>()
   const sent: Sent[] = []
   const typing: string[] = []
+  const threads: { message: string; name: string; autoArchiveDuration: number }[] = []
   let seq = 5000
 
   function channel(id: string, opts: { name?: string; parentId?: string; dm?: boolean } = {}) {
@@ -86,6 +87,15 @@ export function fakeDiscord() {
       async edit(p: { content: string }) {
         sent.push({ channel: ch.id, content: `edit:${p.content}` })
       },
+      // 発言から作ったスレッドの ID は、発言の ID と同じ（Discord と同じ）
+      get thread() {
+        const t = channels.get(this.id)
+        return t?.parentId === ch.id ? t : null
+      },
+      async startThread(p: { name: string; autoArchiveDuration: number }) {
+        threads.push({ message: this.id, ...p })
+        return channel(this.id, { name: p.name, parentId: ch.id })
+      },
     }
     messages.set(m.id, m)
     return m
@@ -126,5 +136,5 @@ export function fakeDiscord() {
     return { interaction: i as unknown as Interaction, replies }
   }
 
-  return { client: client as unknown as Client, channel, say, press, sent, typing, messages }
+  return { client: client as unknown as Client, channel, say, press, sent, typing, messages, threads }
 }

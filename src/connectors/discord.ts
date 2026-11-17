@@ -13,13 +13,14 @@ import {
   MessageFlags,
   Options,
   Partials,
+  ThreadAutoArchiveDuration,
   type Interaction,
   type Message,
   type MessageMentionOptions,
   type SendableChannels,
 } from "discord.js"
 import { localId } from "../core/access.ts"
-import { acknowledger, assertNumericId, attachmentOnlyText, parsePermissionData, permissionData, saveDownload, splitText, truncate, verdictText } from "./common.ts"
+import { acknowledger, assertNumericId, attachmentOnlyText, fitUnits, parsePermissionData, permissionData, saveDownload, splitText, truncate, verdictText } from "./common.ts"
 import { ApiClient } from "./http.ts"
 import type { Attachment, Capabilities, ChatMessage, Connector, ConnectorDeps, Log, Relay } from "../core/relay.ts"
 
@@ -31,6 +32,8 @@ const AGENT_MENTIONS: MessageMentionOptions = { parse: ["users"], repliedUser: t
 const NO_MENTIONS: MessageMentionOptions = { parse: [] }
 /** 受け取りの合図に付けるリアクション（ADR 0012） */
 const ACK_EMOJI = "👀"
+/** スレッドの名前の上限（Discord の仕様） */
+const THREAD_NAME_MAX = 100
 
 type DiscordConfig = { token: string }
 
@@ -209,6 +212,18 @@ export class DiscordConnector implements Connector {
     const msg = await this.message(room, messageId)
     if (msg.author.id !== this.client.user?.id) throw new Error("Bot が送った発言だけを編集できます")
     await msg.edit({ content: truncate(text.trim(), this.capabilities.text.max), allowedMentions: AGENT_MENTIONS })
+  }
+
+  /** チャンネルの発言から公開スレッドを作る。スレッドの ID は、元の発言の ID と同じになる */
+  async createThread(room: string, messageId: string, name: string): Promise<string> {
+    const r = parseRoom(room)
+    if (r?.kind !== "channel" || r.thread) throw new Error("スレッドは、チャンネルの発言からだけ作れます")
+    const oneLine = name.replace(/\s+/g, " ").trim()
+    const title = oneLine.slice(0, fitUnits(oneLine, THREAD_NAME_MAX))
+    if (!title) throw new Error("スレッドの名前が空です")
+    const msg = await this.message(room, messageId)
+    const thread = msg.thread ?? (await msg.startThread({ name: title, autoArchiveDuration: ThreadAutoArchiveDuration.OneDay }))
+    return threadKey(r.channel, thread.id)
   }
 
   /** Discord の履歴を、古い順に読む（止まっている間の発言も含む） */
