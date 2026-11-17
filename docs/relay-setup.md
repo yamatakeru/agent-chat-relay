@@ -109,11 +109,13 @@ scripts/relay.sh serve
 
 端末で使っているエージェントの作業フォルダ、設定、記憶を、そのままルームで使うための環境変数です（ADR 0017）。どれも、管理者が自分の責任で指定します。指定すると、その環境が承認なしで許していること（allow ルール、hooks、作業ディレクトリの中身を読むこと）が、登録したルームの誰の発言からでも使えるようになります。秘密情報を置いたディレクトリは、作業ディレクトリにしないでください。
 
-| 環境変数 | 内容 |
+`serve` のフラグでも指定できます。フラグは環境変数より優先します（ADR 0019）。例：`scripts/relay.sh serve --workspace ~/work/project`。`scripts/relay.sh` はリポジトリ直下に移ってから動くので、相対パスはリポジトリ直下を起点にします。
+
+| 環境変数（`serve` のフラグ） | 内容 |
 |---|---|
-| `RELAY_WORKSPACE` | 作業ディレクトリ。既定は `<RELAY_HOME>/workspace`。指定したディレクトリは作らず、`git init` もしない。`RELAY_HOME` や秘密情報の置き場を含むディレクトリは指定できない |
-| `RELAY_HARNESS_SETTINGS` | `default` で、ユーザー設定と CLAUDE.md・AGENTS.md を、その環境の既定どおりに読み込ませる（Claude Code） |
-| `RELAY_HARNESS_MEMORY` | `1` で、自動メモリを有効にする（Claude Code）。ルームの発言をもとにメモリが書かれる |
+| `RELAY_WORKSPACE`（`--workspace <dir>`） | 作業ディレクトリ。既定は `<RELAY_HOME>/workspace`。指定したディレクトリは作らず、`git init` もしない。`RELAY_HOME` や秘密情報の置き場を含むディレクトリは指定できない |
+| `RELAY_HARNESS_SETTINGS`（`--harness-settings default`） | `default` で、ユーザー設定と CLAUDE.md・AGENTS.md を、その環境の既定どおりに読み込ませる（Claude Code） |
+| `RELAY_HARNESS_MEMORY`（`--harness-memory`） | `1` で、自動メモリを有効にする（Claude Code）。ルームの発言をもとにメモリが書かれる |
 
 記憶を持ったエージェントをそのままつなぐには、端末で使っているフォルダを `RELAY_WORKSPACE` に指定し、ほかの 2 つも合わせて指定します。指定したときに起きること（「常に許可」が端末のセッションにも効くことなど）は、[docs/relay.md](relay.md) と ADR 0017 にあります。
 
