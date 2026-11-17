@@ -13,6 +13,8 @@ export type FakeAcpConfig = {
   list?: boolean
   /** 保存済みのセッション。mode は会話記録の最後のモード */
   sessions?: { id: string; cwd: string; mode: string }[]
+  /** _session/steering を宣言し、この結果を返す（claude-agent-acp などの拡張） */
+  steering?: "injected" | "promptRequired" | "startedNewTurn"
 }
 
 const cfg: FakeAcpConfig = JSON.parse(process.env.FAKE_ACP ?? "{}")
@@ -45,6 +47,7 @@ const app = acp
         sessionCapabilities: { ...(cfg.resume ? { resume: {} } : {}), ...(cfg.list ? { list: {} } : {}) },
       },
       agentInfo: { name: "fake-acp", version: "0.0.0" },
+      ...(cfg.steering ? { _meta: { steering: { supported: true } } } : {}),
     }
   })
   .onRequest("session/new", ({ params }) => {
@@ -86,6 +89,10 @@ const app = acp
       update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "NEW ANSWER" } },
     })
     return { stopReason: "end_turn" }
+  })
+  .onRequest("_session/steering", (params: unknown) => params, ({ params }) => {
+    record("_session/steering", params)
+    return { outcome: cfg.steering }
   })
 
 const output = new WritableStream<Uint8Array>({

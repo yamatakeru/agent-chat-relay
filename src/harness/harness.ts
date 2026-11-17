@@ -1,5 +1,5 @@
 // ハーネスを ACP で動かす（ADR 0006）。中継が ACP のクライアントになり、ハーネスを子プロセスとして起動する。
-// セッションは 1 つ。チャット用ツールの MCP サーバーを session/new（再開なら session/resume か session/load）で渡し、発言は session/prompt で渡す。
+// セッションは 1 つ。チャット用ツールの MCP サーバーを session/new（再開なら session/resume か session/load）で渡し、発言は session/prompt で渡し、作業中に届いた発言は、対応していれば _session/steering で差し込む（ADR 0018）。
 
 import * as acp from "@agentclientprotocol/sdk"
 import type { Log, PermissionRequest, Session, Verdict } from "../core/relay.ts"
@@ -111,6 +111,7 @@ export async function startHarness(
         log.info(`モードを ${mode} から ${cfg.mode} に切り替えました`)
         mode = cfg.mode
       }
+      const steering = (init._meta as { steering?: { supported?: unknown } } | null | undefined)?.steering?.supported === true
       log.info(start === "new" ? "セッションを開始しました" : "セッションを再開しました", {
         sessionId,
         start,
@@ -118,6 +119,7 @@ export async function startHarness(
         version: init.agentInfo?.version,
         protocol: init.protocolVersion,
         mode,
+        steering,
       })
       ready.resolve({
         async prompt(text) {
@@ -126,6 +128,8 @@ export async function startHarness(
           // reply を使わずに書いた文章はチャットに届かない。気づけるようにログに出す
           if (turnText.trim()) log.info("ターンの出力（チャットには届いていない）", { stopReason: res.stopReason, text: turnText.trim().slice(0, 300) })
         },
+        // 標準化前の拡張（ADR 0018）。宣言しているハーネスでだけ使う
+        ...(steering ? { steer: (text: string) => steer(ctx, sessionId, text, log) } : {}),
       })
       await done.promise
     })
@@ -188,6 +192,25 @@ async function openSession(
 }
 
 /** 作業ディレクトリを cwd にした session/list に、その ID があるか。全ページを読む */
+/**
+ * 作業中のターンに発言を差し込む（`_session/steering`。ADR 0018）。
+ * idleBehavior: promptRequired を付け、ターンが終わっていたら、ハーネスに新しいターンを始めさせず、発言を中継の手元に残す
+ */
+async function steer(ctx: acp.ClientContext, sessionId: string, text: string, log: Log): Promise<boolean> {
+  const res = await ctx.request<{ outcome?: string }>("_session/steering", {
+    sessionId,
+    prompt: [{ type: "text", text }],
+    _meta: { steering: { idleBehavior: "promptRequired" } },
+  })
+  if (res?.outcome === "injected") {
+    log.info("作業中のターンに、届いた発言を差し込みました")
+    return true
+  }
+  if (res?.outcome === "promptRequired") return false
+  // それ以外（startedNewTurn など）は、発言がどう扱われたか中継からは分からない
+  throw new Error(`_session/steering の結果が想定外です：${JSON.stringify(res)}`)
+}
+
 async function listed(ctx: acp.ClientContext, sessionId: string, cwd: string): Promise<boolean> {
   const seen = new Set<string>()
   let cursor: string | undefined
