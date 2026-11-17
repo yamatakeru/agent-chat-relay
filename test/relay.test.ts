@@ -645,14 +645,24 @@ describe("チャット用ツール", () => {
     const lineOnly = await tools(relay)
     expect(lineOnly.react).toBeUndefined()
     expect(lineOnly.edit_message).toBeUndefined()
+    expect(lineOnly.create_thread).toBeUndefined()
     expect(lineOnly.fetch_messages).toContain("LINE（line:） では、中継が起動してからの分だけ")
 
-    const discord = Object.assign(new FakeConnector(), { service: "discord", label: "Discord", react: async () => {}, edit: async () => {}, history: async () => [] })
+    const discord = Object.assign(new FakeConnector(), {
+      service: "discord",
+      label: "Discord",
+      react: async () => {},
+      edit: async () => {},
+      history: async () => [],
+      createThread: async () => "discord:c1/2",
+    })
     relay.addConnector(discord)
     const both = await tools(relay)
     expect(both.react).toContain("使えるのは Discord（discord:） のルームだけ")
     expect(both.edit_message).toContain("使えるのは Discord（discord:） のルームだけ")
     await expect(relay.react(ROOM, "1", "👍")).rejects.toThrow("LINE ではリアクションを付けられません（使えるのは Discord（discord:））。reply で伝えてください")
+    expect(both.create_thread).toContain("使えるのは Discord（discord:） のルームだけ")
+    await expect(relay.createThread(ROOM, "1", "x")).rejects.toThrow("LINE ではスレッドを作れません（使えるのは Discord（discord:））")
 
     // すべてのサービスで使えるなら、制限を書かない
     const discordOnly = new Relay(access, quiet)
@@ -1007,6 +1017,27 @@ describe("discord", () => {
     await dc.edit("discord:c100", mine!, "完了")
     await expect(dc.edit("discord:c100", theirs.id, "x")).rejects.toThrow("Bot が送った発言だけ")
     expect(d.sent.slice(1).map((x) => x.content)).toEqual(["react:👀", "edit:完了"])
+  })
+
+  test("登録したチャンネルの発言からスレッドを作り、その chat_id で reply できる。スレッドがあれば作らずに返す", async () => {
+    const { d, relay, dev, thread } = await setup()
+    const asked = d.say(dev, "1", "調べて")
+    const room = await relay.createThread("discord:c100", asked.id, `${"調査".repeat(60)}\n続き`)
+    expect(room).toBe(`discord:c100/${asked.id}`)
+    expect(d.threads).toEqual([{ message: asked.id, name: "調査".repeat(50), autoArchiveDuration: 1440 }])
+    await relay.reply(room, "スレッドで返します")
+    expect(d.sent.at(-1)).toMatchObject({ channel: asked.id, content: "スレッドで返します" })
+    expect(await relay.createThread("discord:c100", asked.id, "もう一度")).toBe(room)
+    expect(d.threads).toHaveLength(1)
+
+    // スレッドの中、DM、登録していないチャンネルでは作らない
+    const inThread = d.say(thread, "1", "スレッドの中")
+    await expect(relay.createThread("discord:c100/200", inThread.id, "x")).rejects.toThrow("チャンネルの発言からだけ")
+    await expect(relay.createThread("discord:u1", "1", "x")).rejects.toThrow("チャンネルの発言からだけ")
+    const other = d.say(d.channel("300"), "1", "未登録")
+    await expect(relay.createThread("discord:c300", other.id, "x")).rejects.toThrow("登録されていません")
+    await expect(relay.createThread("discord:c100", asked.id, " \n ")).rejects.toThrow("名前が空")
+    expect(d.threads).toHaveLength(1)
   })
 
   test("メンションとチャンネルの記法を名前にし、Bot へのメンションは取り除く", () => {

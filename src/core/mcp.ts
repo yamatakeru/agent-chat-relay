@@ -113,6 +113,23 @@ export function buildTools(relay: Relay, inboxDir: string): McpServer {
     )
   }
 
+  const thread = relay.servicesFor("createThread")
+  if (thread.supported.length > 0) {
+    server.registerTool(
+      "create_thread",
+      {
+        description: `発言からスレッドを作り、スレッドの chat_id を返す。続けて reply でそこに書ける。${onlyIn(thread)}作れるのは、チャンネルの発言からだけ（スレッドの中や DM では作れない）。その発言にスレッドがあれば、その chat_id を返す。`,
+        inputSchema: {
+          chat_id: z.string(),
+          message_id: z.string().describe("スレッドを作る発言"),
+          name: z.string().describe("スレッドの名前"),
+        },
+      },
+      ({ chat_id, message_id, name }) =>
+        run("create_thread", async () => `thread chat_id: ${await relay.createThread(chat_id, message_id, name)}`),
+    )
+  }
+
   return server
 }
 

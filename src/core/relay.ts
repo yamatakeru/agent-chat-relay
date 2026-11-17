@@ -45,7 +45,7 @@ export type Capabilities = {
 }
 
 /** コネクターによっては使えない操作（Connector の省略できるメソッド） */
-export type OptionalOperation = "react" | "edit" | "history"
+export type OptionalOperation = "react" | "edit" | "history" | "createThread"
 
 /** receive の結果。acknowledge なら、コネクターが受け取りの合図を出す（ADR 0012） */
 export type ReceiveResult = GateResult & { acknowledge?: boolean }
@@ -83,6 +83,8 @@ export interface Connector {
   edit?(room: string, messageId: string, text: string): Promise<void>
   /** ルームの最近の発言を、サービスの履歴から古い順に読む。なければ、中継の記録を使う */
   history?(room: string, limit: number): Promise<ChatMessage[]>
+  /** ルームの発言からスレッドを作り、スレッドのルームの ID（親/子）を返す。その発言にスレッドがあれば、それを返す */
+  createThread?(room: string, messageId: string, name: string): Promise<string>
 }
 
 /** 環境変数（秘密情報）からコネクターを作る。秘密情報がなければ undefined */
@@ -339,6 +341,13 @@ export class Relay {
     const c = this.allowedConnector(room)
     if (!c.edit) throw this.unsupported(c, "edit", "送った発言を編集できません", "新しく reply してください")
     await c.edit(room, messageId, text)
+  }
+
+  /** スレッドは親の登録を引き継ぐ（ADR 0011）ので、登録したルームの発言からだけ作る */
+  async createThread(room: string, messageId: string, name: string): Promise<string> {
+    const c = this.allowedConnector(room)
+    if (!c.createThread) throw this.unsupported(c, "createThread", "スレッドを作れません", "そのまま reply してください")
+    return c.createThread(room, messageId, name)
   }
 
   async listRooms(): Promise<{ chat_id: string; name?: string; kind: "room" | "dm" }[]> {
