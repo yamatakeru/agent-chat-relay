@@ -11,7 +11,7 @@ import { MediaStore } from "../src/connectors/line-media.ts"
 import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, sendablePaths } from "../src/core/relay.ts"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths } from "../src/core/relay.ts"
 import { alwaysOption, startHarness, withoutRelaySecrets } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
@@ -129,7 +129,7 @@ describe("relay", () => {
     return { relay, conn }
   }
 
-  test("作業中に届いた発言は、ターンが終わってからまとめて渡す", async () => {
+  test("差し込めないハーネスには、作業中に届いた発言を、ターンが終わってからまとめて渡す", async () => {
     const { relay } = setup()
     const prompts: string[] = []
     let finish!: () => void
@@ -151,6 +151,80 @@ describe("relay", () => {
     expect(prompts[1]).toContain("three")
     expect(prompts[0]).toContain("reply ツール") // 最初だけ案内を付ける
     expect(prompts[1]).not.toContain("reply ツール")
+  })
+
+  /** 最初のターンを finish() まで終わらせないセッション。steer は、結果を results の順に返す（尽きたら true） */
+  function steeringSession(results: (boolean | Error)[]) {
+    const prompts: string[] = []
+    const steers: string[] = []
+    let finish!: () => void
+    const session = {
+      prompt: (text: string) => {
+        prompts.push(text)
+        return prompts.length === 1 ? new Promise<void>((r) => (finish = r)) : Promise.resolve()
+      },
+      steer: async (text: string) => {
+        steers.push(text)
+        const r = results.shift() ?? true
+        if (r instanceof Error) throw r
+        return r
+      },
+    }
+    return { session, prompts, steers, finish: () => finish() }
+  }
+
+  test("差し込めるハーネスには、作業中に届いた発言を、届いた順にそのターンへ差し込む", async () => {
+    const { relay } = setup()
+    const s = steeringSession([])
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "three" }))
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(1)
+    expect(s.steers).toHaveLength(2)
+    expect(s.steers[0]).toContain("two")
+    expect(s.steers[1]).toContain("three")
+    expect(s.steers[0]).not.toContain("reply ツール") // 案内は最初のターンだけ
+    s.finish()
+    await Bun.sleep(0)
+    // 差し込んだ発言は、次のターンでもう一度渡さない
+    expect(s.prompts).toHaveLength(1)
+  })
+
+  test("差し込めなかった発言は、あとから届いた発言より前に、次のターンで渡す", async () => {
+    const { relay } = setup()
+    const s = steeringSession([false])
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "two" }))
+    relay.receive(msg({ text: "three" }))
+    await Bun.sleep(0)
+    expect(s.steers).toHaveLength(1)
+    s.finish()
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(2)
+    expect(s.prompts[1]!.indexOf("two")).toBeLessThan(s.prompts[1]!.indexOf("three"))
+  })
+
+  test("差し込みに失敗したら、発言を失わず、以後はターンが終わってから渡す", async () => {
+    const { relay } = setup()
+    const s = steeringSession([new Error("method not found")])
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "three" }))
+    await Bun.sleep(0)
+    expect(s.steers).toHaveLength(1)
+    s.finish()
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(2)
+    expect(s.prompts[1]).toContain("two")
+    expect(s.prompts[1]).toContain("three")
   })
 
   test("本文と属性は無害化して渡す", async () => {
@@ -401,7 +475,7 @@ describe("ハーネスの起動と再開", () => {
   const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
 
   /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ渡す。エージェントが受けた要求と、中継のログを返す */
-  async function run(fake: FakeAcpConfig, sessionId?: string) {
+  async function run(fake: FakeAcpConfig, sessionId?: string, use?: (session: Session) => Promise<void>) {
     const logs: { msg: string; extra?: Record<string, unknown> }[] = []
     const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
     const stderrPath = join(dir, "harness.log")
@@ -427,6 +501,7 @@ describe("ハーネスの起動と再開", () => {
         log,
       )
       await h.session.prompt("NEW REQUEST")
+      await use?.(h.session)
       h.stop()
       await h.exited
     } catch (err) {
@@ -437,6 +512,34 @@ describe("ハーネスの起動と再開", () => {
     return { error, logs, requests: requests() }
   }
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
+
+  test("_session/steering を宣言していなければ、差し込みを使わない", async () => {
+    let steer: unknown = "unset"
+    const r = await run({}, undefined, async (s) => void (steer = s.steer))
+    expect(r.error).toBeUndefined()
+    expect(steer).toBeUndefined()
+  })
+
+  test("_session/steering を宣言していれば、ターンが終わっていたら新しいターンを始めさせない指定を付けて差し込む", async () => {
+    const results: boolean[] = []
+    const injected = await run({ steering: "injected" }, undefined, async (s) => void results.push(await s.steer!("MORE")))
+    const required = await run({ steering: "promptRequired" }, undefined, async (s) => void results.push(await s.steer!("MORE")))
+    expect(results).toEqual([true, false])
+    expect(injected.logs.find((l) => l.msg === "セッションを開始しました")?.extra?.steering).toBe(true)
+    const req = injected.requests.find((r) => r.method === "_session/steering")
+    expect(req?.params).toEqual({
+      sessionId: "new-session",
+      prompt: [{ type: "text", text: "MORE" }],
+      _meta: { steering: { idleBehavior: "promptRequired" } },
+    })
+    expect(required.error).toBeUndefined()
+  })
+
+  test("_session/steering の結果が想定外なら、差し込めたことにしない", async () => {
+    let error: unknown
+    await run({ steering: "startedNewTurn" }, undefined, async (s) => void (await s.steer!("MORE").catch((e) => (error = e))))
+    expect(String(error)).toContain("想定外")
+  })
   const chatServer = [{ type: "http", name: "chat", url: MCP.url, headers: [{ name: "Authorization", value: "Bearer launch-token" }] }]
 
   test("ID がなければ session/new で作り、モードを default にしてから発言を入れる。ID をログに出す", async () => {

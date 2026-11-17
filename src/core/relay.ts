@@ -101,6 +101,11 @@ export type ConnectorDeps = {
 /** 発言を渡す先のセッション（ACP のハーネス）。prompt はターンが終わると解決する */
 export interface Session {
   prompt(text: string): Promise<void>
+  /**
+   * 作業中のターンに発言を差し込む（ADR 0018）。ハーネスが対応していなければ持たない。
+   * 差し込めたら true。ターンがすでに終わっていて差し込めなかったら false（発言は渡っていない）
+   */
+  steer?(text: string): Promise<boolean>
 }
 
 /** always は、ハーネスが示した「常に許可」の範囲（選択肢の名前）。示されていなければ書かない */
@@ -149,6 +154,10 @@ export class Relay {
   private collecting?: Batch
   private session?: Session
   private running = false
+  /** 作業中のターンを見ている run() を、発言が届いたことで起こす */
+  private arrived?: () => void
+  /** 差し込みに失敗したら、以後は使わない */
+  private steerable = true
   private introduced = false
 
   constructor(
@@ -359,6 +368,7 @@ export class Relay {
   }
 
   private kick(): void {
+    this.arrived?.()
     if (this.running || !this.session || this.queue.length === 0) return
     this.running = true
     void this.run()
@@ -366,18 +376,43 @@ export class Relay {
 
   private async run(): Promise<void> {
     try {
-      // 作業中に届いた発言は、ターンが終わってからまとめて渡す
       while (this.session && this.queue.length > 0) {
-        const batch = this.queue.splice(0)
-        const text = await this.render(batch)
-        try {
-          await this.session.prompt(text)
-        } catch (err) {
+        const text = await this.render(this.queue.splice(0))
+        const turn = this.session.prompt(text).catch((err) => {
           this.log.error("セッションへの入力に失敗しました", { error: String(err) })
-        }
+        })
+        await this.steerUntil(this.session, turn)
       }
     } finally {
       this.running = false
+    }
+  }
+
+  /**
+   * ターンが終わるまで、届いた発言をそのターンに差し込む（ADR 0018）。
+   * 差し込めないハーネスや、差し込めなかった発言は、ためておき、ターンが終わってからまとめて渡す
+   */
+  private async steerUntil(session: Session, turn: Promise<void>): Promise<void> {
+    const steer = session.steer?.bind(session)
+    if (!steer || !this.steerable) return turn
+    const ended = turn.then(() => "ended" as const)
+    for (;;) {
+      if (this.queue.length > 0) {
+        const batch = this.queue.splice(0)
+        try {
+          if (await steer(await this.render(batch))) continue
+        } catch (err) {
+          this.steerable = false
+          this.log.error("作業中のターンへの差し込みに失敗しました。以後は、ターンが終わってから渡します", { error: String(err) })
+        }
+        // 渡せなかった発言は、あとから届いた発言より前に渡す
+        this.queue.unshift(...batch)
+        await turn
+        return
+      }
+      const next = await Promise.race([ended, new Promise<"arrived">((r) => (this.arrived = () => r("arrived")))])
+      this.arrived = undefined
+      if (next === "ended") return
     }
   }
 
