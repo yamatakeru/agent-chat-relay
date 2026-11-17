@@ -2,6 +2,8 @@
 
 手元の macOS または Ubuntu で中継を動かす手順と、動作確認の項目をまとめています。前提条件とインストール方法は [README.md](../README.md) を、仕様は [docs/relay.md](relay.md) を参照してください。
 
+コマンドは、インストールした `agent-chat-relay`（別名 `ac-relay`）で書いています。リポジトリを clone して開発する場合は、`agent-chat-relay` を `scripts/relay.sh` に読み替えてください（データの置き場と秘密情報の扱いが違います。[README.md](../README.md#開発)）。
+
 ## LINE 公式アカウントとチャネルの準備（初回のみ）
 
 Messaging API のチャネルは、LINE Developers コンソールから直接は作成できません。LINE 公式アカウントを作成し、LINE Official Account Manager（以下 OAM）で Messaging API を有効にすると、チャネルが作成されます。画面の名称は変わることがあるので、見つからない場合は近い名前の項目を探してください。
@@ -11,20 +13,20 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 3. **応答設定**（OAM の［設定］→［応答設定］）：チャットはオンにし、あいさつメッセージと応答メッセージはオフにします。チャットをオンにするのは、中継が受け取った発言に既読を付けるためです（ADR 0012）。手動の返事や自動応答が Bot の返信に混ざらないよう、OAM のチャット画面からは返事をしないでください。Webhook は、URL を登録するまでオンにできません。
 4. **グループへの参加を許可する**（OAM の［設定］→［アカウント設定］→［トークへの参加］）：既定では許可されていません。1 つのグループに参加できる公式アカウントは 1 つだけです。
 5. **必要な値を控える**（<https://developers.line.biz/console/> で、作成したプロバイダーのチャネルを開きます）
-   - ［チャネル基本設定］の**チャネルシークレット**と、［Messaging API 設定］の**チャネルアクセストークン（長期）**（［発行］を押して発行）を、`scripts/relay.sh secrets line` で保存します。チャットには貼り付けないでください。OAM の［設定］→［Messaging API］にはシークレットが平文で表示されるので、その画面のスクリーンショットも共有しないでください。漏れた場合は再発行して保存し直します。トークンを再発行すると、以前のトークンは使えなくなります。
+   - ［チャネル基本設定］の**チャネルシークレット**と、［Messaging API 設定］の**チャネルアクセストークン（長期）**（［発行］を押して発行）を、`agent-chat-relay secrets line` で保存します。チャットには貼り付けないでください。OAM の［設定］→［Messaging API］にはシークレットが平文で表示されるので、その画面のスクリーンショットも共有しないでください。漏れた場合は再発行して保存し直します。トークンを再発行すると、以前のトークンは使えなくなります。
    - ［Messaging API 設定］の QR コードは、Bot を友だちに追加するときに使います。
 
 ## Chatwork の Bot アカウントの準備（初回のみ）
 
 1. **Bot 用の Chatwork アカウントを作成する**（無料プランで可）：表示名が、ルームのメンバーに見える Bot の名前になります。自分のアカウントは使わないでください。Bot の発言が自分の名前で表示され、自分宛てのメンションがすべて Bot に渡ってしまいます。
-2. **API トークンを発行する**：Bot のアカウントでログインし、右上のメニュー →［サービス連携］→［API トークン］から発行します。組織の契約によっては、組織管理者への申請が必要です。トークンは `scripts/relay.sh secrets chatwork` で保存します。チャットには貼り付けないでください。漏れた場合は再発行して保存し直します。
+2. **API トークンを発行する**：Bot のアカウントでログインし、右上のメニュー →［サービス連携］→［API トークン］から発行します。組織の契約によっては、組織管理者への申請が必要です。トークンは `agent-chat-relay secrets chatwork` で保存します。チャットには貼り付けないでください。漏れた場合は再発行して保存し直します。
 3. **コンタクトになる**：使う人と Bot をコンタクトにします。DM と実行承認の依頼は、コンタクト間のダイレクトチャットでやり取りします。無料プランでは、組織外のコンタクトは 1 ユーザーあたり 20 人までです。
 4. Webhook とトンネルは不要です（ADR 0010）。
 
 ## Discord の Bot の準備（初回のみ）
 
 1. **アプリを作成する**：<https://discord.com/developers/applications> で［New Application］を選びます。名前が、サーバーのメンバーに見える Bot の名前になります。
-2. **Bot のトークンを取得する**：［Bot］→［Reset Token］で表示されたトークンを、`scripts/relay.sh secrets discord` で保存します。チャットには貼り付けないでください。漏れた場合は作り直して保存し直します。
+2. **Bot のトークンを取得する**：［Bot］→［Reset Token］で表示されたトークンを、`agent-chat-relay secrets discord` で保存します。チャットには貼り付けないでください。漏れた場合は作り直して保存し直します。
 3. **Message Content Intent をオンにする**：同じ［Bot］の画面の［Privileged Gateway Intents］で、［Message Content Intent］をオンにします。オフのままだと、メンションのない発言の本文が空で届きます。
 4. **サーバーに招待する**：［OAuth2］→［URL Generator］で、Scopes に `bot` を選びます。Bot Permissions には次を選びます。
    - View Channels
@@ -40,28 +42,27 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 
 ## 準備
 
-- `mise install` と `mise exec -- bun install` を実行しておきます。
 - Claude Code（`claude`）をインストールし、ログインしておきます。中継は、PATH 上の `claude` を `claude-agent-acp` 経由で起動します。
-- 秘密情報を保存します。LINE は `scripts/relay.sh secrets line`、Chatwork は `scripts/relay.sh secrets chatwork`、Discord は `scripts/relay.sh secrets discord` で入力します。どれか 1 つだけでも動きます。保存には dotenvx が必要です。dotenvx を使わない場合は、下の表にある名前の環境変数で渡してください（[README.md](../README.md#秘密情報の管理)）。
+- 秘密情報を保存します。LINE は `agent-chat-relay secrets line`、Chatwork は `agent-chat-relay secrets chatwork`、Discord は `agent-chat-relay secrets discord` で入力します。どれか 1 つだけでも動きます。環境変数で渡すこともできます（[README.md](../README.md#秘密情報の管理)）。
 - 作業ディレクトリを独立した git リポジトリにできない場合（git がインストールされていない場合など）、中継は起動しません。
 
-中継が使うファイルは次のとおりです。
+中継が使うファイルは次のとおりです。置き場は `~/.agent-chat-relay/` で、`RELAY_HOME` で変えられます（ADR 0019）。
 
 | 場所 | 内容 |
 |---|---|
-| `.env`（git の管理対象外） | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`・`RELAY_DISCORD_BOT_TOKEN`（dotenvx で暗号化） |
-| `.local/relay/access.json` | ルームの登録、許可リスト、ペアリング待ちのコード |
-| `.local/relay/workspace/` | セッションの作業ディレクトリ。受け取った添付ファイルは `.relay/inbox/` に保存し、7 日で削除します |
-| `.local/relay/media/` | LINE に返信した画像（推測できない名前で公開し、7 日で削除します） |
-| `.local/relay/harness.log` | ハーネスの標準エラー出力（画面には表示しません。異常終了したときだけ、最後の 20 行を表示します）。10MB を超えそうになると `harness.log.1` に移して新しいファイルに切り替えます |
+| `~/.agent-chat-relay/.env` | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`・`RELAY_DISCORD_BOT_TOKEN`（平文。権限は 0600） |
+| `~/.agent-chat-relay/access.json` | ルームの登録、許可リスト、ペアリング待ちのコード |
+| `~/.agent-chat-relay/workspace/` | セッションの作業ディレクトリ。受け取った添付ファイルは `.relay/inbox/` に保存し、7 日で削除します |
+| `~/.agent-chat-relay/media/` | LINE に返信した画像（推測できない名前で公開し、7 日で削除します） |
+| `~/.agent-chat-relay/harness.log` | ハーネスの標準エラー出力（画面には表示しません。異常終了したときだけ、最後の 20 行を表示します）。10MB を超えそうになると `harness.log.1` に移して新しいファイルに切り替えます |
 
 ## 起動
 
 LINE を使う場合は、ターミナルを 2 つ使います。
 
-1. `scripts/relay.sh serve` を実行します（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しません。試す場合も、信頼できる人だけがいるルームに限ってください。
-   - 起動のたびに新しいセッションになります。前の会話を続ける場合は、前回の起動ログの「セッションを開始しました」（または「再開しました」）に表示された `sessionId` を指定します：`scripts/relay.sh serve --session-id <id>`。再開できない場合は、理由を表示して起動を中止します（新しいセッションは作りません）。再開できるのは、中継の作業ディレクトリで作ったセッションだけです（[docs/relay.md](relay.md#セッションの再開)）。
-2. `scripts/relay.sh line-tunnel` を実行します。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けた URL を、LINE Developers コンソールの［Messaging API 設定］で Webhook URL に登録し、［検証］を押します。
+1. `agent-chat-relay serve` を実行します（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しません。試す場合も、信頼できる人だけがいるルームに限ってください。
+   - 起動のたびに新しいセッションになります。前の会話を続ける場合は、前回の起動ログの「セッションを開始しました」（または「再開しました」）に表示された `sessionId` を指定します：`agent-chat-relay serve --session-id <id>`。再開できない場合は、理由を表示して起動を中止します（新しいセッションは作りません）。再開できるのは、中継の作業ディレクトリで作ったセッションだけです（[docs/relay.md](relay.md#セッションの再開)）。
+2. `agent-chat-relay line-tunnel` を実行します。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けた URL を、LINE Developers コンソールの［Messaging API 設定］で Webhook URL に登録し、［検証］を押します。
 
    | ［検証］の結果 | 主な原因 |
    |---|---|
@@ -75,7 +76,7 @@ Quick Tunnel の URL は、トンネルを起動し直すたびに変わりま�
 
 停止するときは、両方のターミナルで Ctrl+C を押し、［Webhook の利用］をオフにします。
 
-Chatwork と Discord だけを使う場合は、`scripts/relay.sh serve` だけで動きます（トンネルは不要です）。
+Chatwork と Discord だけを使う場合は、`agent-chat-relay serve` だけで動きます（トンネルは不要です）。
 
 ## 中継を分けて動かす
 
@@ -83,17 +84,17 @@ Chatwork と Discord だけを使う場合は、`scripts/relay.sh serve` だけ�
 
 | 環境変数 | 既定値 | 分ける理由 |
 |---|---|---|
-| `RELAY_ENV_FILE` | リポジトリ直下の `.env` | Bot の秘密情報を分ける。復号鍵は同じディレクトリの `.env.keys` になる。どちらも git の無視対象の場所に置く（例：`.local/relay-b/.env`） |
-| `RELAY_HOME` | `.local/relay` | ルームの登録、許可リスト、作業ディレクトリ、ログを分ける |
+| `RELAY_HOME` | `~/.agent-chat-relay` | ルームの登録、許可リスト、秘密情報、作業ディレクトリ、ログを分ける |
+| `RELAY_ENV_FILE` | `<RELAY_HOME>/.env` | 秘密情報のファイルだけを別の場所にする（通常は `RELAY_HOME` を分ければ足りる） |
 | `RELAY_HTTP_PORT` | `18080` | Webhook と画像の配信のポートが重ならないようにする |
 | `RELAY_MCP_PORT` | `18090` | チャット用ツールの MCP サーバーのポートが重ならないようにする |
 
 例：
 
 ```sh
-export RELAY_ENV_FILE=.local/relay-b/.env RELAY_HOME=.local/relay-b RELAY_HTTP_PORT=18081 RELAY_MCP_PORT=18091
-scripts/relay.sh secrets discord
-scripts/relay.sh serve
+export RELAY_HOME=~/.agent-chat-relay-b RELAY_HTTP_PORT=18081 RELAY_MCP_PORT=18091
+agent-chat-relay secrets discord
+agent-chat-relay serve
 ```
 
 ほかに、次の環境変数で動きを変えられます。
@@ -109,7 +110,7 @@ scripts/relay.sh serve
 
 端末で使っているエージェントの作業フォルダ、設定、記憶を、そのままルームで使うための環境変数です（ADR 0017）。どれも、管理者が自分の責任で指定します。指定すると、その環境が承認なしで許していること（allow ルール、hooks、作業ディレクトリの中身を読むこと）が、登録したルームの誰の発言からでも使えるようになります。秘密情報を置いたディレクトリは、作業ディレクトリにしないでください。
 
-`serve` のフラグでも指定できます。フラグは環境変数より優先します（ADR 0019）。例：`scripts/relay.sh serve --workspace ~/work/project`。`scripts/relay.sh` はリポジトリ直下に移ってから動くので、相対パスはリポジトリ直下を起点にします。
+`serve` のフラグでも指定できます。フラグは環境変数より優先します（ADR 0019）。例：`agent-chat-relay serve --workspace .`（起動したディレクトリを作業ディレクトリにする）。`scripts/relay.sh` はリポジトリ直下に移ってから動くので、相対パスはリポジトリ直下を起点にします。
 
 | 環境変数（`serve` のフラグ） | 内容 |
 |---|---|
@@ -121,9 +122,9 @@ scripts/relay.sh serve
 
 ## ルームと承認者の登録（ペアリング）
 
-1. Bot に 1 対 1 でメッセージを送ります。コードが返ってくるので、端末で `scripts/relay.sh pair <コード>` を実行します。これで自分が許可リストに追加され、実行承認の依頼を受け取れるようになります。
+1. Bot に 1 対 1 でメッセージを送ります。コードが返ってくるので、端末で `agent-chat-relay pair <コード>` を実行します。これで自分が許可リストに追加され、実行承認の依頼を受け取れるようになります。
 2. Bot をグループに招待します（招待済みの場合は、Bot にメンションしてメッセージを送ります）。コードが返ってくるので、同じように `pair` を実行します。
-3. 登録した内容は `scripts/relay.sh access` で確認できます（ID は伏せて表示します）。
+3. 登録した内容は `agent-chat-relay access` で確認できます（ID は伏せて表示します）。
 
 ## 動作確認の項目（LINE）
 
@@ -141,7 +142,7 @@ scripts/relay.sh serve
 | メンションして、作業ディレクトリにファイルを作るよう頼む | 承認者の DM に承認依頼が届く。［許可］を押すと実行され、返信が届く |
 | 承認依頼に［拒否］で答える | 実行されない |
 
-Push は、グループではメンバーの人数分、承認依頼では承認者 1 人につき 1 通を消費します。今月の消費数は `scripts/relay.sh line-quota` で確認できます。
+Push は、グループではメンバーの人数分、承認依頼では承認者 1 人につき 1 通を消費します。今月の消費数は `agent-chat-relay line-quota` で確認できます。
 
 ## 動作確認の項目（Chatwork）
 

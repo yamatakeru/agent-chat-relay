@@ -1,0 +1,22 @@
+#!/bin/sh
+# agent-chat-relay の入り口（ADR 0019）。中継の本体を Bun で動かす。
+# Bun は、起動したディレクトリの .env を環境変数に読み込み、bunfig.toml の preload を実行する。
+# どこからでも起動するので、どちらも読ませない（--no-env-file --config=/dev/null）
+set -e
+
+# npm や bun は、このファイルへのシンボリックリンクを PATH に置くので、リンクをたどってパッケージの場所を求める
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+root=$(cd "$(dirname "$self")/.." && pwd -P)
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "agent-chat-relay: bun が見つかりません。https://bun.sh の手順でインストールしてください" >&2
+  exit 1
+fi
+exec bun --no-env-file --config=/dev/null "$root/src/main.ts" "$@"

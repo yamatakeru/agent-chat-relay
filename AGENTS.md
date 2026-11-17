@@ -12,13 +12,14 @@ LINE・LINE WORKS・Chatwork・Discord のルームを、任意のハーネス�
 
 - ツールは `mise.toml` でバージョンを固定し、`mise exec --` で使う。グローバルの環境に依存しない。Bun のパッケージのキャッシュも、`mise.toml` の `[env]` で `.local/bun/cache` に向けている。
 - 実行時のデータ、調査用のソース、一時ファイルは `.local/`（git の無視対象）に置く。ホーム、`~/Library/Caches`、`/tmp` には作らない。設定ファイルの複製のような、不要な中間物も作らない。
+- 中継の本体は、`RELAY_HOME` がなければ `~/.agent-chat-relay/` を使う（インストールした CLI の既定。ADR 0019）。開発と確認では `scripts/relay.sh`（`.local/relay` を使う）で動かすか、`RELAY_HOME` を `.local/` の中に向ける。
 - 調査用のソース（ACP のアダプターなど）は `.local/src/` に、使っているバージョンのタグを clone して読む。
 - テストで Claude Code を起動すると、`~/.claude/projects/` に会話ログができる。終わったら片付ける。
 
 ## 秘密情報（リポジトリは public）
 
 - 秘密情報、LINE の userId・groupId を、コミット・issue・PR に書かない。
-- 秘密情報は、dotenvx で暗号化したリポジトリ直下の `.env` に置く。復号鍵は `.env.keys`。どちらも git の無視対象。
+- 開発の秘密情報は、dotenvx で暗号化したリポジトリ直下の `.env` に置く。復号鍵は `.env.keys`。どちらも git の無視対象。
 - 秘密情報をコマンド引数に載せない（`ps` やシェル履歴に残る）。`dotenvx set` も秘密情報には使わない。
 
 ## ルームから動く agent

@@ -1,7 +1,39 @@
 {
   "name": "agent-chat-relay",
-  "private": true,
+  "version": "0.1.0",
+  "description": "LINE・Chatwork・Discord のルームから、Claude Code などのコーディングエージェントに作業を依頼するための中継サーバー（ACP・MCP）",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yamatakeru/agent-chat-relay.git"
+  },
+  "homepage": "https://github.com/yamatakeru/agent-chat-relay#readme",
+  "bugs": "https://github.com/yamatakeru/agent-chat-relay/issues",
+  "keywords": [
+    "acp",
+    "mcp",
+    "claude-code",
+    "line",
+    "chatwork",
+    "discord",
+    "agent"
+  ],
   "type": "module",
+  "bin": {
+    "agent-chat-relay": "bin/agent-chat-relay",
+    "ac-relay": "bin/agent-chat-relay"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "scripts": {
     "relay": "bun src/main.ts",
     "test": "bun test",
