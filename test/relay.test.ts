@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
@@ -17,7 +17,8 @@ import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
-import { initWorkspace } from "../src/workspace.ts"
+import { initWorkspace, resolveWorkspace } from "../src/workspace.ts"
+import { claudeOptions, harnessConfig, harnessOptionsFromEnv } from "../src/harness/config.ts"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { buildTools } from "../src/core/mcp.ts"
@@ -1059,6 +1060,86 @@ describe("作業ディレクトリ", () => {
   test("git init に失敗したら、または git が無ければ起動しない", () => {
     expect(() => initWorkspace(join(dir, "ws"), "false")).toThrow("起動しません")
     expect(() => initWorkspace(join(dir, "ws"), "/nonexistent/git")).toThrow("起動しません")
+  })
+
+  test("指定がなければ <home>/workspace を作り、指定があればそのディレクトリを git init せずに使う", () => {
+    const home = join(dir, "home")
+    expect(resolveWorkspace({}, home, [home])).toEqual({ path: join(home, "workspace"), specified: false })
+    expect(existsSync(join(home, "workspace", ".git"))).toBe(true)
+
+    const mine = join(dir, "mine")
+    mkdirSync(mine)
+    symlinkSync(mine, join(dir, "link"))
+    // 実パスにする
+    expect(resolveWorkspace({ RELAY_WORKSPACE: join(dir, "link") }, home, [home])).toEqual({ path: realpathSync(mine), specified: true })
+    expect(existsSync(join(mine, ".git"))).toBe(false)
+  })
+
+  test("指定したディレクトリがないか、中継のデータか秘密情報の置き場を含むなら、起動しない", () => {
+    const home = join(dir, "relay", "home")
+    const secrets = join(dir, "secrets")
+    mkdirSync(secrets)
+    writeFileSync(join(dir, "file"), "")
+    const ws = (w: string) => () => resolveWorkspace({ RELAY_WORKSPACE: w }, home, [home, secrets])
+    expect(ws(join(dir, "nothing"))).toThrow("ディレクトリがありません")
+    expect(ws(join(dir, "file"))).toThrow("ディレクトリがありません")
+    expect(existsSync(join(dir, "nothing"))).toBe(false)
+    // まだない RELAY_HOME も含めない
+    mkdirSync(join(dir, "relay"))
+    expect(ws(join(dir, "relay"))).toThrow("含むため")
+    expect(ws(secrets)).toThrow("含むため")
+    expect(ws(dir)).toThrow("含むため")
+    mkdirSync(join(dir, "..secrets-like"))
+    expect(resolveWorkspace({ RELAY_WORKSPACE: join(dir, "..secrets-like") }, home, [home, secrets]).specified).toBe(true)
+  })
+})
+
+describe("ハーネスの設定の読み込み", () => {
+  const NONE = { inheritSettings: false, memory: false }
+
+  test("決めた値だけを受け付け、空の値は指定なしとして扱う", () => {
+    expect(harnessOptionsFromEnv({})).toEqual(NONE)
+    expect(harnessOptionsFromEnv({ RELAY_HARNESS_SETTINGS: "", RELAY_HARNESS_MEMORY: "" })).toEqual(NONE)
+    expect(harnessOptionsFromEnv({ RELAY_HARNESS_SETTINGS: "default", RELAY_HARNESS_MEMORY: "1" })).toEqual({ inheritSettings: true, memory: true })
+    expect(() => harnessOptionsFromEnv({ RELAY_HARNESS_SETTINGS: "true" })).toThrow("RELAY_HARNESS_SETTINGS に指定できるのは default だけ")
+    expect(() => harnessOptionsFromEnv({ RELAY_HARNESS_MEMORY: "yes" })).toThrow("RELAY_HARNESS_MEMORY に指定できるのは 1 だけ")
+  })
+
+  test("指定がなければ、ユーザー設定・CLAUDE.md・自動メモリを読ませない。指定しても、権限モードと mcp__chat の許可は外さない", () => {
+    const permissions = { defaultMode: "default", allow: ["mcp__chat"] }
+    expect(claudeOptions(NONE)).toEqual({
+      settingSources: ["project", "local"],
+      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"], autoMemoryEnabled: false, permissions },
+    })
+    expect(claudeOptions({ inheritSettings: true, memory: false })).toEqual({ settings: { autoMemoryEnabled: false, permissions } })
+    expect(claudeOptions({ inheritSettings: false, memory: true })).toEqual({
+      settingSources: ["project", "local"],
+      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"], autoMemoryEnabled: true, permissions },
+    })
+    expect(claudeOptions({ inheritSettings: true, memory: true })).toEqual({ settings: { autoMemoryEnabled: true, permissions } })
+  })
+
+  test("opencode は、指定した作業ディレクトリにある管理者の設定を上書きしない", () => {
+    const env = { RELAY_ALLOW_UNSAFE_HARNESS: "1" }
+    const mcp = { url: "http://127.0.0.1/mcp", token: "t" }
+    const infos: string[] = []
+    const log = { info: (m: string) => void infos.push(m), error: () => {} }
+    const open = (cwd: string, specified: boolean, opts = NONE) => () => harnessConfig("opencode", cwd, mcp, opts, log, specified, env)
+
+    // 中継専用の作業ディレクトリでは、今までどおり書く
+    writeFileSync(join(dir, "opencode.json"), "{}")
+    open(dir, false)()
+    const written = readFileSync(join(dir, "opencode.json"), "utf8")
+    expect(written).toContain('"chat_*"')
+    // 中継が書いたものと同じなら、指定した作業ディレクトリでも使う
+    expect(open(dir, true, { inheritSettings: true, memory: false })).not.toThrow()
+    expect(infos).toContain("RELAY_HARNESS_SETTINGS・RELAY_HARNESS_MEMORY は、opencode には効きません")
+    writeFileSync(join(dir, "opencode.json"), "{}")
+    expect(open(dir, true)).toThrow("上書きしません")
+    expect(readFileSync(join(dir, "opencode.json"), "utf8")).toBe("{}")
+    rmSync(join(dir, "opencode.json"))
+    writeFileSync(join(dir, "opencode.jsonc"), "{}")
+    expect(open(dir, true)).toThrow("opencode.jsonc")
   })
 })
 
