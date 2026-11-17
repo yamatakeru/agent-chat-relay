@@ -642,6 +642,8 @@ describe("serve の引数", () => {
       [["--workspace", "a", "--workspace=b"], "2 回"],
       [["--harness-memory", "--harness-memory"], "2 回"],
       [["--harness-memory=1"], "知らないオプション"],
+      [["constructor", "x"], "1 つだけ"],
+      [["--toString"], "知らないオプション"],
     ]
     for (const [args, message] of bad) expect(() => parseServeArgs(args)).toThrow(message)
     expect(parseServeArgs(["--session-id", "x".repeat(256)]).sessionId).toHaveLength(256)

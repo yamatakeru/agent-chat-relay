@@ -111,11 +111,11 @@ case "$cmd" in
   serve | line-quota)
     with_env "$cmd" "$@"
     # 引数の解釈と検証は main.ts がする（ハーネスの既定は RELAY_HARNESS、なければ claude）。
-    # Bun に、リポジトリ直下の（暗号化された）.env を読ませない
-    exec mise exec -- bun --no-env-file src/main.ts "$cmd" "$@"
+    # Bun に、リポジトリ直下の（暗号化された）.env と bunfig.toml を読ませない（ADR 0019）
+    exec mise exec -- bun --no-env-file --config=/dev/null src/main.ts "$cmd" "$@"
     ;;
   # line-tunnel は、mise でインストールした cloudflared を使う
-  pair | access | line-tunnel) exec mise exec -- bun --no-env-file src/main.ts "$cmd" "$@" ;;
+  pair | access | line-tunnel) exec mise exec -- bun --no-env-file --config=/dev/null src/main.ts "$cmd" "$@" ;;
   line-webhook)
     with_env line-webhook "$@"
     exec mise exec -- bun scripts/line-webhook.ts "$@"

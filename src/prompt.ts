@@ -3,6 +3,8 @@
 /** 読んだが、まだ使っていない入力（パイプで複数行がまとめて届いたときの残り） */
 let pending = ""
 let ended = false
+/** 直前の行が \r で終わった。\r\n が別々のチャンクで届いても、\n を空行にしない */
+let afterCR = false
 
 /** 1 行を読む。端末なら入力を表示しない。端末でなければ（パイプなど）、標準入力の次の行を読む */
 export async function readSecret(label: string): Promise<string> {
@@ -18,9 +20,11 @@ export async function readSecret(label: string): Promise<string> {
         while (pending) {
           const ch = pending[0]!
           pending = pending.slice(1)
+          const skip = afterCR && ch === "\n"
+          afterCR = false
+          if (skip) continue
           if (ch === "\r" || ch === "\n") {
-            // 改行が \r\n で届いたら、\n も読み捨てる
-            if (ch === "\r" && pending[0] === "\n") pending = pending.slice(1)
+            afterCR = ch === "\r"
             resolve(value)
             return true
           }

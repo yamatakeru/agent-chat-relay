@@ -117,3 +117,15 @@ test.skipIf(!Bun.which("claude"))("claude-agent-acp は、このパッケージ�
   expect(cfg.command.slice(0, 3)).toEqual(BUN_ISOLATED)
   expect(cfg.command[3]).toBe(join(repo, "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"))
 })
+
+test("隠し入力は、\r\n がチャンクをまたいでも、空行を挟まずに次の行を読む", async () => {
+  const script = join(dir, "read.ts")
+  writeFileSync(script, `import { readSecret } from ${JSON.stringify(join(repo, "src/prompt.ts"))}\nconsole.log(JSON.stringify([await readSecret(""), await readSecret(""), await readSecret("")]))\n`)
+  const proc = Bun.spawn([...BUN_ISOLATED, script], { stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+  proc.stdin.write("sec\r")
+  await proc.stdin.flush()
+  await Bun.sleep(100)
+  proc.stdin.write("\ntok\r\n\n")
+  await proc.stdin.end()
+  expect(JSON.parse(await new Response(proc.stdout).text())).toEqual(["sec", "tok", ""])
+})

@@ -25,13 +25,13 @@ export function parseServeArgs(args: string[], defaultHarness = "claude"): Serve
     const name = arg.split("=", 1)[0]!
     if (name.startsWith("--") && seen.has(name)) throw new Error(`${name} が 2 回指定されています`)
     seen.add(name)
-    if (name === "--session-id" || name in VALUE_FLAGS) {
+    if (name === "--session-id" || Object.hasOwn(VALUE_FLAGS, name)) {
       const value = arg === name ? args[++i] : arg.slice(name.length + 1)
       if (value === undefined || value.startsWith("-")) throw new Error(`${name} の値がありません`)
       if (value === "") throw new Error(`${name} の値が空です`)
       if (name === "--session-id") sessionId = checkSessionId(value)
       else env[VALUE_FLAGS[name]!] = value
-    } else if (arg in SWITCH_FLAGS) {
+    } else if (Object.hasOwn(SWITCH_FLAGS, arg)) {
       const [key, value] = SWITCH_FLAGS[arg]!
       env[key] = value
     } else if (arg.startsWith("-")) {
