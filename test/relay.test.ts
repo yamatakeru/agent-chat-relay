@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import fc from "fast-check"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
 import { DiscordConnector, renderContent } from "../src/connectors/discord.ts"
@@ -48,8 +49,10 @@ function msg(over: Partial<Incoming> = {}): Incoming {
 }
 
 class FakeConnector implements Connector {
-  readonly service = "line"
-  readonly label = "LINE"
+  constructor(
+    readonly service = "line",
+    readonly label = "LINE",
+  ) {}
   capabilities: Capabilities = { files: { kinds: "画像", maxBytes: 4, maxCount: 1 }, text: { max: 5000, parts: 5 } }
   history?: (room: string, limit: number) => Promise<ChatMessage[]>
   async start() {}
@@ -330,6 +333,98 @@ describe("relay", () => {
     void relay.requestPermission({ title: "c", input: "", always: "x".repeat(201) })
     await Bun.sleep(5)
     expect(conn.approvals.at(-1)).toMatchObject({ always: false, text: expect.not.stringContaining("always") })
+  })
+
+  test("束の文面が承認者のサービスの上限を超えるなら、その手前で束を分ける（範囲の長い依頼 5 件を Discord の 2,000 字に）", async () => {
+    const { relay, conn } = setup()
+    conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
+    const scopes = [0, 1, 2, 3, 4].map((n) => `scope${n}:${"s".repeat(150)}`)
+    for (const always of scopes) void relay.requestPermission({ title: "Bash", input: "i".repeat(300), always })
+    await Bun.sleep(5)
+    // 束を組むときに分ける（送るときに 1 件ずつにするのではない）
+    expect(conn.approvals.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（4 件）", "🔐 実行の承認：Bash"])
+    for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
+    for (const s of scopes) expect(conn.approvals.filter((a) => a.text.includes(s))).toHaveLength(1)
+    expect(conn.approvals.every((a) => a.always)).toBe(true)
+  })
+
+  test("依頼が 1 件でも、題名と入力が長ければ省いて上限に収め、答え方と「常に許可」の範囲は残す", async () => {
+    const { relay, conn } = setup()
+    conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
+    const scope = `Yes, and don't ask again for ${"x".repeat(150)}`
+    void relay.requestPermission({ title: "t".repeat(1000), input: "i".repeat(3000), always: scope })
+    await Bun.sleep(5)
+    const [a] = conn.approvals
+    expect(a!.text.length).toBeLessThanOrEqual(2000)
+    expect(a!.text).toContain(`常に許可：always ${a!.id}（${scope}）`)
+    expect(a!.text).toContain(`拒否：no ${a!.id}`)
+  })
+
+  test("どんな依頼の組み合わせでも、承認依頼の文面は上限に収まり、どの依頼もちょうど 1 通に入り、「常に許可」の範囲は省かない（property-based）", async () => {
+    const request = fc.record({
+      title: fc.string({ maxLength: 400, unit: "grapheme", size: "max" }),
+      input: fc.string({ maxLength: 2500, size: "max" }),
+      always: fc.option(fc.string({ minLength: 1, maxLength: 240, size: "max" }), { nil: undefined }),
+    })
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1000, max: 5000 }), fc.array(request, { minLength: 1, maxLength: 12, size: "max" }), async (max, generated) => {
+        const { relay, conn } = setup()
+        conn.capabilities = { ...conn.capabilities, text: { max, parts: 10 } }
+        // 依頼ごとに違う目印を、題名と範囲の先頭に付ける
+        const reqs = generated.map((r, n) => ({ ...r, title: `«t${n}»${r.title}`, always: r.always && `«s${n}»${r.always}` }))
+        const verdicts = reqs.map((r) => relay.requestPermission(r))
+        // 束は setTimeout(0) で送られる
+        await new Promise((r) => setTimeout(r, 0))
+        // コネクターが切らない長さで渡す
+        for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(max)
+        reqs.forEach((r, n) => {
+          // どの依頼も、ちょうど 1 通の文面に入る
+          const shown = conn.approvals.filter((a) => a.text.includes(`«t${n}»`))
+          expect(shown).toHaveLength(1)
+          // 「常に許可」を示せる依頼の範囲は、そのまま書かれる
+          if (r.always && r.always.length <= 200) expect(shown[0]!.text).toContain(r.always)
+        })
+        for (const a of conn.approvals) expect(relay.answer(ALICE, a.id, "deny")).toBe(true)
+        expect(await Promise.all(verdicts)).toEqual(reqs.map(() => "deny"))
+      }),
+      { numRuns: 150, interruptAfterTimeLimit: 20_000, markInterruptAsFailure: true },
+    )
+  }, 60_000)
+
+  test("本文の上限が承認依頼の文面に足りないコネクターは、加えない", () => {
+    const relay = new Relay(access, quiet)
+    const conn = new FakeConnector()
+    conn.capabilities = { ...conn.capabilities, text: { max: 999, parts: 1 } }
+    expect(() => relay.addConnector(conn)).toThrow("approvalText を直してください")
+  })
+
+  test("束を組んだあとに上限の短いサービスの承認者が足されたら、その人には依頼を 1 件ずつ、依頼の ID で送る", async () => {
+    access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
+    const relay = new Relay(access, quiet, undefined, { quietMs: 20, maxMs: 200 })
+    const line = new FakeConnector()
+    const discord = new FakeConnector("discord", "Discord")
+    discord.capabilities = { ...discord.capabilities, text: { max: 2000, parts: 10 } }
+    relay.addConnector(line)
+    relay.addConnector(discord)
+    // 4 件の束は LINE の上限には収まるが、Discord の上限には収まらない（5 件にすると、その場で送られる）
+    const scopes = [0, 1, 2, 3].map((n) => `scope${n}:${"s".repeat(150)}`)
+    const verdicts = scopes.map((always) => relay.requestPermission({ title: "t".repeat(150), input: "i".repeat(300), always }))
+    // 束を送る前に、Discord の承認者を足す
+    access.save({ allowFrom: [ALICE, "discord:u1"], rooms: {}, pending: {} })
+    await Bun.sleep(60)
+    expect(line.approvals).toHaveLength(1)
+    expect(discord.approvals).toHaveLength(4)
+    for (const a of discord.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
+    scopes.forEach((s, n) => expect(discord.approvals[n]!.text).toContain(s))
+    // 依頼の ID での答えは、LINE の承認者が受け取った束の中の、その依頼にだけ当たる
+    const settled: string[] = []
+    verdicts.forEach((v, n) => void v.then(() => settled.push(scopes[n]!)))
+    for (const a of discord.approvals) {
+      expect(relay.answer("discord:u1", a.id, "allow")).toBe(true)
+      await Bun.sleep(0)
+      expect(a.text).toContain(settled.at(-1)!)
+    }
+    expect(settled.sort()).toEqual([...scopes].sort())
   })
 
   test("「常に許可」の選択肢は、モードの切り替えとファイルの編集には示さない。複数あれば先頭", () => {
