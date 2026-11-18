@@ -35,7 +35,7 @@
     "linux"
   ],
   "scripts": {
-    "relay": "bun src/main.ts",
+    "relay": "bin/agent-chat-relay",
     "test": "bun test",
     "check": "tsc --noEmit && bun --no-env-file --config=/dev/null scripts/check.ts"
   },

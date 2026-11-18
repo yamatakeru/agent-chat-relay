@@ -36,6 +36,31 @@ for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", "README.md", "
   })
 }
 
+// Bun は、起動したディレクトリの .env を環境変数に読み込み、bunfig.toml の preload を実行する。
+// 中継とスクリプトは、どちらも読ませずに起動する（ADR 0019。c3662b1、#18、#43、15efaa8 で繰り返した）
+const ISOLATION = "--no-env-file --config=/dev/null"
+const BUN_SCRIPT = /\bbun\s+((?:-\S+\s+)*)\S+\.ts\b/
+for (const f of files(["**/*.sh", "bin/*", "package.json", ".github/**/*.yml"], /^(node_modules|\.local)\//)) {
+  lines(f).forEach((line, n) => {
+    const m = line.match(BUN_SCRIPT)
+    if (m && !(m[1]!.includes("--no-env-file") && m[1]!.includes("--config=/dev/null")))
+      errors.push(`${f}:${n + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`)
+  })
+}
+// TypeScript からは、src/harness/config.ts の BUN_ISOLATED で起動する。
+// 例外は、その行に「分離の例外：理由（期限 YYYY-MM-DD、承認 名前）」を書く
+const EXEC_PATH = /\[\s*process\.execPath\s*,(?!\s*["'`])/
+const EXCEPTION = /分離の例外：.+（期限 (\d{4}-\d{2}-\d{2})、承認 \S+）/
+const today = new Date().toISOString().slice(0, 10)
+for (const f of files(["{src,test,scripts}/**/*.ts"], /^$/)) {
+  lines(f).forEach((line, n) => {
+    if (!EXEC_PATH.test(line)) return
+    const ex = line.match(EXCEPTION)
+    if (!ex) errors.push(`${f}:${n + 1}: Bun でスクリプトを起動するときは、src/harness/config.ts の BUN_ISOLATED を使う`)
+    else if (ex[1]! < today) errors.push(`${f}:${n + 1}: 分離の例外の期限（${ex[1]}）が過ぎている。BUN_ISOLATED を使うか、例外を見直して期限を延ばす`)
+  })
+}
+
 if (errors.length > 0) {
   for (const e of errors) console.error(e)
   process.exit(1)

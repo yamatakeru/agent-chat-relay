@@ -20,7 +20,7 @@ G2=C222bbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 A=Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 B=Ubbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
-mise exec -- bun test/e2e/mock-line.ts "$LOG" >"$E/mock-line-$H.log" 2>&1 &
+mise exec -- bun --no-env-file --config=/dev/null test/e2e/mock-line.ts "$LOG" >"$E/mock-line-$H.log" 2>&1 &
 MOCK=$!
 scripts/relay.sh serve "$H" >"$RLOG" 2>&1 &
 RELAY=$!

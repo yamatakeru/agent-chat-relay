@@ -13,7 +13,8 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths } from "../src/core/relay.ts"
-import { alwaysOption, startHarness, withoutRelaySecrets } from "../src/harness/harness.ts"
+import { BUN_ISOLATED } from "../src/harness/config.ts"
+import { alwaysOption, startHarness } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
@@ -560,11 +561,6 @@ describe("コネクターの共通の部分", () => {
   })
 })
 
-test("ハーネスには中継の秘密情報を渡さない", () => {
-  const env = withoutRelaySecrets({ PATH: "/bin", RELAY_LINE_CHANNEL_TOKEN: "t", DOTENV_PRIVATE_KEY: "k" })
-  expect(env).toEqual({ PATH: "/bin" })
-})
-
 describe("ハーネスの起動と再開", () => {
   const MCP = { url: "http://127.0.0.1:1/mcp", token: "launch-token" }
   const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
@@ -583,7 +579,7 @@ describe("ハーネスの起動と再開", () => {
     try {
       const h = await startHarness(
         {
-          command: [process.execPath, join(import.meta.dir, "fixtures/acp-agent.ts")],
+          command: [...BUN_ISOLATED, join(import.meta.dir, "fixtures/acp-agent.ts")],
           env: { FAKE_ACP: JSON.stringify(fake) },
           cwd: dir,
           mcp: MCP,
@@ -607,9 +603,24 @@ describe("ハーネスの起動と再開", () => {
       // 失敗したときもハーネスは止められ、stderr を書き終えるまで少し待つ
       await Bun.sleep(200)
     }
-    return { error, logs, requests: requests() }
+    const env = (existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "").split("\n").find((l) => l.startsWith("ENV "))
+    return { error, logs, requests: requests(), env: env ? (JSON.parse(env.slice(4)) as string[]) : undefined }
   }
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
+
+  test("ハーネスには中継の秘密情報を渡さない", async () => {
+    process.env.RELAY_TEST_SECRET = "t"
+    process.env.DOTENV_TEST_KEY = "k"
+    try {
+      const r = await run({})
+      expect(r.error).toBeUndefined()
+      expect(r.env).toContain("FAKE_ACP")
+      expect(r.env!.filter((k) => /^(RELAY_|DOTENV_)/.test(k))).toEqual([])
+    } finally {
+      delete process.env.RELAY_TEST_SECRET
+      delete process.env.DOTENV_TEST_KEY
+    }
+  })
 
   test("_session/steering を宣言していなければ、差し込みを使わない", async () => {
     let steer: unknown = "unset"

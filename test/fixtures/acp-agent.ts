@@ -39,6 +39,8 @@ const app = acp
   .agent({ name: "fake-acp" })
   .onRequest("initialize", ({ params }) => {
     record("initialize", params)
+    // 中継から受け取った環境変数の名前（秘密情報を渡していないことを確かめるため）
+    process.stderr.write(`ENV ${JSON.stringify(Object.keys(process.env).sort())}\n`)
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: {
