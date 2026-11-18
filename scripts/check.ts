@@ -39,17 +39,25 @@ export function wordingErrors(file: string, text: string): string[] {
 // Bun は、起動したディレクトリの .env を環境変数に読み込み、bunfig.toml の preload を実行する。
 // 中継とスクリプトは、どちらも読ませずに起動する（ADR 0019。c3662b1、#18、#43、15efaa8 で繰り返した）
 const ISOLATION = "--no-env-file --config=/dev/null"
-/** bun [フラグ] [run [フラグ]] <file>.ts。1 行に複数あれば、1 つずつ見る */
-const BUN_SCRIPT = /\bbun\s+((?:-\S+\s+)*)(?:run\s+((?:-\S+\s+)*))?\S+\.ts\b/g
-
-/** シェル・package.json・CI での Bun の起動 */
+/**
+ * シェル・package.json・CI での Bun の起動。起動の形（フラグの位置、run、ほかのオプション）は見分けない。
+ * 継続行（行末の \）をつないだ 1 つのコマンドの中で、bun と .ts のファイルがあれば、bun ごとに分離のフラグを求める
+ */
 export function shellLaunchErrors(file: string, text: string): string[] {
-  return text.split("\n").flatMap((line, n) =>
-    [...line.matchAll(BUN_SCRIPT)]
-      .map((m) => `${m[1]} ${m[2] ?? ""}`)
-      .filter((flags) => !(flags.includes("--no-env-file") && flags.includes("--config=/dev/null")))
-      .map(() => `${file}:${n + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`),
-  )
+  const lines = text.split("\n")
+  const errors: string[] = []
+  for (let n = 0; n < lines.length; n++) {
+    const start = n
+    let command = lines[n]!
+    while (command.endsWith("\\") && n + 1 < lines.length) command = command.slice(0, -1) + " " + lines[++n]
+    // && や ; でつないだ起動は、1 つずつ見る
+    for (const part of command.split(/&&|\|\||;|\|/)) {
+      if (!/\bbun\b/.test(part) || !/\S\.ts\b/.test(part)) continue
+      if (!(part.includes("--no-env-file") && part.includes("--config=/dev/null")))
+        errors.push(`${file}:${start + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`)
+    }
+  }
+  return errors
 }
 
 // TypeScript からは、src/harness/config.ts の BUN_ISOLATED で起動する。process.execPath は、そこでだけ使う。

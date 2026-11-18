@@ -16,6 +16,11 @@ test("シェルからの Bun の起動は、bun run の形でも、フラグが�
   const bad = ["bun scripts/a.ts", "bun run scripts/a.ts", "bun --no-env-file scripts/a.ts", "bun run --config=/dev/null scripts/a.ts", "mise exec -- bun test/e2e/mock.ts x"]
   for (const line of bad) expect(shellLaunchErrors("a.sh", line)).toHaveLength(1)
   expect(shellLaunchErrors("package.json", "bun --no-env-file --config=/dev/null scripts/a.ts && bun scripts/b.ts")).toHaveLength(1)
+  expect(shellLaunchErrors("a.sh", "x\nbun \\\n  scripts/a.ts")).toEqual([
+    "a.sh:2: Bun でスクリプトを起動するときは「bun --no-env-file --config=/dev/null」にする。中継の本体は bin/agent-chat-relay から起動する",
+  ])
+  expect(shellLaunchErrors("a.sh", "bun --cwd ./work scripts/a.ts")).toHaveLength(1)
+  expect(shellLaunchErrors("a.sh", "bun --no-env-file \\\n  --config=/dev/null scripts/a.ts")).toEqual([])
   const good = ["bun --no-env-file --config=/dev/null scripts/a.ts", "bun run --no-env-file --config=/dev/null scripts/a.ts", "bun --no-env-file run --config=/dev/null scripts/a.ts", "bun run check", "bun test"]
   for (const line of good) expect(shellLaunchErrors("a.sh", line)).toEqual([])
 })
