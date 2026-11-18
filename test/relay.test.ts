@@ -19,7 +19,7 @@ import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
-import { initWorkspace, resolveWorkspace } from "../src/workspace.ts"
+import { initWorkspace, relayDir, resolveWorkspace } from "../src/workspace.ts"
 import { claudeOptions, harnessConfig, harnessOptionsFromEnv } from "../src/harness/config.ts"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
@@ -1295,6 +1295,21 @@ describe("作業ディレクトリ", () => {
   test("git init に失敗したら、または git が無ければ起動しない", () => {
     expect(() => initWorkspace(join(dir, "ws"), "false")).toThrow("起動しません")
     expect(() => initWorkspace(join(dir, "ws"), "/nonexistent/git")).toThrow("起動しません")
+  })
+
+  test("中継の置き場（.relay/）に届いたファイルは、管理者の git リポジトリでも未追跡にならない", () => {
+    const ws = join(dir, "admin-repo")
+    mkdirSync(ws)
+    expect(Bun.spawnSync(["git", "init", "-q", ws]).success).toBe(true)
+    const inbox = join(relayDir(ws), "inbox")
+    mkdirSync(inbox)
+    writeFileSync(join(inbox, "photo.png"), "x")
+    const status = Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()
+    expect(status).toBe("")
+    // 管理者が置いた .gitignore は書き換えない
+    writeFileSync(join(ws, ".relay", ".gitignore"), "mine\n")
+    relayDir(ws)
+    expect(readFileSync(join(ws, ".relay", ".gitignore"), "utf8")).toBe("mine\n")
   })
 
   test("指定がなければ <home>/workspace を作り、指定があればそのディレクトリを git init せずに使う", () => {
