@@ -1,4 +1,4 @@
-// リポジトリの検査（bun run check）。エージェントが繰り返した誤りを、CI で失敗させる（AGENTS.md の「規則と、それを強制するもの」）。
+// リポジトリの検査（bun run check）。エージェントが繰り返したミスを、CI で失敗させる（AGENTS.md の、ミスの再発を防止するための規則の表）。
 // 引数にディレクトリを渡すと、そこを検査する（過去のコミットで失敗することを確かめるため）
 //
 //   bun scripts/check.ts [root]
@@ -18,7 +18,7 @@ const WORDING: [RegExp, string][] = [
   [/入れ方/, "インストール方法"],
 ]
 
-/** 検査するファイル。ADR は記録なので対象外。AGENTS.md と GLOSSARY.md は、避ける語を例として書いている */
+/** 検査するファイル。ADR は記録なので対象外 */
 function files(patterns: string[], exclude: RegExp): string[] {
   const out = new Set<string>()
   for (const p of patterns) for (const f of new Bun.Glob(p).scanSync({ cwd: root, dot: true })) if (!exclude.test(f)) out.add(f)
@@ -31,7 +31,7 @@ function lines(file: string): string[] {
 
 const errors: string[] = []
 
-for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", "README.md", ".github/**/*.yml", "bin/*"], /^docs\/adr\/|^scripts\/check\.ts$/)) {
+for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", "README.md", "AGENTS.md", "GLOSSARY.md", ".github/**/*.yml", "bin/*"], /^docs\/adr\/|^scripts\/check\.ts$/)) {
   lines(f).forEach((line, n) => {
     for (const [re, use] of WORDING) if (re.test(line)) errors.push(`${f}:${n + 1}: 「${line.match(re)![0]}」ではなく「${use}」を使う（scripts/check.ts の WORDING）`)
   })
