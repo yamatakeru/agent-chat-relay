@@ -25,49 +25,75 @@ function files(patterns: string[], exclude: RegExp): string[] {
   return [...out].sort()
 }
 
-function lines(file: string): string[] {
-  return readFileSync(join(root, file), "utf8").split("\n")
+function read(file: string): string {
+  return readFileSync(join(root, file), "utf8")
 }
 
-const errors: string[] = []
-
-for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", "README.md", "AGENTS.md", "GLOSSARY.md", ".github/**/*.yml", "bin/*"], /^docs\/adr\/|^scripts\/check\.ts$/)) {
-  lines(f).forEach((line, n) => {
-    for (const [re, use] of WORDING) if (re.test(line)) errors.push(`${f}:${n + 1}: 「${line.match(re)![0]}」ではなく「${use}」を使う（scripts/check.ts の WORDING）`)
-  })
+/** 取り除いた言い回し */
+export function wordingErrors(file: string, text: string): string[] {
+  return text.split("\n").flatMap((line, n) =>
+    WORDING.filter(([re]) => re.test(line)).map(([re, use]) => `${file}:${n + 1}: 「${line.match(re)![0]}」ではなく「${use}」を使う（scripts/check.ts の WORDING）`),
+  )
 }
 
 // Bun は、起動したディレクトリの .env を環境変数に読み込み、bunfig.toml の preload を実行する。
 // 中継とスクリプトは、どちらも読ませずに起動する（ADR 0019。c3662b1、#18、#43、15efaa8 で繰り返した）
 const ISOLATION = "--no-env-file --config=/dev/null"
-const BUN_SCRIPT = /\bbun\s+((?:-\S+\s+)*)\S+\.ts\b/
-for (const f of files(["**/*.sh", "bin/*", "package.json", ".github/**/*.yml"], /^(node_modules|\.local)\//)) {
-  lines(f).forEach((line, n) => {
+/** bun [フラグ] [run [フラグ]] <file>.ts */
+const BUN_SCRIPT = /\bbun\s+((?:-\S+\s+)*)(?:run\s+((?:-\S+\s+)*))?\S+\.ts\b/
+
+/** シェル・package.json・CI での Bun の起動 */
+export function shellLaunchErrors(file: string, text: string): string[] {
+  return text.split("\n").flatMap((line, n) => {
     const m = line.match(BUN_SCRIPT)
-    if (m && !(m[1]!.includes("--no-env-file") && m[1]!.includes("--config=/dev/null")))
-      errors.push(`${f}:${n + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`)
+    if (!m) return []
+    const flags = `${m[1]} ${m[2] ?? ""}`
+    if (flags.includes("--no-env-file") && flags.includes("--config=/dev/null")) return []
+    return [`${file}:${n + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`]
   })
 }
+
 // TypeScript からは、src/harness/config.ts の BUN_ISOLATED で起動する。
-// 例外は、その行に「分離の例外：理由（期限 YYYY-MM-DD、承認 名前）」を書く
-const EXEC_PATH = /\[\s*process\.execPath\s*,(?!\s*["'`])/
+// 例外は、process.execPath の行に「分離の例外：理由（期限 YYYY-MM-DD、承認 名前）」を書く
+const EXEC_PATH = /\[\s*process\.execPath\s*,(?!\s*["'`])/g
 const EXCEPTION = /分離の例外：.+（期限 (\d{4}-\d{2}-\d{2})、承認 \S+）/
-const today = new Date().toISOString().slice(0, 10)
-for (const f of files(["{src,test,scripts}/**/*.ts"], /^$/)) {
-  lines(f).forEach((line, n) => {
-    if (!EXEC_PATH.test(line)) return
-    const ex = line.match(EXCEPTION)
-    if (!ex) errors.push(`${f}:${n + 1}: Bun でスクリプトを起動するときは、src/harness/config.ts の BUN_ISOLATED を使う`)
-    else if (ex[1]! < today) errors.push(`${f}:${n + 1}: 分離の例外の期限（${ex[1]}）が過ぎている。BUN_ISOLATED を使うか、例外を見直して期限を延ばす`)
+
+function isDate(s: string): boolean {
+  const d = new Date(`${s}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+
+/** TypeScript からの Bun の起動。配列が複数の行にまたがっていても見る */
+export function tsLaunchErrors(file: string, text: string, today: string): string[] {
+  const lines = text.split("\n")
+  return [...text.matchAll(EXEC_PATH)].flatMap((m) => {
+    const at = m.index + m[0].indexOf("process.execPath")
+    const n = text.slice(0, at).split("\n").length - 1
+    const ex = lines[n]!.match(EXCEPTION)
+    if (!ex) return [`${file}:${n + 1}: Bun でスクリプトを起動するときは、src/harness/config.ts の BUN_ISOLATED を使う`]
+    if (!isDate(ex[1]!)) return [`${file}:${n + 1}: 分離の例外の期限（${ex[1]}）が日付ではない`]
+    if (ex[1]! < today) return [`${file}:${n + 1}: 分離の例外の期限（${ex[1]}）が過ぎている。BUN_ISOLATED を使うか、例外を見直して期限を延ばす`]
+    return []
   })
 }
 
-// docs/relay.md の ADR の一覧は、docs/adr/ から生成する（手で同期すると、ずれていた。0005 が抜けていた）
-const current = currentIndex(readFileSync(join(root, "docs/relay.md"), "utf8"))
-if (current === undefined) errors.push(`docs/relay.md: 「${BEGIN}」と「${END}」の間に ADR の一覧を置く`)
-else if (current !== adrIndex(root)) errors.push("docs/relay.md: ADR の一覧が docs/adr/ と一致しない。bun run docs:adr を実行する")
+if (import.meta.main) {
+  // 検査そのもののテスト（test/check.test.ts）は、避ける語と起動の例を含む
+  const self = /^(scripts\/check\.ts|test\/check\.test\.ts)$/
+  const errors: string[] = []
+  for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", "README.md", "AGENTS.md", "GLOSSARY.md", ".github/**/*.yml", "bin/*"], /^docs\/adr\//))
+    if (!self.test(f)) errors.push(...wordingErrors(f, read(f)))
+  for (const f of files(["**/*.sh", "bin/*", "package.json", ".github/**/*.yml"], /^(node_modules|\.local)\//)) errors.push(...shellLaunchErrors(f, read(f)))
+  const today = new Date().toISOString().slice(0, 10)
+  for (const f of files(["{src,test,scripts}/**/*.ts"], self)) errors.push(...tsLaunchErrors(f, read(f), today))
 
-if (errors.length > 0) {
-  for (const e of errors) console.error(e)
-  process.exit(1)
+  // docs/relay.md の ADR の一覧は、docs/adr/ から生成する（手で同期すると、ずれていた。0005 が抜けていた）
+  const current = currentIndex(read("docs/relay.md"))
+  if (current === undefined) errors.push(`docs/relay.md: 「${BEGIN}」と「${END}」の間に ADR の一覧を置く`)
+  else if (current !== adrIndex(root)) errors.push("docs/relay.md: ADR の一覧が docs/adr/ と一致しない。bun run docs:adr を実行する")
+
+  if (errors.length > 0) {
+    for (const e of errors) console.error(e)
+    process.exit(1)
+  }
 }

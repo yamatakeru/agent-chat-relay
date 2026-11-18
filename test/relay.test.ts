@@ -609,6 +609,7 @@ describe("ハーネスの起動と再開", () => {
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
 
   test("ハーネスには中継の秘密情報を渡さない", async () => {
+    const saved = { RELAY_TEST_SECRET: process.env.RELAY_TEST_SECRET, DOTENV_TEST_KEY: process.env.DOTENV_TEST_KEY }
     process.env.RELAY_TEST_SECRET = "t"
     process.env.DOTENV_TEST_KEY = "k"
     try {
@@ -617,8 +618,10 @@ describe("ハーネスの起動と再開", () => {
       expect(r.env).toContain("FAKE_ACP")
       expect(r.env!.filter((k) => /^(RELAY_|DOTENV_)/.test(k))).toEqual([])
     } finally {
-      delete process.env.RELAY_TEST_SECRET
-      delete process.env.DOTENV_TEST_KEY
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
     }
   })
 

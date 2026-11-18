@@ -17,7 +17,9 @@ export function adrIndex(root: string): string {
     .sort()
     .flatMap((f) => {
       const text = readFileSync(join(dir, f), "utf8")
-      if (!/^status: accepted$/m.test(text)) return []
+      // status は、先頭の front matter の中だけを見る
+      const meta = text.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? ""
+      if (!/^status: accepted$/m.test(meta)) return []
       const title = text.match(/^# (.+)$/m)?.[1]
       if (!title) throw new Error(`docs/adr/${f} に見出し（# ）がありません`)
       return [`| [${f.slice(0, 4)}](adr/${f}) | ${title} |`]
@@ -25,18 +27,28 @@ export function adrIndex(root: string): string {
   return ["| ADR | 内容 |", "|---|---|", ...rows].join("\n")
 }
 
-/** docs/relay.md の、BEGIN と END の間 */
-export function currentIndex(doc: string): string | undefined {
+function markers(doc: string): [number, number] | undefined {
   const b = doc.indexOf(BEGIN)
   const e = doc.indexOf(END)
-  return b < 0 || e < b ? undefined : doc.slice(b + BEGIN.length, e).trim()
+  return b < 0 || e < b ? undefined : [b + BEGIN.length, e]
+}
+
+/** docs/relay.md の、BEGIN と END の間 */
+export function currentIndex(doc: string): string | undefined {
+  const m = markers(doc)
+  return m && doc.slice(m[0], m[1]).trim()
+}
+
+/** BEGIN と END の間を、index に置き換える。間の外は変えない */
+export function replaceIndex(doc: string, index: string): string | undefined {
+  const m = markers(doc)
+  return m && `${doc.slice(0, m[0])}\n\n${index}\n\n${doc.slice(m[1])}`
 }
 
 if (import.meta.main) {
   const root = join(import.meta.dir, "..")
   const path = join(root, "docs/relay.md")
-  const doc = readFileSync(path, "utf8")
-  const current = currentIndex(doc)
-  if (current === undefined) throw new Error(`docs/relay.md に「${BEGIN}」と「${END}」がありません`)
-  writeFileSync(path, doc.replace(current, adrIndex(root)))
+  const next = replaceIndex(readFileSync(path, "utf8"), adrIndex(root))
+  if (next === undefined) throw new Error(`docs/relay.md に「${BEGIN}」と「${END}」がありません`)
+  writeFileSync(path, next)
 }
