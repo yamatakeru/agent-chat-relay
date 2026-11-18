@@ -28,7 +28,7 @@ export function buildTools(relay: Relay, inboxDir: string): McpServer {
     "reply",
     {
       description:
-        `チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には要らない）。files で、作業ディレクトリの中のファイルを添えられる。送れるものと本文の長さは、チャットサービス（chat_id の先頭）による：\n${relay.sendingGuide()}`,
+        `チャットのルームへ送る。chat_id は届いた発言のもの、または list_rooms のもの。reply_to に message_id を渡すと、その発言を引用して返す（いちばん新しい発言への返事には必要ない）。files で、作業ディレクトリの中のファイルを添えられる。送れるものと本文の長さは、チャットサービス（chat_id の先頭）による：\n${relay.sendingGuide()}`,
       inputSchema: {
         chat_id: z.string(),
         text: z.string().describe("本文。files があれば空でもよい"),

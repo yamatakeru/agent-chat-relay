@@ -92,7 +92,7 @@ export class ChatworkConnector implements Connector {
     this.startedAt = Math.floor(this.now() / 1000)
     for (const r of rooms) this.fetched.set(r.room_id, { t: r.last_update_time, done: true })
     this.schedule()
-    this.log.info("Chatwork の定期取得を始めました")
+    this.log.info("Chatwork のポーリングを始めました")
   }
 
   stop(): void {
