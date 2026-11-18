@@ -124,12 +124,10 @@ const MAX_BATCH = 5
 const MAX_ALWAYS_SCOPE = 200
 /** 1 件だけの依頼の題名は、これより長ければ省く（Claude Code の Bash では、題名がコマンドそのもの） */
 const MAX_SINGLE_TITLE = 200
-/**
- * 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする。
- * 上限がいちばん短いのは Discord の 2,000 字。依頼 1 件の題名と範囲（どちらも 200 字まで）と答え方は、これに必ず収まる。
- * 上限が 1,000 字より短いサービスを足すなら、approvalText を見直す
- */
+/** 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする */
 const APPROVAL_MARGIN = 50
+/** コネクターの本文の上限の下限。依頼 1 件の題名・答え方・「常に許可」の範囲を省かずに、承認依頼の文面に収めるため */
+const MIN_TEXT = 1000
 const RECORD_LIMIT = 200
 
 const INSTRUCTIONS = [
@@ -177,6 +175,8 @@ export class Relay {
   ) {}
 
   addConnector(c: Connector): void {
+    if (c.capabilities.text.max < MIN_TEXT)
+      throw new Error(`${c.label} の本文の上限（${c.capabilities.text.max} 字）では、承認依頼の文面が収まりません。${MIN_TEXT} 字以上にするか、approvalText を直してください`)
     this.connectors.set(c.service, c)
   }
 
@@ -572,7 +572,6 @@ function approvalText(pending: PendingRequest[], id: string, max = Infinity): st
     const { req } = pending[0]!
     const head = `🔐 実行の承認：${truncate(req.title, MAX_SINGLE_TITLE)}`
     const answers = [`許可：yes ${id}`, ...(req.always ? [`常に許可：always ${id}（${req.always}）`] : []), `拒否：no ${id}`].join("\n")
-    // 題名、答え方、「常に許可」の範囲は省かず、入力を残りの長さに合わせる
     const room = Math.min(1500, max - head.length - answers.length - 4)
     return [head, "", truncate(req.input, room), "", answers].join("\n")
   }

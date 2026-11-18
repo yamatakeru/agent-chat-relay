@@ -367,7 +367,7 @@ describe("relay", () => {
       always: fc.option(fc.string({ minLength: 1, maxLength: 240, size: "max" }), { nil: undefined }),
     })
     await fc.assert(
-      fc.asyncProperty(fc.constantFrom(2000, 5000), fc.array(request, { minLength: 1, maxLength: 12, size: "max" }), async (max, generated) => {
+      fc.asyncProperty(fc.integer({ min: 1000, max: 5000 }), fc.array(request, { minLength: 1, maxLength: 12, size: "max" }), async (max, generated) => {
         const { relay, conn } = setup()
         conn.capabilities = { ...conn.capabilities, text: { max, parts: 10 } }
         // 依頼ごとに違う目印を、題名と範囲の先頭に付ける
@@ -390,6 +390,13 @@ describe("relay", () => {
       { numRuns: 150, interruptAfterTimeLimit: 20_000, markInterruptAsFailure: true },
     )
   }, 60_000)
+
+  test("本文の上限が承認依頼の文面に足りないコネクターは、加えない", () => {
+    const relay = new Relay(access, quiet)
+    const conn = new FakeConnector()
+    conn.capabilities = { ...conn.capabilities, text: { max: 999, parts: 1 } }
+    expect(() => relay.addConnector(conn)).toThrow("approvalText を直してください")
+  })
 
   test("束を組んだあとに上限の短いサービスの承認者が足されたら、その人には依頼を 1 件ずつ、依頼の ID で送る", async () => {
     access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
