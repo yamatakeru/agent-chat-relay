@@ -131,7 +131,7 @@ test("隠し入力は、\r\n がチャンクをまたいでも、空行を挟ま
 })
 
 test("配布するパッケージには、入り口と本体だけを入れる（秘密情報・実行時のデータ・テストを入れない）", () => {
-  const r = Bun.spawnSync([process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"], { cwd: repo, stdout: "pipe", stderr: "pipe" })
+  const r = Bun.spawnSync([process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"], { cwd: repo, stdout: "pipe", stderr: "pipe" }) // 分離の例外：パッケージの中身を見るだけで、スクリプトを動かさない（期限 2027-11-19、承認 yamatakeru）
   expect(r.exitCode).toBe(0)
   const files = [...r.stdout.toString().matchAll(/^packed \S+ (.+)$/gm)].map((m) => m[1]!)
   expect(files).toContain("bin/agent-chat-relay")

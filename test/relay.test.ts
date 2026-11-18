@@ -570,11 +570,12 @@ describe("ハーネスの起動と再開", () => {
     const logs: { msg: string; extra?: Record<string, unknown> }[] = []
     const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
     const stderrPath = join(dir, "harness.log")
-    const requests = () =>
+    // 偽のエージェントは、受けた要求（REQ）と環境変数の名前（ENV）を stderr に書く
+    const stderr = (prefix: string) =>
       (existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "")
         .split("\n")
-        .filter((l) => l.startsWith("REQ "))
-        .map((l) => JSON.parse(l.slice(4)) as { method: string; params: Record<string, any> })
+        .filter((l) => l.startsWith(prefix))
+        .map((l) => JSON.parse(l.slice(prefix.length)))
     let error: Error | undefined
     try {
       const h = await startHarness(
@@ -603,8 +604,9 @@ describe("ハーネスの起動と再開", () => {
       // 失敗したときもハーネスは止められ、stderr を書き終えるまで少し待つ
       await Bun.sleep(200)
     }
-    const env = (existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "").split("\n").find((l) => l.startsWith("ENV "))
-    return { error, logs, requests: requests(), env: env ? (JSON.parse(env.slice(4)) as string[]) : undefined }
+    const requests: { method: string; params: Record<string, any> }[] = stderr("REQ ")
+    const [env]: (string[] | undefined)[] = stderr("ENV ")
+    return { error, logs, requests, env }
   }
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
 

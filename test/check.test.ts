@@ -15,17 +15,19 @@ test("取り除いた言い回しは、活用した形も見つけ、代わり�
 test("シェルからの Bun の起動は、bun run の形でも、フラグが片方だけでも見つける", () => {
   const bad = ["bun scripts/a.ts", "bun run scripts/a.ts", "bun --no-env-file scripts/a.ts", "bun run --config=/dev/null scripts/a.ts", "mise exec -- bun test/e2e/mock.ts x"]
   for (const line of bad) expect(shellLaunchErrors("a.sh", line)).toHaveLength(1)
+  expect(shellLaunchErrors("package.json", "bun --no-env-file --config=/dev/null scripts/a.ts && bun scripts/b.ts")).toHaveLength(1)
   const good = ["bun --no-env-file --config=/dev/null scripts/a.ts", "bun run --no-env-file --config=/dev/null scripts/a.ts", "bun --no-env-file run --config=/dev/null scripts/a.ts", "bun run check", "bun test"]
   for (const line of good) expect(shellLaunchErrors("a.sh", line)).toEqual([])
 })
 
-test("TypeScript からの Bun の起動は、配列が複数の行にまたがっていても見つける", () => {
-  expect(tsLaunchErrors("a.ts", "Bun.spawn([process.execPath, script])", TODAY)).toHaveLength(1)
+test("TypeScript では、process.execPath を src/harness/config.ts の外で使うと、どんな形でも見つける", () => {
+  for (const code of ["Bun.spawn([process.execPath, script])", 'Bun.spawn([process.execPath, "scripts/a.ts"])', 'Bun.spawnSync([process.execPath, "pm", "pack"])', "const bun = process.execPath"])
+    expect(tsLaunchErrors("a.ts", code, TODAY)).toHaveLength(1)
   expect(tsLaunchErrors("a.ts", "x\nBun.spawn([\n  process.execPath,\n  script,\n])", TODAY)).toEqual([
     "a.ts:3: Bun でスクリプトを起動するときは、src/harness/config.ts の BUN_ISOLATED を使う",
   ])
   expect(tsLaunchErrors("a.ts", "Bun.spawn([...BUN_ISOLATED, script])", TODAY)).toEqual([])
-  expect(tsLaunchErrors("a.ts", 'Bun.spawnSync([process.execPath, "pm", "pack"])', TODAY)).toEqual([])
+  expect(tsLaunchErrors("src/harness/config.ts", "export const BUN_ISOLATED = [process.execPath]", TODAY)).toEqual([])
 })
 
 test("分離の例外は、期限が過ぎたもの、日付でないものを通さない", () => {

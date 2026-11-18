@@ -39,23 +39,21 @@ export function wordingErrors(file: string, text: string): string[] {
 // Bun は、起動したディレクトリの .env を環境変数に読み込み、bunfig.toml の preload を実行する。
 // 中継とスクリプトは、どちらも読ませずに起動する（ADR 0019。c3662b1、#18、#43、15efaa8 で繰り返した）
 const ISOLATION = "--no-env-file --config=/dev/null"
-/** bun [フラグ] [run [フラグ]] <file>.ts */
-const BUN_SCRIPT = /\bbun\s+((?:-\S+\s+)*)(?:run\s+((?:-\S+\s+)*))?\S+\.ts\b/
+/** bun [フラグ] [run [フラグ]] <file>.ts。1 行に複数あれば、1 つずつ見る */
+const BUN_SCRIPT = /\bbun\s+((?:-\S+\s+)*)(?:run\s+((?:-\S+\s+)*))?\S+\.ts\b/g
 
 /** シェル・package.json・CI での Bun の起動 */
 export function shellLaunchErrors(file: string, text: string): string[] {
-  return text.split("\n").flatMap((line, n) => {
-    const m = line.match(BUN_SCRIPT)
-    if (!m) return []
-    const flags = `${m[1]} ${m[2] ?? ""}`
-    if (flags.includes("--no-env-file") && flags.includes("--config=/dev/null")) return []
-    return [`${file}:${n + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`]
-  })
+  return text.split("\n").flatMap((line, n) =>
+    [...line.matchAll(BUN_SCRIPT)]
+      .map((m) => `${m[1]} ${m[2] ?? ""}`)
+      .filter((flags) => !(flags.includes("--no-env-file") && flags.includes("--config=/dev/null")))
+      .map(() => `${file}:${n + 1}: Bun でスクリプトを起動するときは「bun ${ISOLATION}」にする。中継の本体は bin/agent-chat-relay から起動する`),
+  )
 }
 
-// TypeScript からは、src/harness/config.ts の BUN_ISOLATED で起動する。
-// 例外は、process.execPath の行に「分離の例外：理由（期限 YYYY-MM-DD、承認 名前）」を書く
-const EXEC_PATH = /\[\s*process\.execPath\s*,(?!\s*["'`])/g
+// TypeScript からは、src/harness/config.ts の BUN_ISOLATED で起動する。process.execPath は、そこでだけ使う。
+// 例外は、その行に「分離の例外：理由（期限 YYYY-MM-DD、承認 名前）」を書く
 const EXCEPTION = /分離の例外：.+（期限 (\d{4}-\d{2}-\d{2})、承認 \S+）/
 
 function isDate(s: string): boolean {
@@ -63,13 +61,12 @@ function isDate(s: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
 }
 
-/** TypeScript からの Bun の起動。配列が複数の行にまたがっていても見る */
+/** TypeScript での process.execPath（BUN_ISOLATED を通さない Bun の起動） */
 export function tsLaunchErrors(file: string, text: string, today: string): string[] {
-  const lines = text.split("\n")
-  return [...text.matchAll(EXEC_PATH)].flatMap((m) => {
-    const at = m.index + m[0].indexOf("process.execPath")
-    const n = text.slice(0, at).split("\n").length - 1
-    const ex = lines[n]!.match(EXCEPTION)
+  if (file === "src/harness/config.ts") return []
+  return text.split("\n").flatMap((line, n) => {
+    if (!line.includes("process.execPath")) return []
+    const ex = line.match(EXCEPTION)
     if (!ex) return [`${file}:${n + 1}: Bun でスクリプトを起動するときは、src/harness/config.ts の BUN_ISOLATED を使う`]
     if (!isDate(ex[1]!)) return [`${file}:${n + 1}: 分離の例外の期限（${ex[1]}）が日付ではない`]
     if (ex[1]! < today) return [`${file}:${n + 1}: 分離の例外の期限（${ex[1]}）が過ぎている。BUN_ISOLATED を使うか、例外を見直して期限を延ばす`]
