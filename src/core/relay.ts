@@ -272,12 +272,19 @@ export class Relay {
   }
 
   private sendBatchTo(user: string, b: Batch, lead = ""): void {
-    this.connector(user)
-      ?.sendApproval(user, lead + approvalText(b.items, b.id, this.approvalMax()), b.id, { always: b.items.every((i) => i.req.always) })
-      .catch((err) => this.log.error("承認の依頼を送れませんでした", { user, error: String(err) }))
+    const c = this.connector(user)
+    if (!c) return
+    const max = c.capabilities.text.max - APPROVAL_MARGIN
+    const text = approvalText(b.items, b.id, max)
+    // 束を組んだあとに、上限の短いサービスの承認者が足されると、束が収まらない。束全体への答えは出さず、依頼ごとの ID で 1 件ずつ送る
+    const parts = text.length <= max ? [{ items: b.items, id: b.id, text }] : b.items.map((i) => ({ items: [i], id: i.id, text: approvalText([i], i.id, max) }))
+    for (const [n, p] of parts.entries()) {
+      c.sendApproval(user, (n === 0 ? lead : "") + p.text, p.id, { always: p.items.every((i) => i.req.always) })
+        .catch((err) => this.log.error("承認の依頼を送れませんでした", { user, error: String(err) }))
+    }
   }
 
-  /** 承認依頼の文面の上限。承認者のいるサービスのうち、本文の上限がいちばん短いものに合わせる */
+  /** 束を組むときの文面の上限。承認者のいるサービスのうち、本文の上限がいちばん短いものに合わせる */
   private approvalMax(): number {
     const limits = this.access.load().allowFrom.flatMap((u) => this.connector(u)?.capabilities.text.max ?? [])
     return Math.min(...limits) - APPROVAL_MARGIN
@@ -581,6 +588,9 @@ function approvalText(pending: PendingRequest[], id: string, max = Infinity): st
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
   const note = (n: number) => `…（${n} 文字を省略）`
-  const keep = Math.max(0, max - note(s.length).length)
+  let keep = Math.max(0, max - note(s.length).length)
+  // 絵文字など（サロゲートペア）の途中で切らない
+  const code = s.charCodeAt(keep - 1)
+  if (code >= 0xd800 && code <= 0xdbff) keep--
   return s.slice(0, keep) + note(s.length - keep)
 }

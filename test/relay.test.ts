@@ -49,8 +49,10 @@ function msg(over: Partial<Incoming> = {}): Incoming {
 }
 
 class FakeConnector implements Connector {
-  readonly service = "line"
-  readonly label = "LINE"
+  constructor(
+    readonly service = "line",
+    readonly label = "LINE",
+  ) {}
   capabilities: Capabilities = { files: { kinds: "画像", maxBytes: 4, maxCount: 1 }, text: { max: 5000, parts: 5 } }
   history?: (room: string, limit: number) => Promise<ChatMessage[]>
   async start() {}
@@ -357,30 +359,59 @@ describe("relay", () => {
     expect(a!.text).toContain(`拒否：no ${a!.id}`)
   })
 
-  test("どんな依頼の組み合わせでも、承認依頼の文面は上限に収まり、どの依頼も 1 つの束にだけ入り、「常に許可」の範囲は省かない（property-based）", async () => {
+  test("どんな依頼の組み合わせでも、承認依頼の文面は上限に収まり、どの依頼もちょうど 1 通に入り、「常に許可」の範囲は省かない（property-based）", async () => {
     const request = fc.record({
       title: fc.string({ maxLength: 400, unit: "grapheme", size: "max" }),
       input: fc.string({ maxLength: 2500, size: "max" }),
-      always: fc.option(fc.string({ minLength: 1, maxLength: 250, size: "max" }), { nil: undefined }),
+      always: fc.option(fc.string({ minLength: 1, maxLength: 240, size: "max" }), { nil: undefined }),
     })
     await fc.assert(
-      fc.asyncProperty(fc.constantFrom(2000, 5000), fc.array(request, { minLength: 1, maxLength: 12, size: "max" }), async (max, reqs) => {
+      fc.asyncProperty(fc.constantFrom(2000, 5000), fc.array(request, { minLength: 1, maxLength: 12, size: "max" }), async (max, generated) => {
         const { relay, conn } = setup()
         conn.capabilities = { ...conn.capabilities, text: { max, parts: 10 } }
+        // 依頼ごとに違う目印を、題名と範囲の先頭に付ける
+        const reqs = generated.map((r, n) => ({ ...r, title: `«t${n}»${r.title}`, always: r.always && `«s${n}»${r.always}` }))
         const verdicts = reqs.map((r) => relay.requestPermission(r))
         // 束は setTimeout(0) で送られる
         await new Promise((r) => setTimeout(r, 0))
         // コネクターが切らない長さで渡す
         for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(max)
-        // 「常に許可」を示せる依頼の範囲は、どれかの文面にそのまま書かれている
-        for (const r of reqs) if (r.always && r.always.length <= 200) expect(conn.approvals.some((a) => a.text.includes(r.always!))).toBe(true)
-        // 束の ID で 1 回ずつ答えると、すべての依頼に答えが出る（どの依頼も、ちょうど 1 つの束に入っている）
+        reqs.forEach((r, n) => {
+          // どの依頼も、ちょうど 1 通の文面に入る
+          const shown = conn.approvals.filter((a) => a.text.includes(`«t${n}»`))
+          expect(shown).toHaveLength(1)
+          // 「常に許可」を示せる依頼の範囲は、そのまま書かれる
+          if (r.always && r.always.length <= 200) expect(shown[0]!.text).toContain(r.always)
+        })
         for (const a of conn.approvals) expect(relay.answer(ALICE, a.id, "deny")).toBe(true)
         expect(await Promise.all(verdicts)).toEqual(reqs.map(() => "deny"))
       }),
-      { numRuns: 150, interruptAfterTimeLimit: 20_000 },
+      { numRuns: 150, interruptAfterTimeLimit: 20_000, markInterruptAsFailure: true },
     )
   }, 60_000)
+
+  test("束を組んだあとに上限の短いサービスの承認者が足されたら、その人には依頼を 1 件ずつ、依頼の ID で送る", async () => {
+    access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
+    const relay = new Relay(access, quiet, undefined, { quietMs: 20, maxMs: 200 })
+    const line = new FakeConnector()
+    const discord = new FakeConnector("discord", "Discord")
+    discord.capabilities = { ...discord.capabilities, text: { max: 2000, parts: 10 } }
+    relay.addConnector(line)
+    relay.addConnector(discord)
+    // 4 件の束は LINE の上限には収まるが、Discord の上限には収まらない（5 件にすると、その場で送られる）
+    const scopes = [0, 1, 2, 3].map((n) => `scope${n}:${"s".repeat(150)}`)
+    const verdicts = scopes.map((always) => relay.requestPermission({ title: "t".repeat(150), input: "i".repeat(300), always }))
+    // 束を送る前に、Discord の承認者を足す
+    access.save({ allowFrom: [ALICE, "discord:u1"], rooms: {}, pending: {} })
+    await Bun.sleep(60)
+    expect(line.approvals).toHaveLength(1)
+    expect(discord.approvals).toHaveLength(4)
+    for (const a of discord.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
+    scopes.forEach((s, n) => expect(discord.approvals[n]!.text).toContain(s))
+    // 依頼の ID での答えは、LINE の承認者が受け取った束の中の依頼にも当たる
+    for (const a of discord.approvals) expect(relay.answer("discord:u1", a.id, "allow")).toBe(true)
+    expect(await Promise.all(verdicts)).toEqual(scopes.map(() => "allow"))
+  })
 
   test("「常に許可」の選択肢は、モードの切り替えとファイルの編集には示さない。複数あれば先頭", () => {
     const options = [
