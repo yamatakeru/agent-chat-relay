@@ -111,11 +111,19 @@ test("Bun で動かすプログラムには、cwd の .env と bunfig.toml を�
   }
 })
 
-test.skipIf(!Bun.which("claude"))("claude-agent-acp は、このパッケージの依存から探し、cwd のファイルを読ませずに起動する", () => {
+test("claude-agent-acp は、このパッケージの依存から探し、cwd のファイルを読ませずに起動する。claude は PATH から探す", () => {
   const log = { info: () => {}, error: () => {} }
-  const cfg = harnessConfig("claude", dir, { url: "http://127.0.0.1/mcp", token: "t" }, { inheritSettings: false, memory: false }, log, false, {})
+  const mcp = { url: "http://127.0.0.1/mcp", token: "t" }
+  const opts = { inheritSettings: false, memory: false }
+  // CI には claude がないので、偽の claude を PATH に置く
+  const bin = join(dir, "bin")
+  mkdirSync(bin)
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 })
+  const cfg = harnessConfig("claude", dir, mcp, opts, log, false, { PATH: bin })
   expect(cfg.command.slice(0, 3)).toEqual(BUN_ISOLATED)
   expect(cfg.command[3]).toBe(join(repo, "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"))
+  expect(cfg.env).toEqual({ CLAUDE_CODE_EXECUTABLE: join(bin, "claude") })
+  expect(() => harnessConfig("claude", dir, mcp, opts, log, false, { PATH: join(dir, "none") })).toThrow("claude が見つかりません")
 })
 
 test("隠し入力は、\r\n がチャンクをまたいでも、空行を挟まずに次の行を読む", async () => {

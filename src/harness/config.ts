@@ -51,7 +51,7 @@ export function harnessConfig(
 ): Omit<HarnessConfig, "stderrPath"> {
   switch (name) {
     case "claude": {
-      const claude = Bun.which("claude")
+      const claude = Bun.which("claude", { PATH: env.PATH ?? "" })
       if (!claude) throw new Error("claude が見つかりません")
       return {
         // Agent SDK に同梱の CLI ではなく、インストール済みの claude を使う
