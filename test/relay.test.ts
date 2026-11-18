@@ -1359,12 +1359,12 @@ describe("ハーネスの設定の読み込み", () => {
     const permissions = { defaultMode: "default", allow: ["mcp__chat"] }
     expect(claudeOptions(NONE)).toEqual({
       settingSources: ["project", "local"],
-      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"], autoMemoryEnabled: false, permissions },
+      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"], autoMemoryEnabled: false, permissions },
     })
     expect(claudeOptions({ inheritSettings: true, memory: false })).toEqual({ settings: { autoMemoryEnabled: false, permissions } })
     expect(claudeOptions({ inheritSettings: false, memory: true })).toEqual({
       settingSources: ["project", "local"],
-      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"], autoMemoryEnabled: true, permissions },
+      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"], autoMemoryEnabled: true, permissions },
     })
     expect(claudeOptions({ inheritSettings: true, memory: true })).toEqual({ settings: { autoMemoryEnabled: true, permissions } })
   })

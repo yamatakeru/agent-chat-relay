@@ -109,7 +109,7 @@ agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました�
 ## ハーネス
 
 - `agent-chat-relay serve claude`：`claude-agent-acp`（Agent SDK の ACP アダプター）経由で、インストール済みの `claude` を起動します。
-  - ユーザー設定、CLAUDE.md・AGENTS.md、自動メモリは読み込ませません（旧構成の `--setting-sources project,local` などと同等）。
+  - ユーザー設定、CLAUDE.md・CLAUDE.local.md・AGENTS.md・`.claude/rules/`、自動メモリは読み込ませません（旧構成の `--setting-sources project,local` などと同等）。CLAUDE.local.md と `.claude/rules/` も、上位のディレクトリから読まれるためです（Claude Code 2.1.327 で確認）。
   - `claude-agent-acp` は、中継のパッケージの依存から探し、`bun --no-env-file --config=/dev/null` で起動します。cwd（作業ディレクトリ）の `.env` が環境変数として Claude Code に引き継がれたり、`bunfig.toml` の `preload` が実行されたりしないようにするためです（ADR 0019）。
   - 管理者は、次の環境変数か、`serve` の同じ意味のフラグ（`--harness-settings default`、`--harness-memory`）で、これをその環境に合わせられます（ADR 0017）。フラグは環境変数より優先します。決めた値以外が指定されていたら起動しません。
     - `RELAY_HARNESS_SETTINGS=default`：ユーザー設定と CLAUDE.md・AGENTS.md を、その環境の既定どおりに読み込ませます。ユーザー設定の allow ルールと hooks も効きます。承認の依頼に答える hooks（`PermissionRequest` など）があれば、中継の実行承認を通らずに実行されることがあります。

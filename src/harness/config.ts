@@ -16,6 +16,12 @@ export const BUN_ISOLATED = [process.execPath, "--no-env-file", "--config=/dev/n
 /** claude-agent-acp の入り口。起動したディレクトリではなく、このパッケージの依存から探す */
 const ADAPTER = fileURLToPath(import.meta.resolve("@agentclientprotocol/claude-agent-acp/dist/index.js"))
 
+/**
+ * Claude Code に読み込ませない指示のファイル。CLAUDE.local.md と .claude/rules/ も、上位のディレクトリから読まれる
+ * （Claude Code 2.1.327 で、CLAUDE.md・AGENTS.md だけを除くと、この 2 つが残ることを確認した）
+ */
+export const CLAUDE_MD_EXCLUDES = ["**/AGENTS.md", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]
+
 /** 管理者が環境変数で選ぶ、ハーネスの設定の読み込み（ADR 0017） */
 export type HarnessOptions = {
   /** RELAY_HARNESS_SETTINGS=default。ユーザー設定・CLAUDE.md などを、その環境の既定どおりに読ませる */
@@ -82,8 +88,8 @@ export function claudeOptions(opts: HarnessOptions): Record<string, unknown> {
     // ユーザー設定（~/.claude/settings.json）の allow ルールや hooks を読み込ませない
     ...(opts.inheritSettings ? {} : { settingSources: ["project", "local"] }),
     settings: {
-      // ユーザーや上位ディレクトリの CLAUDE.md・AGENTS.md を読み込ませない
-      ...(opts.inheritSettings ? {} : { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"] }),
+      // ユーザーや上位ディレクトリの CLAUDE.md・AGENTS.md などを読み込ませない
+      ...(opts.inheritSettings ? {} : { claudeMdExcludes: CLAUDE_MD_EXCLUDES }),
       // ユーザー設定で切っていても、指定があれば有効にする（ここで渡す値は、ユーザー・project の設定より優先される）
       autoMemoryEnabled: opts.memory,
       // ツールを実行するたびに承認を求める。指定しないと、claude-agent-acp は auto モード（分類器による自動承認）で始める。
