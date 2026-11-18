@@ -20,7 +20,7 @@ GROUP=7000 DM=7001 SALES=7003 ALICE=1 BOB=2
 mkdir -p "$RELAY_HOME"
 echo '{"allowFrom":[],"rooms":{"chatwork:r7000":{"requireMention":true,"allowFrom":[]}},"pending":{}}' >"$RELAY_HOME/access.json"
 
-mise exec -- bun test/e2e/mock-chatwork.ts "$LOG" >"$E/mock-chatwork-$H.log" 2>&1 &
+mise exec -- bun --no-env-file --config=/dev/null test/e2e/mock-chatwork.ts "$LOG" >"$E/mock-chatwork-$H.log" 2>&1 &
 MOCK=$!
 sleep 1
 scripts/relay.sh serve "$H" >"$RLOG" 2>&1 &

@@ -2,15 +2,18 @@
 
 agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました。構成に関わる判断は、次の ADR にあります。
 
+<!-- ADR の一覧は docs/adr/ から生成する（bun run docs:adr）。手で書き換えない -->
+
 | ADR | 内容 |
 |---|---|
-| [0006](adr/0006-own-core-drives-any-harness-over-acp.md) | ACP でハーネスを動かす |
-| [0007](adr/0007-typescript-on-bun.md) | TypeScript と Bun で実装する |
-| [0008](adr/0008-chat-tools-without-approval.md) | チャット用ツールは実行承認なしで使える |
-| [0009](adr/0009-returned-files-from-workspace-without-approval.md) | 返せるファイルは作業ディレクトリの中のものに限る |
-| [0010](adr/0010-chatwork-by-polling.md) | Chatwork は API のポーリングで受信する |
-| [0011](adr/0011-discord-via-gateway.md) | Discord は Gateway で受信し、スレッドは親チャンネルの登録を引き継ぐ |
-| [0012](adr/0012-acknowledge-receipt-per-service.md) | 受け取りの合図は、いつ出すかを中核が、どう出すかをコネクターが決める |
+| [0005](adr/0005-publish-returned-images-by-unguessable-url.md) | Claude が返す画像は、推測できない URL で 7 日間公開して LINE に渡す |
+| [0006](adr/0006-own-core-drives-any-harness-over-acp.md) | cc-connect をやめ、自作の中核が ACP で任意のハーネスを動かす |
+| [0007](adr/0007-typescript-on-bun.md) | 中核とコネクターは TypeScript で書き、Bun で動かす |
+| [0008](adr/0008-chat-tools-without-approval.md) | チャット用ツールは、実行承認なしで使える |
+| [0009](adr/0009-returned-files-from-workspace-without-approval.md) | エージェントが返すファイルは、承認なしで、作業ディレクトリの中のものだけを送れる |
+| [0010](adr/0010-chatwork-by-polling.md) | Chatwork の発言は、API のポーリングで受信する |
+| [0011](adr/0011-discord-via-gateway.md) | Discord は Gateway を discord.js で受信し、スレッドは親チャンネルの登録を引き継ぐ |
+| [0012](adr/0012-acknowledge-receipt-per-service.md) | 受け取りの合図は、いつ出すかを中核が決め、どう出すかをコネクターが決める |
 | [0013](adr/0013-describe-supported-operations-in-tools.md) | サービスによって使えない操作は、ツールの説明に書き、使えるサービスがなければツールを出さない |
 | [0014](adr/0014-batch-permission-requests.md) | 同時に届いた実行承認の依頼は、1 通の承認依頼の束にまとめる |
 | [0015](adr/0015-allow-always-by-approver.md) | 承認者は、ハーネスが示した「常に許可」を選べる |
@@ -18,6 +21,8 @@ agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました�
 | [0017](adr/0017-admin-chooses-workspace-and-harness-settings.md) | 管理者は、作業ディレクトリとハーネスの設定の読み込みを、自分の責任で環境に合わせられる |
 | [0018](adr/0018-steer-messages-into-running-turn.md) | 作業中に届いた発言は、ハーネスが対応していれば、そのターンに差し込む |
 | [0019](adr/0019-distribute-as-cli.md) | 中継を、どこからでも起動できる CLI として配布する |
+
+<!-- ADR の一覧ここまで -->
 
 ルームの登録、送信者の許可、チャット用ツールの設計は、公式の Claude Code Discord プラグイン（`claude-plugins-official` の `external_plugins/discord`）を参考にしています。
 

@@ -38,7 +38,7 @@ const envFile = secretsFile(process.env, home)
 /** このパッケージ（開発時はリポジトリ）の置き場。開発時は、秘密情報（.env・.env.keys）もここに置く */
 const PACKAGE_ROOT = resolve(import.meta.dir, "..")
 const accessPath = join(home, "access.json")
-/** Webhook などのコネクターの受け口。line-tunnel は、ここを公開する */
+/** Webhook などのコネクターのエンドポイント。line-tunnel は、ここを公開する */
 const HTTP_PORT = Number(process.env.RELAY_HTTP_PORT ?? 18080)
 
 const format = (msg: string, extra?: Record<string, unknown>) => `${new Date().toISOString()} relay: ${msg}${extra ? ` ${JSON.stringify(extra)}` : ""}`
@@ -77,13 +77,13 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   })
   // 終了時に閉じるもの
   const closers: (() => void)[] = [() => void mcp.stop()]
-  log.info("チャット用ツールの受け口を開きました", { mcp: `${mcp.url}mcp` })
+  log.info("チャット用ツールのエンドポイントを開きました", { mcp: `${mcp.url}mcp` })
 
   // コネクターのエンドポイント（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じパスを 2 つのコネクターが出したら起動しない
   const routes: Routes = {}
   for (const c of connectors) {
     for (const [path, route] of Object.entries(c.routes ?? {})) {
-      if (path in routes) throw new Error(`受け口の道が重なっています: ${path}（${c.label}）`)
+      if (path in routes) throw new Error(`エンドポイントのパスが重なっています: ${path}（${c.label}）`)
       routes[path] = route
     }
   }
@@ -95,7 +95,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
       fetch: () => new Response("not found", { status: 404 }),
     })
     closers.push(() => void http.stop())
-    log.info("コネクターの受け口を開きました", { url: http.url.href, routes: Object.keys(routes) })
+    log.info("コネクターのエンドポイントを開きました", { url: http.url.href, routes: Object.keys(routes) })
   }
   await Promise.all(connectors.map((c) => c.start()))
   for (const c of connectors) closers.push(() => c.stop())

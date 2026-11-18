@@ -35,9 +35,10 @@
     "linux"
   ],
   "scripts": {
-    "relay": "bun src/main.ts",
+    "relay": "bin/agent-chat-relay",
     "test": "bun test",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit && bun --no-env-file --config=/dev/null scripts/check.ts",
+    "docs:adr": "bun --no-env-file --config=/dev/null scripts/adr-index.ts"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.101.0",

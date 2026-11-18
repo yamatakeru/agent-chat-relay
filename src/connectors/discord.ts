@@ -124,7 +124,7 @@ export class DiscordConnector implements Connector {
       isDM,
       mentioned: isDM || isMentioned(msg, me, role),
     })
-    // 入力中の表示は、返事を送るか 10 秒たつと消える。リアクションには Add Reactions の権限が要る
+    // 入力中の表示は、返事を送るか 10 秒たつと消える。リアクションには Add Reactions の権限が必要
     if (result.acknowledge) this.acknowledge(() => Promise.all([msg.react(ACK_EMOJI), "sendTyping" in msg.channel ? msg.channel.sendTyping() : undefined]))
   }
 

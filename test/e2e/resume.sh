@@ -18,7 +18,7 @@ export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-resume-$H" RELAY_LINE_
 G1=C111aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 A=Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
-mise exec -- bun test/e2e/mock-line.ts "$LOG" >"$E/mock-resume-$H.log" 2>&1 &
+mise exec -- bun --no-env-file --config=/dev/null test/e2e/mock-line.ts "$LOG" >"$E/mock-resume-$H.log" 2>&1 &
 MOCK=$!
 RELAY=""
 cleanup() { kill "$RELAY" "$MOCK" 2>/dev/null; }

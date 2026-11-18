@@ -224,7 +224,7 @@ async function listed(ctx: acp.ClientContext, sessionId: string, cwd: string): P
   }
 }
 
-export function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
+function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
   return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|DOTENV_)/.test(k)))
 }
 
