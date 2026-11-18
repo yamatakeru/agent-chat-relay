@@ -124,7 +124,11 @@ const MAX_BATCH = 5
 const MAX_ALWAYS_SCOPE = 200
 /** 1 件だけの依頼の題名は、これより長ければ省く（Claude Code の Bash では、題名がコマンドそのもの） */
 const MAX_SINGLE_TITLE = 200
-/** 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする */
+/**
+ * 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする。
+ * 上限がいちばん短いのは Discord の 2,000 字。依頼 1 件の題名と範囲（どちらも 200 字まで）と答え方は、これに必ず収まる。
+ * 上限が 1,000 字より短いサービスを足すなら、approvalText を見直す
+ */
 const APPROVAL_MARGIN = 50
 const RECORD_LIMIT = 200
 

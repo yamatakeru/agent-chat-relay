@@ -341,7 +341,8 @@ describe("relay", () => {
     const scopes = [0, 1, 2, 3, 4].map((n) => `scope${n}:${"s".repeat(150)}`)
     for (const always of scopes) void relay.requestPermission({ title: "Bash", input: "i".repeat(300), always })
     await Bun.sleep(5)
-    expect(conn.approvals.length).toBeGreaterThan(1)
+    // 束を組むときに分ける（送るときに 1 件ずつにするのではない）
+    expect(conn.approvals.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（4 件）", "🔐 実行の承認：Bash"])
     for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
     for (const s of scopes) expect(conn.approvals.filter((a) => a.text.includes(s))).toHaveLength(1)
     expect(conn.approvals.every((a) => a.always)).toBe(true)
@@ -408,9 +409,15 @@ describe("relay", () => {
     expect(discord.approvals).toHaveLength(4)
     for (const a of discord.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
     scopes.forEach((s, n) => expect(discord.approvals[n]!.text).toContain(s))
-    // 依頼の ID での答えは、LINE の承認者が受け取った束の中の依頼にも当たる
-    for (const a of discord.approvals) expect(relay.answer("discord:u1", a.id, "allow")).toBe(true)
-    expect(await Promise.all(verdicts)).toEqual(scopes.map(() => "allow"))
+    // 依頼の ID での答えは、LINE の承認者が受け取った束の中の、その依頼にだけ当たる
+    const settled: string[] = []
+    verdicts.forEach((v, n) => void v.then(() => settled.push(scopes[n]!)))
+    for (const a of discord.approvals) {
+      expect(relay.answer("discord:u1", a.id, "allow")).toBe(true)
+      await Bun.sleep(0)
+      expect(a.text).toContain(settled.at(-1)!)
+    }
+    expect(settled.sort()).toEqual([...scopes].sort())
   })
 
   test("「常に許可」の選択肢は、モードの切り替えとファイルの編集には示さない。複数あれば先頭", () => {
