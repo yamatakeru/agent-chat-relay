@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import fc from "fast-check"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
@@ -1312,16 +1312,25 @@ describe("作業ディレクトリ", () => {
     expect(Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()).toBe("")
   })
 
-  test("中継の置き場（.relay/）やその中がシンボリックリンクなら、リンク先に書いたり消したりせず、起動しない", () => {
-    for (const link of [".relay", ".relay/.gitignore", ".relay/inbox"]) {
+  test("中継の置き場（.relay/）やその中がリンクでも、リンク先には書かず、消さない", () => {
+    for (const link of [".relay", ".relay/inbox"]) {
       const ws = mkdtempSync(join(dir, "ws-"))
       mkdirSync(join(ws, ".relay"), { recursive: true })
       if (link === ".relay") rmSync(join(ws, ".relay"), { recursive: true })
-      const target = join(ws, "target")
-      writeFileSync(target, "admin\n")
-      symlinkSync(target, join(ws, link))
+      mkdirSync(join(ws, "target"))
+      symlinkSync(join(ws, "target"), join(ws, link))
       expect(() => relayDir(ws)).toThrow("シンボリックリンク")
-      expect(readFileSync(target, "utf8")).toBe("admin\n")
+      expect(existsSync(join(ws, "target", ".gitignore"))).toBe(false)
+    }
+    // .gitignore がシンボリックリンクやハードリンクでも、リンク先の中身は変えず、.relay/ の中に作り直す
+    for (const make of [symlinkSync, linkSync]) {
+      const ws = mkdtempSync(join(dir, "ws-"))
+      mkdirSync(join(ws, ".relay"))
+      writeFileSync(join(ws, ".gitignore"), "admin\n")
+      make(join(ws, ".gitignore"), join(ws, ".relay", ".gitignore"))
+      relayDir(ws)
+      expect(readFileSync(join(ws, ".gitignore"), "utf8")).toBe("admin\n")
+      expect(readFileSync(join(ws, ".relay", ".gitignore"), "utf8")).toBe("*\n")
     }
   })
 
