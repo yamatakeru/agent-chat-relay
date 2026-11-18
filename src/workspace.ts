@@ -44,13 +44,12 @@ function realOrResolved(p: string): string {
 /**
  * 作業ディレクトリの中の、中継の置き場（.relay/。受け取った添付など）を用意して、その場所を返す。
  * 管理者の git リポジトリを作業ディレクトリにしても、ルームから届いたファイルがコミットされないよう、
- * 中に「すべて無視する」.gitignore を置く。管理者の .gitignore には触れない
+ * 中に「すべて無視する」.gitignore を置く。.relay/ は中継のものなので、中身が違えば書き直す。管理者の .gitignore には触れない
  */
 export function relayDir(workspace: string): string {
   const dir = join(workspace, ".relay")
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const ignore = join(dir, ".gitignore")
-  if (!existsSync(ignore)) writeFileSync(ignore, "*\n")
+  writeFileSync(join(dir, ".gitignore"), "*\n")
   return dir
 }
 

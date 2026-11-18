@@ -1306,10 +1306,10 @@ describe("作業ディレクトリ", () => {
     writeFileSync(join(inbox, "photo.png"), "x")
     const status = Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()
     expect(status).toBe("")
-    // 管理者が置いた .gitignore は書き換えない
-    writeFileSync(join(ws, ".relay", ".gitignore"), "mine\n")
+    // 中身の違う（空の）.gitignore があっても、書き直して無視させる
+    writeFileSync(join(ws, ".relay", ".gitignore"), "")
     relayDir(ws)
-    expect(readFileSync(join(ws, ".relay", ".gitignore"), "utf8")).toBe("mine\n")
+    expect(Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()).toBe("")
   })
 
   test("指定がなければ <home>/workspace を作り、指定があればそのディレクトリを git init せずに使う", () => {
