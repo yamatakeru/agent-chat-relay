@@ -392,6 +392,105 @@ describe("relay", () => {
     )
   }, 60_000)
 
+  test("発言の到着、ターンの終わり、差し込みの結果がどう重なっても、どの発言もちょうど 1 回、届いた順に渡る（model-based、ADR 0018）", async () => {
+    type Steer = { ids: string[]; resolve: (ok: boolean) => void; reject: (err: Error) => void }
+    /** 偽のセッション。ターンの終わりと差し込みの結果は、コマンドが返す */
+    type Real = {
+      relay: Relay
+      arrived: string[]
+      delivered: string[]
+      endTurn?: () => void
+      steers: Steer[]
+      failed: boolean
+      violations: string[]
+    }
+    const idsOf = (text: string) => [...text.matchAll(/message_id="(m\d+)"/g)].map((m) => m[1]!)
+    const flush = async () => {
+      for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r))
+    }
+    const same = async (r: Real) => {
+      await flush()
+      expect(r.violations).toEqual([])
+      // 渡った発言は、届いた順の先頭の部分で、重なりがない
+      expect(r.delivered).toEqual(r.arrived.slice(0, r.delivered.length))
+    }
+    class Arrive implements fc.AsyncCommand<object, Real> {
+      check = () => true
+      async run(_: object, r: Real) {
+        const id = `m${r.arrived.length}`
+        r.arrived.push(id)
+        r.relay.receive(msg({ id, text: id }))
+        await same(r)
+      }
+      toString = () => "arrive"
+    }
+    class EndTurn implements fc.AsyncCommand<object, Real> {
+      check = () => true
+      async run(_: object, r: Real) {
+        r.endTurn?.()
+        await same(r)
+      }
+      toString = () => "end turn"
+    }
+    class SteerResult implements fc.AsyncCommand<object, Real> {
+      constructor(readonly outcome: "injected" | "promptRequired" | "error") {}
+      check = () => true
+      async run(_: object, r: Real) {
+        const s = r.steers.shift()
+        if (s && this.outcome === "injected") {
+          r.delivered.push(...s.ids)
+          s.resolve(true)
+        }
+        if (s && this.outcome === "promptRequired") s.resolve(false)
+        if (s && this.outcome === "error") {
+          r.failed = true
+          s.reject(new Error("steer failed"))
+        }
+        await same(r)
+      }
+      toString = () => `steer ${this.outcome}`
+    }
+    const commands = [
+      fc.constant(new Arrive()),
+      fc.constant(new EndTurn()),
+      fc.constantFrom<"injected" | "promptRequired" | "error">("injected", "injected", "promptRequired", "error").map((o) => new SteerResult(o)),
+    ]
+    await fc.assert(
+      fc.asyncProperty(fc.commands(commands, { size: "max", maxCommands: 40 }), async (cmds) => {
+        access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: false, allowFrom: [] } }, pending: {} })
+        const relay = new Relay(access, quiet, undefined, NO_WAIT)
+        const r: Real = { relay, arrived: [], delivered: [], steers: [], failed: false, violations: [] }
+        relay.attach({
+          prompt(text) {
+            if (r.endTurn) r.violations.push("ターンが 2 つ同時に進んだ")
+            r.delivered.push(...idsOf(text))
+            return new Promise<void>((resolve) => {
+              r.endTurn = () => {
+                r.endTurn = undefined
+                resolve()
+              }
+            })
+          },
+          steer(text) {
+            // 終わったターンへの差し込みには、実際のハーネス（idleBehavior: promptRequired）と同じく、差し込まずに false を返す
+            if (!r.endTurn) return Promise.resolve(false)
+            if (r.steers.length > 0) r.violations.push("差し込みが 2 つ同時に進んだ")
+            if (r.failed) r.violations.push("失敗のあとに差し込んだ")
+            return new Promise<boolean>((resolve, reject) => r.steers.push({ ids: idsOf(text), resolve, reject }))
+          },
+        })
+        await fc.asyncModelRun(() => ({ model: {}, real: r }), cmds)
+        // 最後に、差し込みには「差し込めた」と答え、ターンを終えていくと、すべての発言が渡る
+        for (let i = 0; i < 100 && (r.steers.length > 0 || r.endTurn); i++) {
+          if (r.steers.length > 0) await new SteerResult("injected").run({}, r)
+          else await new EndTurn().run({}, r)
+        }
+        expect(r.delivered).toEqual(r.arrived)
+      }),
+      { numRuns: 200, interruptAfterTimeLimit: 30_000, markInterruptAsFailure: true },
+    )
+  }, 60_000)
+
   test("依頼がどんな間隔で届き、どの順で答えても、束は決めた時刻に送られ、どの依頼にもちょうど 1 回答えが出る（model-based）", async () => {
     // 模型：中継の束の決まり（ADR 0014）を、時刻と件数だけで書いたもの
     type Model = {
