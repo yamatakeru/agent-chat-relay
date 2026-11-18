@@ -27,7 +27,7 @@ import { mcpHandler } from "./core/mcp.ts"
 import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
 import { resolveWorkspace } from "./workspace.ts"
-import { loadSecrets, relayHome, secretsFile, storeSecrets } from "./home.ts"
+import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
 
 /** コネクターの一覧。秘密情報のあるものだけを動かす */
@@ -103,7 +103,13 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const { harness: harnessName, sessionId } = args
   const harnessLog = join(home, "harness.log")
   const harness = await startHarness(
-    { ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }, harnessOptions, log, specified, env), sessionId, stderrPath: harnessLog },
+    {
+      ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }, harnessOptions, log, specified, env),
+      // 秘密情報のファイルに手で足した行（RELAY_ 以外のキー）も渡さない
+      withheld: secretKeys(envFile),
+      sessionId,
+      stderrPath: harnessLog,
+    },
     (req) => relay.requestPermission(req),
     log,
   )

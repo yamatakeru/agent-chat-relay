@@ -42,6 +42,14 @@ export function loadSecrets(path: string, env: Env, warn: (msg: string) => void)
   for (const [k, v] of Object.entries(parseSecrets(readFileSync(path, "utf8")))) env[k] ??= v
 }
 
+/**
+ * 秘密情報のファイルにあるキーの名前。ハーネスには、これらを渡さない（環境変数で渡したものも含む）。
+ * dotenvx で暗号化したファイルでも、キーの名前は平文なので読める
+ */
+export function secretKeys(path: string): string[] {
+  return existsSync(path) ? Object.keys(parseSecrets(readFileSync(path, "utf8"))) : []
+}
+
 /** 秘密情報を保存する。ほかの行は残す。ファイルは 0600、新しく作るディレクトリは 0700 にする */
 export function storeSecrets(path: string, values: Record<string, string>): void {
   for (const [k, v] of Object.entries(values)) {

@@ -566,7 +566,7 @@ describe("ハーネスの起動と再開", () => {
   const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
 
   /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ渡す。エージェントが受けた要求と、中継のログを返す */
-  async function run(fake: FakeAcpConfig, sessionId?: string, use?: (session: Session) => Promise<void>) {
+  async function run(fake: FakeAcpConfig, sessionId?: string, use?: (session: Session) => Promise<void>, withheld?: string[]) {
     const logs: { msg: string; extra?: Record<string, unknown> }[] = []
     const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
     const stderrPath = join(dir, "harness.log")
@@ -588,6 +588,7 @@ describe("ハーネスの起動と再開", () => {
           mode: "default",
           stderrPath,
           sessionId,
+          withheld,
         },
         async () => "deny",
         log,
@@ -611,14 +612,16 @@ describe("ハーネスの起動と再開", () => {
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
 
   test("ハーネスには中継の秘密情報を渡さない", async () => {
-    const saved = { RELAY_TEST_SECRET: process.env.RELAY_TEST_SECRET, DOTENV_TEST_KEY: process.env.DOTENV_TEST_KEY }
+    const saved = { RELAY_TEST_SECRET: process.env.RELAY_TEST_SECRET, DOTENV_TEST_KEY: process.env.DOTENV_TEST_KEY, OTHER_TEST_KEY: process.env.OTHER_TEST_KEY }
     process.env.RELAY_TEST_SECRET = "t"
     process.env.DOTENV_TEST_KEY = "k"
+    // 秘密情報のファイルに手で足した、RELAY_ 以外のキー
+    process.env.OTHER_TEST_KEY = "o"
     try {
-      const r = await run({})
+      const r = await run({}, undefined, undefined, ["OTHER_TEST_KEY"])
       expect(r.error).toBeUndefined()
       expect(r.env).toContain("FAKE_ACP")
-      expect(r.env!.filter((k) => /^(RELAY_|DOTENV_)/.test(k))).toEqual([])
+      expect(r.env!.filter((k) => /^(RELAY_|DOTENV_)/.test(k) || k === "OTHER_TEST_KEY")).toEqual([])
     } finally {
       for (const [k, v] of Object.entries(saved)) {
         if (v === undefined) delete process.env[k]

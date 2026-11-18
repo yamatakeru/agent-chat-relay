@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
-import { loadSecrets, parseSecrets, relayHome, secretsFile, storeSecrets } from "../src/home.ts"
+import { loadSecrets, parseSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "../src/home.ts"
 import { BUN_ISOLATED, harnessConfig } from "../src/harness/config.ts"
 
 const repo = resolve(import.meta.dir, "..")
@@ -31,6 +31,13 @@ describe("データの置き場", () => {
 describe("秘密情報のファイル", () => {
   test("KEY=VALUE を読み、コメントと空行を飛ばし、引用符を外す", () => {
     expect(parseSecrets("# c\n\nA=1\nB = \"two\"\nC='3'\nbad\n=x\n")).toEqual({ A: "1", B: "two", C: "3" })
+  })
+
+  test("ハーネスに渡さないキーの名前は、暗号化したファイルからも読む。ファイルがなければない", () => {
+    const f = join(dir, ".env")
+    writeFileSync(f, '#/ public key\nDOTENV_PUBLIC_KEY="02ab"\nRELAY_LINE_CHANNEL_TOKEN="encrypted:BD..."\nOPENAI_API_KEY=sk\n')
+    expect(secretKeys(f)).toEqual(["DOTENV_PUBLIC_KEY", "RELAY_LINE_CHANNEL_TOKEN", "OPENAI_API_KEY"])
+    expect(secretKeys(join(dir, "none"))).toEqual([])
   })
 
   test("保存すると 0600 になり、ほかの行は残し、同じ項目は置き換える。ディレクトリは 0700 で作る", () => {
