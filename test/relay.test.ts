@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test"
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import fc from "fast-check"
@@ -12,7 +12,7 @@ import { MediaStore } from "../src/connectors/line-media.ts"
 import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths } from "../src/core/relay.ts"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
@@ -389,6 +389,250 @@ describe("relay", () => {
         expect(await Promise.all(verdicts)).toEqual(reqs.map(() => "deny"))
       }),
       { numRuns: 150, interruptAfterTimeLimit: 20_000, markInterruptAsFailure: true },
+    )
+  }, 60_000)
+
+  test("発言の到着、ターンの終わり、差し込みの結果がどう重なっても、どの発言もちょうど 1 回、届いた順に渡る（model-based、ADR 0018）", async () => {
+    type Steer = { ids: string[]; resolve: (ok: boolean) => void; reject: (err: Error) => void }
+    /** 偽のセッション。ターンの終わりと差し込みの結果は、コマンドが返す */
+    type Real = {
+      relay: Relay
+      arrived: string[]
+      delivered: string[]
+      endTurn?: () => void
+      steers: Steer[]
+      failed: boolean
+      violations: string[]
+    }
+    const idsOf = (text: string) => [...text.matchAll(/message_id="(m\d+)"/g)].map((m) => m[1]!)
+    const flush = async () => {
+      for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r))
+    }
+    const same = async (r: Real) => {
+      await flush()
+      expect(r.violations).toEqual([])
+      // 渡った発言は、届いた順の先頭の部分で、重なりがない
+      expect(r.delivered).toEqual(r.arrived.slice(0, r.delivered.length))
+    }
+    class Arrive implements fc.AsyncCommand<object, Real> {
+      check = () => true
+      async run(_: object, r: Real) {
+        const id = `m${r.arrived.length}`
+        r.arrived.push(id)
+        r.relay.receive(msg({ id, text: id }))
+        await same(r)
+      }
+      toString = () => "arrive"
+    }
+    class EndTurn implements fc.AsyncCommand<object, Real> {
+      check = () => true
+      async run(_: object, r: Real) {
+        r.endTurn?.()
+        await same(r)
+      }
+      toString = () => "end turn"
+    }
+    class SteerResult implements fc.AsyncCommand<object, Real> {
+      constructor(readonly outcome: "injected" | "promptRequired" | "error") {}
+      check = () => true
+      async run(_: object, r: Real) {
+        const s = r.steers.shift()
+        if (s && this.outcome === "injected") {
+          r.delivered.push(...s.ids)
+          s.resolve(true)
+        }
+        if (s && this.outcome === "promptRequired") s.resolve(false)
+        if (s && this.outcome === "error") {
+          r.failed = true
+          s.reject(new Error("steer failed"))
+        }
+        await same(r)
+      }
+      toString = () => `steer ${this.outcome}`
+    }
+    const commands = [
+      fc.constant(new Arrive()),
+      fc.constant(new EndTurn()),
+      fc.constantFrom<"injected" | "promptRequired" | "error">("injected", "injected", "promptRequired", "error").map((o) => new SteerResult(o)),
+    ]
+    await fc.assert(
+      fc.asyncProperty(fc.commands(commands, { size: "max", maxCommands: 40 }), async (cmds) => {
+        access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: false, allowFrom: [] } }, pending: {} })
+        const relay = new Relay(access, quiet, undefined, NO_WAIT)
+        const r: Real = { relay, arrived: [], delivered: [], steers: [], failed: false, violations: [] }
+        relay.attach({
+          prompt(text) {
+            if (r.endTurn) r.violations.push("ターンが 2 つ同時に進んだ")
+            r.delivered.push(...idsOf(text))
+            return new Promise<void>((resolve) => {
+              r.endTurn = () => {
+                r.endTurn = undefined
+                resolve()
+              }
+            })
+          },
+          steer(text) {
+            // 終わったターンへの差し込みには、実際のハーネス（idleBehavior: promptRequired）と同じく、差し込まずに false を返す
+            if (!r.endTurn) return Promise.resolve(false)
+            if (r.steers.length > 0) r.violations.push("差し込みが 2 つ同時に進んだ")
+            if (r.failed) r.violations.push("失敗のあとに差し込んだ")
+            return new Promise<boolean>((resolve, reject) => r.steers.push({ ids: idsOf(text), resolve, reject }))
+          },
+        })
+        await fc.asyncModelRun(() => ({ model: {}, real: r }), cmds)
+        // 最後に、差し込みには「差し込めた」と答え、ターンを終えていくと、すべての発言が渡る
+        for (let i = 0; i < 100 && (r.steers.length > 0 || r.endTurn); i++) {
+          if (r.steers.length > 0) await new SteerResult("injected").run({}, r)
+          else await new EndTurn().run({}, r)
+        }
+        expect(r.delivered).toEqual(r.arrived)
+      }),
+      { numRuns: 200, interruptAfterTimeLimit: 30_000, markInterruptAsFailure: true },
+    )
+  }, 60_000)
+
+  test("依頼がどんな間隔で届き、どの順で答えても、束は決めた時刻に送られ、どの依頼にもちょうど 1 回答えが出る（model-based）", async () => {
+    // 模型：中継の束の決まり（ADR 0014）を、時刻と件数だけで書いたもの
+    type Model = {
+      now: number
+      open?: { opened: number; deadline: number; reqs: number[] }
+      sent: { reqs: number[]; sentAt: number; opened: number; left: number[] }[]
+      verdicts: (Verdict | undefined)[]
+    }
+    type Real = { relay: Relay; conn: FakeConnector; sentAt: number[]; verdicts: (Verdict | undefined)[]; calls: number[] }
+    const QUIET = 1000
+    const MAX = 3000
+    const TIMEOUT = 30 * 60 * 1000
+    const send = (m: Model, at: number) => {
+      m.sent.push({ reqs: m.open!.reqs, sentAt: at, opened: m.open!.opened, left: [...m.open!.reqs] })
+      m.open = undefined
+    }
+    const settle = (m: Model, reqs: number[], v: Verdict) => {
+      for (const r of reqs) m.verdicts[r] = v === "always" ? "allow" : v
+      for (const b of m.sent) b.left = b.left.filter((r) => !reqs.includes(r))
+    }
+    /** 時刻を進める。そのあいだに来る締め切り（束を送る、30 分で拒否する）を、早い順に処理する */
+    const advance = (m: Model, to: number) => {
+      for (;;) {
+        const events = [
+          ...(m.open && m.open.deadline <= to ? [{ at: m.open.deadline, run: () => send(m, m.open!.deadline) }] : []),
+          ...m.sent.filter((b) => b.left.length > 0 && b.opened + TIMEOUT <= to).map((b) => ({ at: b.opened + TIMEOUT, run: () => settle(m, b.left, "deny") })),
+        ].sort((a, b) => a.at - b.at)
+        if (events.length === 0) break
+        events[0]!.run()
+      }
+      m.now = to
+    }
+    // 実物の束の ID と、束の中の依頼の ID
+    const ids = (r: Real, k: number) => {
+      const a = r.conn.approvals[k]!
+      const items = [...a.text.matchAll(/この依頼だけ：yes ([a-km-z]{5})/g)].map((x) => x[1]!)
+      return { whole: a.id, items: items.length > 0 ? items : [a.id] }
+    }
+    const flush = async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+    }
+    const same = async (m: Model, r: Real) => {
+      await flush()
+      expect(r.conn.approvals.map((a, k) => ({ n: ids(r, k).items.length, at: r.sentAt[k] }))).toEqual(m.sent.map((b) => ({ n: b.reqs.length, at: b.sentAt })))
+      expect(r.verdicts).toEqual(m.verdicts)
+    }
+
+    class Request implements fc.AsyncCommand<Model, Real> {
+      check = () => true
+      async run(m: Model, r: Real) {
+        const n = m.verdicts.length
+        m.verdicts.push(undefined)
+        r.verdicts.push(undefined)
+        void r.relay.requestPermission({ title: `t${n}`, input: "i" }).then((v) => {
+          r.verdicts[n] = v
+          r.calls[n] = (r.calls[n] ?? 0) + 1
+        })
+        if (!m.open) m.open = { opened: m.now, deadline: 0, reqs: [] }
+        m.open.reqs.push(n)
+        if (m.open.reqs.length >= 5) send(m, m.now)
+        else m.open.deadline = Math.min(m.now + QUIET, m.open.opened + MAX)
+        await same(m, r)
+      }
+      toString = () => "request"
+    }
+    class Tick implements fc.AsyncCommand<Model, Real> {
+      constructor(readonly ms: number) {}
+      check = () => true
+      async run(m: Model, r: Real) {
+        jest.advanceTimersByTime(this.ms)
+        advance(m, m.now + this.ms)
+        await same(m, r)
+      }
+      toString = () => `tick ${this.ms}`
+    }
+    /** 1 秒未満の間隔で、依頼を続けて出す。「最初の依頼から 3 秒」が「最後の依頼から 1 秒」より先に来るのは、この並びのときだけ */
+    class Burst implements fc.AsyncCommand<Model, Real> {
+      constructor(readonly gaps: number[]) {}
+      check = () => true
+      async run(m: Model, r: Real) {
+        await new Request().run(m, r)
+        for (const ms of this.gaps) {
+          await new Tick(ms).run(m, r)
+          await new Request().run(m, r)
+        }
+      }
+      toString = () => `burst ${this.gaps.join(",")}`
+    }
+    class Answer implements fc.AsyncCommand<Model, Real> {
+      constructor(
+        readonly batch: number,
+        readonly item: number | undefined,
+        readonly verdict: Verdict,
+      ) {}
+      check = (m: Model) => this.batch < m.sent.length
+      async run(m: Model, r: Real) {
+        const b = m.sent[this.batch]!
+        const { whole, items } = ids(r, this.batch)
+        const target = this.item === undefined ? undefined : this.item % b.reqs.length
+        const answered = target === undefined ? b.left : b.left.filter((x) => x === b.reqs[target])
+        // 答えの出ていない依頼があれば受け付け、なければ受け付けない
+        expect(r.relay.answer(ALICE, target === undefined ? whole : items[target]!, this.verdict)).toBe(answered.length > 0)
+        settle(m, answered, this.verdict)
+        await same(m, r)
+      }
+      toString = () => `answer ${this.batch}${this.item === undefined ? "" : `.${this.item}`} ${this.verdict}`
+    }
+
+    // 時刻は 1 ミリ秒以上ずつ進める（Bun 1.4.4 の advanceTimersByTime(0) は、時刻を 1 ミリ秒進める）
+    const commands = [
+      fc.constant(new Request()),
+      fc.array(fc.integer({ min: 1, max: 999 }), { minLength: 1, maxLength: 4 }).map((gaps) => new Burst(gaps)),
+      fc.oneof(fc.integer({ min: 1, max: 4000 }), fc.constant(TIMEOUT)).map((ms) => new Tick(ms)),
+      fc.tuple(fc.nat(10), fc.option(fc.nat(4), { nil: undefined }), fc.constantFrom<Verdict>("allow", "always", "deny")).map(([b, i, v]) => new Answer(b, i, v)),
+    ]
+    // fast-check の時間切れの判定まで偽の時刻で進まないよう、偽のタイマーは試行ごとに入れて外す
+    await fc.assert(
+      fc.asyncProperty(fc.commands(commands, { size: "max", maxCommands: 40 }), async (cmds) => {
+        jest.useFakeTimers()
+        try {
+          access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
+          const relay = new Relay(access, quiet)
+          const conn = new FakeConnector()
+          const real: Real = { relay, conn, sentAt: [], verdicts: [], calls: [] }
+          const record = conn.sendApproval.bind(conn)
+          conn.sendApproval = async (...args) => {
+            real.sentAt.push(Date.now() - start)
+            return record(...args)
+          }
+          relay.addConnector(conn)
+          const start = Date.now()
+          await fc.asyncModelRun(() => ({ model: { now: 0, sent: [], verdicts: [] }, real }), cmds)
+          // 答えは、どの依頼にも 1 回だけ出る
+          expect(real.calls.every((c) => c === 1)).toBe(true)
+          // 残りを片付ける（次の試行に、前の束のタイマーを持ち越さない）
+          jest.advanceTimersByTime(TIMEOUT)
+          await flush()
+        } finally {
+          jest.useRealTimers()
+        }
+      }),
+      { numRuns: 200, interruptAfterTimeLimit: 30_000, markInterruptAsFailure: true },
     )
   }, 60_000)
 
