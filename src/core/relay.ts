@@ -118,10 +118,14 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no|always)\s+([a-km-z]{5})\s*$/i
 const PERMISSION_TIMEOUT_MS = 30 * 60 * 1000
 /** 承認依頼の束（ADR 0014）。最後の依頼からこの時間、次の依頼が来なければ送る。最初の依頼からは最大 maxMs 待つ */
 const BATCHING = { quietMs: 1000, maxMs: 3000 }
-/** 1 つの束に入れる依頼の数。文面が Discord の上限（2,000 字）に収まるようにする */
+/** 1 つの束に入れる依頼の数。文面の長さでも分ける（approvalMax） */
 const MAX_BATCH = 5
 /** 「常に許可」の範囲は省略せずに見せる。これより長ければ、「常に許可」を出さない */
 const MAX_ALWAYS_SCOPE = 200
+/** 1 件だけの依頼の題名は、これより長ければ省く（Claude Code の Bash では、題名がコマンドそのもの） */
+const MAX_SINGLE_TITLE = 200
+/** 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする */
+const APPROVAL_MARGIN = 50
 const RECORD_LIMIT = 200
 
 const INSTRUCTIONS = [
@@ -236,9 +240,16 @@ export class Relay {
     }
     return new Promise<Verdict>((resolve) => {
       // 同時に届いた依頼は、1 通の束にまとめて送る（ADR 0014）
-      const b = this.collecting ?? this.openBatch()
+      let b = this.collecting ?? this.openBatch()
       const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
-      b.items.push({ id: this.newPermissionId(), req: { ...req, always }, resolve })
+      const pending = { req: { ...req, always }, resolve }
+      // 足すと文面が上限を超えるなら、今の束を先に送る。コネクターが文面を切ると、依頼や「常に許可」の範囲が見えないまま、束全体に答えられてしまう（ADR 0015）
+      if (b.items.length > 0 && approvalText([...b.items, { id: ID_PLACEHOLDER, ...pending }], ID_PLACEHOLDER).length > this.approvalMax()) {
+        clearTimeout(b.flush)
+        this.sendBatch(b)
+        b = this.openBatch()
+      }
+      b.items.push({ id: this.newPermissionId(), ...pending })
       clearTimeout(b.flush)
       if (b.items.length >= MAX_BATCH) return this.sendBatch(b)
       const wait = Math.min(this.batching.quietMs, b.opened + this.batching.maxMs - Date.now())
@@ -262,8 +273,14 @@ export class Relay {
 
   private sendBatchTo(user: string, b: Batch, lead = ""): void {
     this.connector(user)
-      ?.sendApproval(user, lead + approvalText(b), b.id, { always: b.items.every((i) => i.req.always) })
+      ?.sendApproval(user, lead + approvalText(b.items, b.id, this.approvalMax()), b.id, { always: b.items.every((i) => i.req.always) })
       .catch((err) => this.log.error("承認の依頼を送れませんでした", { user, error: String(err) }))
+  }
+
+  /** 承認依頼の文面の上限。承認者のいるサービスのうち、本文の上限がいちばん短いものに合わせる */
+  private approvalMax(): number {
+    const limits = this.access.load().allowFrom.flatMap((u) => this.connector(u)?.capabilities.text.max ?? [])
+    return Math.min(...limits) - APPROVAL_MARGIN
   }
 
   private expire(b: Batch): void {
@@ -535,14 +552,20 @@ function describeAttachment(a: Attachment): string {
   return a.size === undefined ? `${name} (${a.type})` : `${name} (${a.type}, ${Math.ceil(a.size / 1024)}KB)`
 }
 
-/** 承認依頼の束の文面。依頼が 1 つなら、その依頼だけを書く */
-function approvalText(b: Batch): string {
-  if (b.items.length === 1) {
-    const { req } = b.items[0]!
-    const always = req.always ? [`常に許可：always ${b.id}（${req.always}）`] : []
-    return [`🔐 実行の承認：${req.title}`, "", truncate(req.input, 1500), "", `許可：yes ${b.id}`, ...always, `拒否：no ${b.id}`].join("\n")
+/** 束を送る前に文面の長さを測るときの ID（本物と同じ 5 文字） */
+const ID_PLACEHOLDER = "xxxxx"
+
+/** 承認依頼の束の文面。依頼が 1 つなら、その依頼だけを書き、入力を省いて max に収める */
+function approvalText(pending: PendingRequest[], id: string, max = Infinity): string {
+  if (pending.length === 1) {
+    const { req } = pending[0]!
+    const head = `🔐 実行の承認：${truncate(req.title, MAX_SINGLE_TITLE)}`
+    const answers = [`許可：yes ${id}`, ...(req.always ? [`常に許可：always ${id}（${req.always}）`] : []), `拒否：no ${id}`].join("\n")
+    // 題名、答え方、「常に許可」の範囲は省かず、入力を残りの長さに合わせる
+    const room = Math.min(1500, max - head.length - answers.length - 4)
+    return [head, "", truncate(req.input, room), "", answers].join("\n")
   }
-  const items = b.items.map((i, n) =>
+  const items = pending.map((i, n) =>
     [
       `${n + 1}. ${truncate(i.req.title, 100)}`,
       truncate(i.req.input, 200),
@@ -550,10 +573,14 @@ function approvalText(b: Batch): string {
       `（この依頼だけ：yes ${i.id}・${i.req.always ? `always ${i.id}・` : ""}no ${i.id}）`,
     ].join("\n"),
   )
-  const always = b.items.every((i) => i.req.always) ? [`すべて常に許可：always ${b.id}`] : []
-  return [`🔐 実行の承認（${b.items.length} 件）`, "", `すべて許可：yes ${b.id}`, ...always, `すべて拒否：no ${b.id}`, "", ...items.flatMap((t) => [t, ""])].join("\n").trimEnd()
+  const always = pending.every((i) => i.req.always) ? [`すべて常に許可：always ${id}`] : []
+  return [`🔐 実行の承認（${pending.length} 件）`, "", `すべて許可：yes ${id}`, ...always, `すべて拒否：no ${id}`, "", ...items.flatMap((t) => [t, ""])].join("\n").trimEnd()
 }
 
+/** max 文字を超えるなら、省いたことを書き添えて、全体を max 文字に収める */
 function truncate(s: string, max: number): string {
-  return s.length <= max ? s : `${s.slice(0, max)}…（${s.length - max} 文字を省略）`
+  if (s.length <= max) return s
+  const note = (n: number) => `…（${n} 文字を省略）`
+  const keep = Math.max(0, max - note(s.length).length)
+  return s.slice(0, keep) + note(s.length - keep)
 }

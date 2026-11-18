@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import fc from "fast-check"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
 import { DiscordConnector, renderContent } from "../src/connectors/discord.ts"
@@ -331,6 +332,55 @@ describe("relay", () => {
     await Bun.sleep(5)
     expect(conn.approvals.at(-1)).toMatchObject({ always: false, text: expect.not.stringContaining("always") })
   })
+
+  test("束の文面が承認者のサービスの上限を超えるなら、その手前で束を分ける（範囲の長い依頼 5 件を Discord の 2,000 字に）", async () => {
+    const { relay, conn } = setup()
+    conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
+    const scopes = [0, 1, 2, 3, 4].map((n) => `scope${n}:${"s".repeat(150)}`)
+    for (const always of scopes) void relay.requestPermission({ title: "Bash", input: "i".repeat(300), always })
+    await Bun.sleep(5)
+    expect(conn.approvals.length).toBeGreaterThan(1)
+    for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
+    for (const s of scopes) expect(conn.approvals.filter((a) => a.text.includes(s))).toHaveLength(1)
+    expect(conn.approvals.every((a) => a.always)).toBe(true)
+  })
+
+  test("依頼が 1 件でも、題名と入力が長ければ省いて上限に収め、答え方と「常に許可」の範囲は残す", async () => {
+    const { relay, conn } = setup()
+    conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
+    const scope = `Yes, and don't ask again for ${"x".repeat(150)}`
+    void relay.requestPermission({ title: "t".repeat(1000), input: "i".repeat(3000), always: scope })
+    await Bun.sleep(5)
+    const [a] = conn.approvals
+    expect(a!.text.length).toBeLessThanOrEqual(2000)
+    expect(a!.text).toContain(`常に許可：always ${a!.id}（${scope}）`)
+    expect(a!.text).toContain(`拒否：no ${a!.id}`)
+  })
+
+  test("どんな依頼の組み合わせでも、承認依頼の文面は上限に収まり、どの依頼も 1 つの束にだけ入り、「常に許可」の範囲は省かない（property-based）", async () => {
+    const request = fc.record({
+      title: fc.string({ maxLength: 400, unit: "grapheme", size: "max" }),
+      input: fc.string({ maxLength: 2500, size: "max" }),
+      always: fc.option(fc.string({ minLength: 1, maxLength: 250, size: "max" }), { nil: undefined }),
+    })
+    await fc.assert(
+      fc.asyncProperty(fc.constantFrom(2000, 5000), fc.array(request, { minLength: 1, maxLength: 12, size: "max" }), async (max, reqs) => {
+        const { relay, conn } = setup()
+        conn.capabilities = { ...conn.capabilities, text: { max, parts: 10 } }
+        const verdicts = reqs.map((r) => relay.requestPermission(r))
+        // 束は setTimeout(0) で送られる
+        await new Promise((r) => setTimeout(r, 0))
+        // コネクターが切らない長さで渡す
+        for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(max)
+        // 「常に許可」を示せる依頼の範囲は、どれかの文面にそのまま書かれている
+        for (const r of reqs) if (r.always && r.always.length <= 200) expect(conn.approvals.some((a) => a.text.includes(r.always!))).toBe(true)
+        // 束の ID で 1 回ずつ答えると、すべての依頼に答えが出る（どの依頼も、ちょうど 1 つの束に入っている）
+        for (const a of conn.approvals) expect(relay.answer(ALICE, a.id, "deny")).toBe(true)
+        expect(await Promise.all(verdicts)).toEqual(reqs.map(() => "deny"))
+      }),
+      { numRuns: 150, interruptAfterTimeLimit: 20_000 },
+    )
+  }, 60_000)
 
   test("「常に許可」の選択肢は、モードの切り替えとファイルの編集には示さない。複数あれば先頭", () => {
     const options = [
