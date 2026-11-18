@@ -8,6 +8,8 @@ import { RotatingFile } from "./log-file.ts"
 export type HarnessConfig = {
   command: string[]
   env?: Record<string, string>
+  /** 中継の環境変数のうち、ハーネスに渡さないもの（RELAY_*・DOTENV_* のほかに） */
+  withheld?: string[]
   /** セッションの作業ディレクトリ（絶対パス） */
   cwd: string
   mcp: { url: string; token: string }
@@ -36,7 +38,7 @@ export async function startHarness(
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
     // 中継の秘密情報（LINE のトークンなど）をハーネスへ渡さない。渡すと、エージェントが送信先の制限を迂回できる
-    env: { ...withoutRelaySecrets(process.env), ...cfg.env },
+    env: { ...withoutRelaySecrets(process.env, cfg.withheld ?? []), ...cfg.env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -224,8 +226,8 @@ async function listed(ctx: acp.ClientContext, sessionId: string, cwd: string): P
   }
 }
 
-function withoutRelaySecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|DOTENV_)/.test(k)))
+function withoutRelaySecrets(env: Record<string, string | undefined>, withheld: string[]): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(RELAY_|DOTENV_)/.test(k) && !withheld.includes(k)))
 }
 
 /**

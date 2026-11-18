@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 /** 作業ディレクトリ。specified は、管理者が RELAY_WORKSPACE で指定したものか（ADR 0017） */
@@ -39,6 +39,38 @@ function realOrResolved(p: string): string {
   if (existsSync(abs)) return realpathSync(abs)
   const parent = dirname(abs)
   return parent === abs ? abs : join(realOrResolved(parent), basename(abs))
+}
+
+/**
+ * 作業ディレクトリの中の、中継の置き場（.relay/。受け取った添付など）を用意して、その場所を返す。
+ * 管理者の git リポジトリを作業ディレクトリにしても、ルームから届いたファイルがコミットされないよう、
+ * 中に「すべて無視する」.gitignore を置く。.relay/ は中継のものなので、毎回置き換える。管理者の .gitignore には触れない
+ */
+export function relayDir(workspace: string): string {
+  const dir = join(workspace, ".relay")
+  // ディレクトリがリンクだと、.gitignore の作成や、古い添付の削除が、リンク先に及ぶ
+  for (const p of [dir, join(dir, "inbox")]) {
+    if (isLink(p)) throw new Error(`作業ディレクトリの ${relative(workspace, p)} がシンボリックリンクのため、起動しません: ${p}`)
+  }
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  // すでにある .gitignore を通して書くと、リンクやハードリンクの先に及ぶ。消してから作ると、その間は無視されない。
+  // 新しいファイルに書いてから名前を付け替え、ディレクトリの項目を 1 回で置き換える
+  const tmp = join(dir, `.gitignore.${process.pid}.${crypto.randomUUID()}`)
+  try {
+    writeFileSync(tmp, "*\n", { flag: "wx" })
+    renameSync(tmp, join(dir, ".gitignore"))
+  } finally {
+    rmSync(tmp, { force: true })
+  }
+  return dir
+}
+
+function isLink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink()
+  } catch {
+    return false
+  }
 }
 
 /** 作業ディレクトリを独立した git リポジトリにして、上位の設定や AGENTS.md を拾わせない。できなければ起動しない */

@@ -26,8 +26,8 @@ import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
-import { resolveWorkspace } from "./workspace.ts"
-import { loadSecrets, relayHome, secretsFile, storeSecrets } from "./home.ts"
+import { relayDir, resolveWorkspace } from "./workspace.ts"
+import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
 
 /** コネクターの一覧。秘密情報のあるものだけを動かす */
@@ -55,7 +55,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）
   const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile)])
   if (specified) log.info("管理者が指定した作業ディレクトリを使います", { workspace })
-  const inbox = join(workspace, ".relay", "inbox")
+  const inbox = join(relayDir(workspace), "inbox")
 
   // 受け取った添付は 7 日で消す（ADR 0005）
   schedulePrune(inbox, "受け取った添付", log)
@@ -103,7 +103,13 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const { harness: harnessName, sessionId } = args
   const harnessLog = join(home, "harness.log")
   const harness = await startHarness(
-    { ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }, harnessOptions, log, specified, env), sessionId, stderrPath: harnessLog },
+    {
+      ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }, harnessOptions, log, specified, env),
+      // 秘密情報のファイルに手で足した行（RELAY_ 以外のキー）も渡さない
+      withheld: secretKeys(envFile),
+      sessionId,
+      stderrPath: harnessLog,
+    },
     (req) => relay.requestPermission(req),
     log,
   )

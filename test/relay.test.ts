@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import fc from "fast-check"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
@@ -19,7 +19,7 @@ import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
-import { initWorkspace, resolveWorkspace } from "../src/workspace.ts"
+import { initWorkspace, relayDir, resolveWorkspace } from "../src/workspace.ts"
 import { claudeOptions, harnessConfig, harnessOptionsFromEnv } from "../src/harness/config.ts"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
@@ -566,7 +566,7 @@ describe("ハーネスの起動と再開", () => {
   const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
 
   /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ渡す。エージェントが受けた要求と、中継のログを返す */
-  async function run(fake: FakeAcpConfig, sessionId?: string, use?: (session: Session) => Promise<void>) {
+  async function run(fake: FakeAcpConfig, sessionId?: string, use?: (session: Session) => Promise<void>, withheld?: string[]) {
     const logs: { msg: string; extra?: Record<string, unknown> }[] = []
     const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
     const stderrPath = join(dir, "harness.log")
@@ -588,6 +588,7 @@ describe("ハーネスの起動と再開", () => {
           mode: "default",
           stderrPath,
           sessionId,
+          withheld,
         },
         async () => "deny",
         log,
@@ -611,14 +612,16 @@ describe("ハーネスの起動と再開", () => {
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
 
   test("ハーネスには中継の秘密情報を渡さない", async () => {
-    const saved = { RELAY_TEST_SECRET: process.env.RELAY_TEST_SECRET, DOTENV_TEST_KEY: process.env.DOTENV_TEST_KEY }
+    const saved = { RELAY_TEST_SECRET: process.env.RELAY_TEST_SECRET, DOTENV_TEST_KEY: process.env.DOTENV_TEST_KEY, OTHER_TEST_KEY: process.env.OTHER_TEST_KEY }
     process.env.RELAY_TEST_SECRET = "t"
     process.env.DOTENV_TEST_KEY = "k"
+    // 秘密情報のファイルに手で足した、RELAY_ 以外のキー
+    process.env.OTHER_TEST_KEY = "o"
     try {
-      const r = await run({})
+      const r = await run({}, undefined, undefined, ["OTHER_TEST_KEY"])
       expect(r.error).toBeUndefined()
       expect(r.env).toContain("FAKE_ACP")
-      expect(r.env!.filter((k) => /^(RELAY_|DOTENV_)/.test(k))).toEqual([])
+      expect(r.env!.filter((k) => /^(RELAY_|DOTENV_)/.test(k) || k === "OTHER_TEST_KEY")).toEqual([])
     } finally {
       for (const [k, v] of Object.entries(saved)) {
         if (v === undefined) delete process.env[k]
@@ -1294,6 +1297,43 @@ describe("作業ディレクトリ", () => {
     expect(() => initWorkspace(join(dir, "ws"), "/nonexistent/git")).toThrow("起動しません")
   })
 
+  test("中継の置き場（.relay/）に届いたファイルは、管理者の git リポジトリでも未追跡にならない", () => {
+    const ws = join(dir, "admin-repo")
+    mkdirSync(ws)
+    expect(Bun.spawnSync(["git", "init", "-q", ws]).success).toBe(true)
+    const inbox = join(relayDir(ws), "inbox")
+    mkdirSync(inbox)
+    writeFileSync(join(inbox, "photo.png"), "x")
+    const status = Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()
+    expect(status).toBe("")
+    // 中身の違う（空の）.gitignore があっても、書き直して無視させる
+    writeFileSync(join(ws, ".relay", ".gitignore"), "")
+    relayDir(ws)
+    expect(Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()).toBe("")
+  })
+
+  test("中継の置き場（.relay/）やその中がリンクでも、リンク先には書かず、消さない", () => {
+    for (const link of [".relay", ".relay/inbox"]) {
+      const ws = mkdtempSync(join(dir, "ws-"))
+      mkdirSync(join(ws, ".relay"), { recursive: true })
+      if (link === ".relay") rmSync(join(ws, ".relay"), { recursive: true })
+      mkdirSync(join(ws, "target"))
+      symlinkSync(join(ws, "target"), join(ws, link))
+      expect(() => relayDir(ws)).toThrow("シンボリックリンク")
+      expect(existsSync(join(ws, "target", ".gitignore"))).toBe(false)
+    }
+    // .gitignore がシンボリックリンクやハードリンクでも、リンク先の中身は変えず、.relay/ の中に作り直す
+    for (const make of [symlinkSync, linkSync]) {
+      const ws = mkdtempSync(join(dir, "ws-"))
+      mkdirSync(join(ws, ".relay"))
+      writeFileSync(join(ws, ".gitignore"), "admin\n")
+      make(join(ws, ".gitignore"), join(ws, ".relay", ".gitignore"))
+      relayDir(ws)
+      expect(readFileSync(join(ws, ".gitignore"), "utf8")).toBe("admin\n")
+      expect(readFileSync(join(ws, ".relay", ".gitignore"), "utf8")).toBe("*\n")
+    }
+  })
+
   test("指定がなければ <home>/workspace を作り、指定があればそのディレクトリを git init せずに使う", () => {
     const home = join(dir, "home")
     expect(resolveWorkspace({}, home, [home])).toEqual({ path: join(home, "workspace"), specified: false })
@@ -1341,12 +1381,12 @@ describe("ハーネスの設定の読み込み", () => {
     const permissions = { defaultMode: "default", allow: ["mcp__chat"] }
     expect(claudeOptions(NONE)).toEqual({
       settingSources: ["project", "local"],
-      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"], autoMemoryEnabled: false, permissions },
+      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"], autoMemoryEnabled: false, permissions },
     })
     expect(claudeOptions({ inheritSettings: true, memory: false })).toEqual({ settings: { autoMemoryEnabled: false, permissions } })
     expect(claudeOptions({ inheritSettings: false, memory: true })).toEqual({
       settingSources: ["project", "local"],
-      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md"], autoMemoryEnabled: true, permissions },
+      settings: { claudeMdExcludes: ["**/AGENTS.md", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"], autoMemoryEnabled: true, permissions },
     })
     expect(claudeOptions({ inheritSettings: true, memory: true })).toEqual({ settings: { autoMemoryEnabled: true, permissions } })
   })
