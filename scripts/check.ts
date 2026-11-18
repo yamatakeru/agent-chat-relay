@@ -5,6 +5,7 @@
 
 import { readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { adrIndex, BEGIN, currentIndex, END } from "./adr-index.ts"
 
 const root = resolve(process.argv[2] ?? join(import.meta.dir, ".."))
 
@@ -60,6 +61,11 @@ for (const f of files(["{src,test,scripts}/**/*.ts"], /^$/)) {
     else if (ex[1]! < today) errors.push(`${f}:${n + 1}: 分離の例外の期限（${ex[1]}）が過ぎている。BUN_ISOLATED を使うか、例外を見直して期限を延ばす`)
   })
 }
+
+// docs/relay.md の ADR の一覧は、docs/adr/ から生成する（手で同期すると、ずれていた。0005 が抜けていた）
+const current = currentIndex(readFileSync(join(root, "docs/relay.md"), "utf8"))
+if (current === undefined) errors.push(`docs/relay.md: 「${BEGIN}」と「${END}」の間に ADR の一覧を置く`)
+else if (current !== adrIndex(root)) errors.push("docs/relay.md: ADR の一覧が docs/adr/ と一致しない。bun run docs:adr を実行する")
 
 if (errors.length > 0) {
   for (const e of errors) console.error(e)
