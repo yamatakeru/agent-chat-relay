@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 /** 作業ディレクトリ。specified は、管理者が RELAY_WORKSPACE で指定したものか（ADR 0017） */
@@ -48,9 +48,21 @@ function realOrResolved(p: string): string {
  */
 export function relayDir(workspace: string): string {
   const dir = join(workspace, ".relay")
+  // リンクだと、.gitignore の書き込みや、古い添付の削除が、リンク先に及ぶ
+  for (const p of [dir, join(dir, ".gitignore"), join(dir, "inbox")]) {
+    if (isLink(p)) throw new Error(`作業ディレクトリの ${relative(workspace, p)} がシンボリックリンクのため、起動しません: ${p}`)
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   writeFileSync(join(dir, ".gitignore"), "*\n")
   return dir
+}
+
+function isLink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink()
+  } catch {
+    return false
+  }
 }
 
 /** 作業ディレクトリを独立した git リポジトリにして、上位の設定や AGENTS.md を拾わせない。できなければ起動しない */

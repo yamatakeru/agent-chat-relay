@@ -1312,6 +1312,19 @@ describe("作業ディレクトリ", () => {
     expect(Bun.spawnSync(["git", "-C", ws, "status", "--porcelain", "--untracked-files=all"]).stdout.toString()).toBe("")
   })
 
+  test("中継の置き場（.relay/）やその中がシンボリックリンクなら、リンク先に書いたり消したりせず、起動しない", () => {
+    for (const link of [".relay", ".relay/.gitignore", ".relay/inbox"]) {
+      const ws = mkdtempSync(join(dir, "ws-"))
+      mkdirSync(join(ws, ".relay"), { recursive: true })
+      if (link === ".relay") rmSync(join(ws, ".relay"), { recursive: true })
+      const target = join(ws, "target")
+      writeFileSync(target, "admin\n")
+      symlinkSync(target, join(ws, link))
+      expect(() => relayDir(ws)).toThrow("シンボリックリンク")
+      expect(readFileSync(target, "utf8")).toBe("admin\n")
+    }
+  })
+
   test("指定がなければ <home>/workspace を作り、指定があればそのディレクトリを git init せずに使う", () => {
     const home = join(dir, "home")
     expect(resolveWorkspace({}, home, [home])).toEqual({ path: join(home, "workspace"), specified: false })
