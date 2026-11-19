@@ -143,10 +143,10 @@ export const TURN_NOTICES = {
   slow: "時間がかかっています。止まっている可能性もあります。",
   silent: "返事を送らないまま、作業を終えました。",
 } as const
-export type TurnNoticeKind = keyof typeof TURN_NOTICES
+type TurnNoticeKind = keyof typeof TURN_NOTICES
 /** 知らせを出すまでの時間。approval は承認依頼を送ってから、slow はルームの発言を渡してから */
-export type NoticeTiming = { approvalMs: number; slowMs: number }
-export const NOTICE_TIMING: NoticeTiming = { approvalMs: 10 * 60 * 1000, slowMs: 20 * 60 * 1000 }
+type NoticeTiming = { approvalMs: number; slowMs: number }
+const NOTICE_TIMING: NoticeTiming = { approvalMs: 10 * 60 * 1000, slowMs: 20 * 60 * 1000 }
 
 /** 管理者が環境変数で変える、知らせを出すまでの時間（分）。決めた範囲の整数以外は、書き間違いとして起動しない */
 export function noticeTimingFromEnv(env: Record<string, string | undefined>): NoticeTiming {
