@@ -52,7 +52,7 @@ LINE・LINE WORKS・Chatwork・Discord のルームを、任意のハーネス�
 | Bun でスクリプトを起動するときは、cwd の `.env` と `bunfig.toml` を読ませない | 構造：中継の本体は `bin/agent-chat-relay` から起動する。検査：それ以外は `bun run check` が、シェルでは `--no-env-file --config=/dev/null`、TypeScript では `BUN_ISOLATED` を求める |
 | `docs/relay.md` の ADR の一覧は、手で書き換えない | 検査：`bun run check` が生成結果との一致を確かめる（生成は `bun run docs:adr`） |
 | 検査の例外は、その行に理由・期限・承認者を書き、人の承認を得てから入れる | 検査：`bun run check` が期限を確かめる。文章：例外の理由と人の承認 |
-| 統括 issue のある作業では、作った issue をその sub-issue にし、PR は本文の `Refs` でその issue につなぐ | 文章 |
+| 統括 issue のある作業で作った issue は、その sub-issue にする | 文章 |
 | 作業の前に、`GLOSSARY.md`（用語）、`docs/adr/`（確定した判断）、その作業の統括 issue（ラベル `tracking`）、関係する未決事項（ラベル `undecided`）を読む | 文章 |
 | 手元でできる検証は報告前に済ませる。「確認できなかったこと」には、手元では確かめられないことや、実サービスへの影響を避けるため試さなかったことだけを、理由とともに書く | 文章 |
 | 作業が終わったら、一時ファイルを消す | 文章 |
