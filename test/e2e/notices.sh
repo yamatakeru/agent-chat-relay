@@ -112,7 +112,8 @@ check "失敗の知らせが届く" dm_notice "$FAILED_NOTICE" 20
 check "中継が止まる" wait_exit 30
 echo "stopped after ${ELAPSED}s"
 check "知らせを待ってから止まる（10 秒前後）" ge 8
-check "知らせを待つのは上限まで" le 20
+# API の呼び出しの上限（15 秒）で止まったのなら、待つ上限が効いていない
+check "知らせを待つのは上限（10 秒）まで" le 13
 check "異常終了をログに書く" grep -q "ハーネスが異常終了したため" "$RLOG-1.log"
 
 echo "== 2. 知らせを待っている間に Ctrl+C"
