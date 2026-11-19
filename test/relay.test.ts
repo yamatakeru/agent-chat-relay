@@ -433,12 +433,46 @@ describe("relay", () => {
       ])
     })
 
+    test("返事をしたルームに、あとから差し込んだ発言があっても、そのターンは返事をしたものとして扱う", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      await relay.reply(ROOM, "調べます")
+      relay.receive(msg({ text: "あと、これも" }))
+      await Bun.sleep(80)
+      s.finish()
+      await Bun.sleep(0)
+      expect(s.prompts).toHaveLength(1)
+      expect(conn.notices).toHaveLength(0)
+    })
+
+    test("終わったターンの時間の知らせは、あとから出さない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      s.finish()
+      await Bun.sleep(80)
+      expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.silent, push: true }])
+    })
+
     test("承認依頼に答えがないまま時間がたったら、ターンのルームに 1 回だけ知らせる。答えれば知らせない", async () => {
       const { relay, conn } = setupTurn({ approvalMs: 30, slowMs: 60_000 })
       const s = heldSession()
       relay.attach(s.session)
       relay.receive(msg({ text: "one" }))
       await Bun.sleep(0)
+      // すぐに答えた依頼では、知らせない
+      const quick = relay.requestPermission({ title: "Bash", input: "date" })
+      await Bun.sleep(5)
+      relay.answer(ALICE, conn.approvals[0]!.id, "allow")
+      expect(await quick).toBe("allow")
+      await Bun.sleep(80)
+      expect(conn.notices).toHaveLength(0)
+      conn.approvals.length = 0
       const first = relay.requestPermission({ title: "Bash", input: "ls" })
       const second = relay.requestPermission({ title: "Bash", input: "pwd" })
       await Bun.sleep(80)
@@ -503,7 +537,7 @@ describe("relay", () => {
       await Bun.sleep(0)
       let done = false
       void drained.then(() => (done = true))
-      await Bun.sleep(0)
+      await Bun.sleep(20)
       expect(done).toBe(false)
       release()
       await drained
@@ -1463,11 +1497,13 @@ describe("line", () => {
 
   test("案内は Reply で送り、使える Reply トークンがなければ送らずに false を返す。Push してよいときも、Push は 1 対 1 のトークだけ", async () => {
     const paths: string[] = []
+    const bodies: unknown[] = []
     const api = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(req) {
+      async fetch(req) {
         paths.push(new URL(req.url).pathname)
+        bodies.push(await req.json().catch(() => ({})))
         return new Response("{}", { status: 200 })
       },
     })
@@ -1486,6 +1522,7 @@ describe("line", () => {
       expect(await line.notice(ALICE, "知らせ")).toBe(false)
       expect(await line.notice(ALICE, "知らせ", { push: true })).toBe(true)
       expect(paths).toEqual(["/v2/bot/message/push"])
+      expect(bodies.at(-1)).toMatchObject({ to: ALICE.slice(5), messages: [{ type: "text", text: "知らせ" }] })
     } finally {
       void api.stop()
     }

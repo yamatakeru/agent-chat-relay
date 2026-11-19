@@ -455,15 +455,16 @@ export class Relay {
       while (this.session && this.queue.length > 0) {
         const batch = this.queue.splice(0)
         const text = await this.render(batch)
-        this.turn = new Map()
-        this.delivered(batch)
+        const turnRooms = new Map<string, TurnRoom>()
+        this.turn = turnRooms
+        this.delivered(turnRooms, batch)
         let failed = false
         const turn = this.session.prompt(text).catch((err) => {
           failed = true
           this.log.error("セッションへの入力に失敗しました", { error: String(err) })
         })
-        await this.steerUntil(this.session, turn)
-        this.endTurn(failed)
+        await this.steerUntil(this.session, turn, turnRooms)
+        this.endTurn(turnRooms, failed)
       }
     } finally {
       this.running = false
@@ -473,9 +474,10 @@ export class Relay {
   /**
    * ターンが終わるまで、届いた発言をそのターンに差し込む（ADR 0018）。
    * 差し込めないハーネスや、差し込めなかった発言は、ためておき、ターンが終わってからまとめて渡す。
-   * 差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）
+   * 差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）。
+   * 差し込めた発言のルームは、rooms に足す
    */
-  private async steerUntil(session: Session, turn: Promise<void>): Promise<void> {
+  private async steerUntil(session: Session, turn: Promise<void>, rooms: Map<string, TurnRoom>): Promise<void> {
     const steer = session.steer?.bind(session)
     if (!steer || !this.steerable) return turn
     let done = false
@@ -490,7 +492,7 @@ export class Relay {
         try {
           const text = await this.render(batch)
           if (!done && (await steer(text))) {
-            this.delivered(batch)
+            this.delivered(rooms, batch)
             continue
           }
         } catch (err) {
@@ -550,56 +552,51 @@ export class Relay {
 
   // ---- ターンの知らせ（ADR 0024） ----
 
-  /** ターンに渡した発言のルームを足す。返事もターンの終わりもないまま slowMs たったら、知らせる */
-  private delivered(batch: Incoming[]): void {
-    const turn = this.turn
-    if (!turn) return
+  /** ターンに渡した発言のルームを足す。ルームに最初のメンションを渡してから slowMs、返事もターンの終わりもなければ、知らせる */
+  private delivered(turn: Map<string, TurnRoom>, batch: Incoming[]): void {
     for (const m of batch) {
-      let r = turn.get(m.room)
-      if (!r) {
-        r = { mentioned: false, replied: false, notified: new Set() }
-        turn.set(m.room, r)
-      }
+      const r = turn.get(m.room) ?? { mentioned: false, replied: false, notified: new Set() }
+      turn.set(m.room, r)
       r.mentioned ||= m.mentioned
-      if (r.mentioned && !r.replied && !r.slow) r.slow = setTimeout(() => this.noticeRoom(m.room, "slow"), this.timing.slowMs)
+      if (r.mentioned) r.slow ??= setTimeout(() => this.noticeRoom(m.room, r, "slow"), this.timing.slowMs)
     }
   }
 
   /** そのターンで、ルームへ返事した */
   private replied(room: string): void {
     const r = this.turn?.get(room)
-    if (!r) return
-    r.replied = true
-    clearTimeout(r.slow)
+    if (r) r.replied = true
   }
 
-  private endTurn(failed: boolean): void {
-    const turn = this.turn
-    if (!turn) return
+  private endTurn(turn: Map<string, TurnRoom>, failed: boolean): void {
     for (const [room, r] of turn) {
+      // 時間のたった知らせを、次のターンに持ち越さない
       clearTimeout(r.slow)
-      if (failed) this.noticeRoom(room, "failed")
-      else if (!r.replied) this.noticeRoom(room, "silent")
+      this.noticeRoom(room, r, failed ? "failed" : "silent")
     }
     this.turn = undefined
   }
 
-  /** 作業中のターンの、メンションのあったルームすべてに知らせる */
+  /** 作業中のターンのルームすべてに知らせる */
   private noticeTurn(kind: TurnNoticeKind): void {
-    for (const room of this.turn?.keys() ?? []) this.noticeRoom(room, kind)
+    for (const [room, r] of this.turn ?? []) this.noticeRoom(room, r, kind)
   }
 
-  /** メンションのあったルームにだけ、種類ごとに 1 回まで知らせる。受信モードが「すべて」のルームの雑談では、だれも返事を待っていない */
-  private noticeRoom(room: string, kind: TurnNoticeKind): void {
-    const r = this.turn?.get(room)
-    if (!r?.mentioned || r.notified.has(kind)) return
+  /**
+   * メンションのあったルームにだけ、種類ごとに 1 回まで知らせる。受信モードが「すべて」のルームの雑談では、だれも返事を待っていない。
+   * 時間がかかっていることと、返事のない終わりは、そのターンにルームへ返事していれば知らせない
+   */
+  private noticeRoom(room: string, r: TurnRoom, kind: TurnNoticeKind): void {
+    if (!r.mentioned || r.notified.has(kind)) return
+    if ((kind === "slow" || kind === "silent") && r.replied) return
     r.notified.add(kind)
-    const c = this.connector(room)
-    if (!c) return
-    const p = c.notice(room, TURN_NOTICES[kind], { push: true }).then(
-      (sent) => (sent ? this.log.info("ルームに知らせました", { room, kind }) : this.log.info("ルームに知らせる手段がないため、知らせませんでした", { room, kind })),
-      (err) => this.log.error("ルームに知らせられませんでした", { room, kind, error: String(err) }),
-    )
+    const p = this.connector(room)
+      ?.notice(room, TURN_NOTICES[kind], { push: true })
+      .then(
+        (sent) => (sent ? this.log.info("ルームに知らせました", { room, kind }) : this.log.info("ルームに知らせる手段がないため、知らせませんでした", { room, kind })),
+        (err) => this.log.error("ルームに知らせられませんでした", { room, kind, error: String(err) }),
+      )
+    if (!p) return
     this.sending.add(p)
     void p.finally(() => this.sending.delete(p))
   }
