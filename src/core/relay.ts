@@ -418,17 +418,24 @@ export class Relay {
 
   /**
    * ターンが終わるまで、届いた発言をそのターンに差し込む（ADR 0018）。
-   * 差し込めないハーネスや、差し込めなかった発言は、ためておき、ターンが終わってからまとめて渡す
+   * 差し込めないハーネスや、差し込めなかった発言は、ためておき、ターンが終わってからまとめて渡す。
+   * 差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）
    */
   private async steerUntil(session: Session, turn: Promise<void>): Promise<void> {
     const steer = session.steer?.bind(session)
     if (!steer || !this.steerable) return turn
-    const ended = turn.then(() => "ended" as const)
+    let done = false
+    const ended = turn.then(() => {
+      done = true
+      return "ended" as const
+    })
     for (;;) {
+      if (done) return
       if (this.queue.length > 0) {
         const batch = this.queue.splice(0)
         try {
-          if (await steer(await this.render(batch))) continue
+          const text = await this.render(batch)
+          if (!done && (await steer(text))) continue
         } catch (err) {
           this.steerable = false
           this.log.error("作業中のターンへの差し込みに失敗しました。以後は、ターンが終わってから渡します", { error: String(err) })
