@@ -4,8 +4,9 @@ npm のパッケージ `agent-chat-relay` の新しいバージョンを公開�
 
 ## 流れ
 
-1. **バージョンを上げる PR を出す**：`package.json` の `version` を上げます。`bun.lock` にはパッケージ自身のバージョンがないので、変えません。マージは、ほかの PR と同じく merge commit で行います。
-2. **タグを打ち、リリースを公開する**：マージでできた `main` のコミットにタグを打ち、push してから、そのタグでリリースを公開します。リリースノートは、0.1.0 と同じく、前のバージョンからの変更を利用者に向けて書きます。
+1. **e2e の中核を走らせる**：`test/e2e/line.sh claude` と `test/e2e/resume.sh claude` が、0 で終わることを確かめます（ADR 0023）。Claude Code は固定していないので、中継を変えていなくても、ハーネスとの結合が壊れていることがあります。モデルは Haiku で足ります（`ANTHROPIC_MODEL=haiku`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` のうち `local-e2e` を含むもの）を削除します。
+2. **バージョンを上げる PR を出す**：`package.json` の `version` を上げます。`bun.lock` にはパッケージ自身のバージョンがないので、変えません。マージは、ほかの PR と同じく merge commit で行います。
+3. **タグを打ち、リリースを公開する**：マージでできた `main` のコミットにタグを打ち、push してから、そのタグでリリースを公開します。リリースノートは、0.1.0 と同じく、前のバージョンからの変更を利用者に向けて書きます。
 
    ```sh
    git tag v<x.y.z> <マージのコミット> && git push origin v<x.y.z> &&
@@ -13,11 +14,11 @@ npm のパッケージ `agent-chat-relay` の新しいバージョンを公開�
    ```
 
    `git push` は、リモートに同じタグがあれば失敗します。`--verify-tag` は、push したタグがなければリリースを作りません。そのため、別のコミットでリリースが公開されることはありません。
-3. **ワークフローが npm に上げる**：リリースを公開すると、`.github/workflows/release.yml` が動きます。CI と同じ検査（`ci.yml`）を通したあと、次を確かめてから、`npm stage publish` で上げます。
+4. **ワークフローが npm に上げる**：リリースを公開すると、`.github/workflows/release.yml` が動きます。CI と同じ検査（`ci.yml`）を通したあと、次を確かめてから、`npm stage publish` で上げます。
    - タグが、`package.json` の `version` と一致すること。
    - npm で詰めた配布物に、入り口と本体（`bin/`・`src/`）と `package.json`・`LICENSE`・`README.md` のほかが入っていないこと（ADR 0019）。
    - そのバージョンが、まだ npm にないこと。あれば、上げずに終わります。
-4. **npm で承認する**：上げただけでは、インストールできません。npmjs.com の Staged Packages で、2FA を通して承認します。CLI では `npm stage list agent-chat-relay` で ID を調べ、`npm stage approve <ID>` で承認します。承認する前に、`npm stage download <ID>` で中身を確かめられます。
+5. **npm で承認する**：上げただけでは、インストールできません。npmjs.com の Staged Packages で、2FA を通して承認します。CLI では `npm stage list agent-chat-relay` で ID を調べ、`npm stage approve <ID>` で承認します。承認する前に、`npm stage download <ID>` で中身を確かめられます。
 
 ## trusted publisher の設定
 

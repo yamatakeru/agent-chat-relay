@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# 中継の e2e（LINE の API はモック）。引数：ハーネス名（claude か opencode）。
+# 中継の e2e（LINE の API はモック）。引数：ハーネス名（claude か opencode。既定は claude）と --full。
+# 既定では中核（ペアリング、返信、承認の許可・常に許可・拒否）を走らせる。--full を付けると、
+# モデルの能力に頼る手順（別のルームへの投稿、画像の説明と返送）も走らせる（ADR 0023）。
+# 各手順を判定し、1 つでも失敗すれば 0 以外で終わる。
 # 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
 # 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
 set -uo pipefail
+. "$(dirname "$0")/lib.sh"
 
-H="$1"
 E=.local/e2e
 LOG="$E/sent-line-$H.jsonl"
 RLOG="$E/relay-line-$H.log"
@@ -35,44 +38,41 @@ done
 grep -q "セッションを開始しました" "$RLOG" || { echo "relay did not start"; tail -20 "$RLOG"; exit 1; }
 
 wh() { scripts/relay.sh line-webhook "$@" >/dev/null; }
-lines() { wc -l <"$LOG" | tr -d ' '; }
-# 送信の記録が n 行を超えるまで待つ
-waitfor() {
-  local n="$1" t="${2:-150}"
-  for _ in $(seq "$t"); do
-    [ "$(lines)" -gt "$n" ] && return 0
-    sleep 1
-  done
-  echo "timeout waiting > $n"
-  return 1
-}
-code() { grep -o 'relay pair [0-9a-f]\{6\}' "$LOG" | tail -1 | awk '{print $3}'; }
-pair_after() { local n; n="$(lines)"; wh "$@"; waitfor "$n" 10; scripts/relay.sh pair "$(code)"; }
+pair_after() { local n; n="$(lines)"; wh "$@"; waitfor "$n" 10 && scripts/relay.sh pair "$(code)"; }
 
 echo "== pairing"
-pair_after join "$G1"
-pair_after text "$A" "$A" "hi"
-pair_after join "$G2"
+check "ペアリング（開発チーム）" pair_after join "$G1"
+check "ペアリング（承認者の DM）" pair_after text "$A" "$A" "hi"
+check "ペアリング（営業チーム）" pair_after join "$G2"
 
 echo "== reply in group"
-n="$(lines)"; wh text "$G1" "$A" "自己紹介を一言で" --mention; waitfor "$n"
+n="$(lines)"; wh text "$G1" "$A" "自己紹介を一言で" --mention
+check "ルームでの返信" waitfor "$n"
 
-echo "== cross-room post"
-n="$(lines)"; wh text "$G2" "$B" "開発チームのルームに『営業から連絡：明日10時に打ち合わせ』と投稿して、ここには一言で報告して" --mention; waitfor "$((n + 1))"
+if [ "$FULL" = 1 ]; then
+  echo "== cross-room post"
+  n="$(lines)"; wh text "$G2" "$B" "開発チームのルームに『営業から連絡：明日10時に打ち合わせ』と投稿して、ここには一言で報告して" --mention
+  waitfor "$((n + 1))"
+  check_model "別のルームへの投稿" sent_after "$n" '"to":"C111".*打ち合わせ'
 
-echo "== image from someone else, then ask"
-wh image "$G1" "$B"; sleep 1
-n="$(lines)"; wh text "$G1" "$A" "さっきボブが送った画像の色を一語で教えて" --mention; waitfor "$n" 200
+  echo "== image from someone else, then ask"
+  wh image "$G1" "$B"; sleep 1
+  n="$(lines)"; wh text "$G1" "$A" "さっきボブが送った画像の色を一語で教えて" --mention
+  waitfor "$n" 120
+  check_model "画像の説明（赤）" sent_after "$n" '赤'
 
-echo "== return the image"
-wh text "$G1" "$A" "さっきボブが送った画像を、そのままこのルームに返して" --mention
-for _ in $(seq 200); do
-  grep -q '"type":"image"' "$LOG" && break
-  sleep 1
-done
-url="$(grep -o '"image":"[^"]*"' "$LOG" | tail -1 | cut -d'"' -f4)"
-echo "image url: ${url:-none}"
-[ -n "$url" ] && curl -s -o /dev/null -w "GET /media -> %{http_code} %{content_type} %{size_download}B\n" "$url"
+  echo "== return the image"
+  wh text "$G1" "$A" "さっきボブが送った画像を、そのままこのルームに返して" --mention
+  # 0.1.1 の作業では、別のルームを見て見つけられないまま、待つ時間を使い切ることがあった。待つのは 2 分まで
+  for _ in $(seq 120); do
+    grep -q '"type":"image"' "$LOG" && break
+    sleep 1
+  done
+  url="$(grep -o '"image":"[^"]*"' "$LOG" | tail -1 | cut -d'"' -f4)"
+  echo "image url: ${url:-none}"
+  media_ok() { [ -n "$url" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$url")" = 200 ]; }
+  check_model "画像の返送と、公開 URL からの取得" media_ok
+fi
 
 # 承認依頼の ID（文面の「yes <ID>」）のうち、まだ答えていないもの
 answered=" "
@@ -84,14 +84,17 @@ new_approvals() {
 }
 # ルームへの返事（承認依頼と、承認の答えへの返事を除く）の数
 replies() { grep -v '"to":"Uaaa"' "$LOG" | grep -vc '"text":"✅\|"text":"❌'; }
-# ルームに返事が来るまで、届いた承認依頼すべてに verdict で答える。答えた依頼を表示する
+# ルームに返事が来るまで、届いた承認依頼すべてに verdict で答える。答えた依頼を表示し、
+# 答えた数を ASKED に、「常に許可」が示された数を OFFERED に入れる
 answer_until_reply() {
   local verdict="$1" before id
   before="$(replies)"
+  ASKED=0 OFFERED=0
   for _ in $(seq 200); do
     for id in $(new_approvals); do
       answered="$answered$id "
-      grep -q "always $id" "$LOG" && echo "approval $id: 常に許可あり" || echo "approval $id: 常に許可なし"
+      ASKED=$((ASKED + 1))
+      if grep -q "always $id" "$LOG"; then OFFERED=$((OFFERED + 1)); echo "approval $id: 常に許可あり"; else echo "approval $id: 常に許可なし"; fi
       echo "answer $verdict $id"
       wh postback "$A" "perm:$verdict:$id"
     done
@@ -101,25 +104,38 @@ answer_until_reply() {
   echo "timeout waiting for a reply"
   return 1
 }
+W="$RELAY_HOME/workspace"
+asked() { [ "$ASKED" -gt 0 ]; }
+offered() { [ "$OFFERED" -gt 0 ]; }
+has() { grep -q -- "$2" "$W/$1" 2>/dev/null; }
 
 echo "== approval (allow)"
 wh text "$G1" "$A" "作業ディレクトリに note.txt を作って ok と書いて。終わったら一言で報告して" --mention
-answer_until_reply allow
+check "許可：返事が届く" answer_until_reply allow
+check "許可：承認依頼が届く" asked
+check "許可：ファイルができる" has note.txt ok
 
 # 拒否のあとに頼むと、拒否を避ける別の手段とみなして実行しないことがある（Haiku で起きた）ので、拒否より先に確かめる
 echo "== approval (always)"
 wh text "$G1" "$A" "Bash で \`echo always >> always.txt\` を実行して。終わったら一言で報告して" --mention
-answer_until_reply always
+check "常に許可：返事が届く" answer_until_reply always
+check "常に許可：承認依頼が届く" asked
+check "常に許可：「常に許可」が示される" offered
+check "常に許可：コマンドが実行される" has always.txt always
 # 常に許可すると、Claude Code がその範囲を作業ディレクトリの設定（.claude/settings.local.json）に足す。
 # 同じコマンドを 2 回頼んで確かめる形にしないのは、エージェントがコマンドを書き足すと範囲から外れ、承認依頼が出るため
-echo "-- settings.local.json"; cat "$RELAY_HOME/workspace/.claude/settings.local.json" 2>/dev/null || echo "(なし)"
+echo "-- settings.local.json"; cat "$W/.claude/settings.local.json" 2>/dev/null || echo "(なし)"
+[ "$H" = claude ] && check "常に許可：範囲が作業ディレクトリの設定に足される" has .claude/settings.local.json 'Bash(echo always'
 
 echo "== approval (deny)"
 wh text "$G1" "$A" "作業ディレクトリに denied.txt を作って ng と書いて。拒否されたら、ほかの方法は試さずに一言で報告して" --mention
-answer_until_reply deny
+check "拒否：返事が届く" answer_until_reply deny
+check "拒否：承認依頼が届く" asked
+check "拒否：ファイルができない" test ! -e "$W/denied.txt"
 
 sleep 3
-echo "== workspace"; ls "$RELAY_HOME/workspace"
-for f in note.txt denied.txt always.txt; do echo "-- $f"; cat "$RELAY_HOME/workspace/$f" 2>/dev/null || echo "(なし)"; done
+echo "== workspace"; ls "$W"
+for f in note.txt denied.txt always.txt; do echo "-- $f"; cat "$W/$f" 2>/dev/null || echo "(なし)"; done
 echo "== sent"; cat "$LOG"
 echo "== relay log"; grep -E "ツール|実行承認|届いていない|失敗|error" "$RLOG" | cut -c1-260
+finish
