@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# 中継の e2e（Chatwork の API はモック）。引数：ハーネス名（既定は claude）。
+# 中継の e2e（Chatwork の API はモック）。引数：ハーネス名（既定は claude）と --full。
+# e2e の中核の外（ADR 0023）。--full を付けると、モデルの能力に頼る手順（画像の説明、停止中に届いた依頼を調べる）も走らせる。
+# 各手順を判定し、1 つでも失敗すれば 0 以外で終わる。
 # 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
 # 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
 set -uo pipefail
+. "$(dirname "$0")/lib.sh"
 
-H="${1:-claude}"
 E=.local/e2e
 LOG="$E/sent-chatwork-$H.jsonl"
 RLOG="$E/relay-chatwork-$H.log"
@@ -12,6 +14,7 @@ MOCK_URL=http://127.0.0.1:18098
 mkdir -p "$E"
 : >"$LOG"
 rm -rf "$E/relay-chatwork-$H"
+rm -f "$E/answered-chatwork-$H"
 unset RELAY_LINE_CHANNEL_SECRET RELAY_LINE_CHANNEL_TOKEN
 # 作業ディレクトリが <RELAY_HOME>/workspace であることと、既定の設定の読み込みを前提に確かめるので、シェルに残った指定を外す
 unset RELAY_WORKSPACE RELAY_HARNESS_SETTINGS RELAY_HARNESS_MEMORY
@@ -36,35 +39,33 @@ done
 grep -q "セッションを開始しました" "$RLOG" || { echo "relay did not start"; tail -20 "$RLOG"; exit 1; }
 
 say() { curl -s -o /dev/null "$MOCK_URL/_say" --data-urlencode "room=$1" --data-urlencode "account=$2" --data-urlencode "body=$3"; }
-lines() { wc -l <"$LOG" | tr -d ' '; }
-# 送信の記録が n 行を超えるまで待つ
-waitfor() {
-  local n="$1" t="${2:-150}"
-  for _ in $(seq "$t"); do
-    [ "$(lines)" -gt "$n" ] && return 0
-    sleep 1
-  done
-  echo "timeout waiting > $n"
-  return 1
-}
-code() { grep -o 'relay pair [0-9a-f]\{6\}' "$LOG" | tail -1 | awk '{print $3}'; }
 mention() { printf '[To:100]AI係さん\n%s' "$1"; }
 
 echo "== pairing (DM, group)"
-n="$(lines)"; say $DM $ALICE "hi"; waitfor "$n" 15; scripts/relay.sh pair "$(code)"
-n="$(lines)"; say $SALES $ALICE "$(mention "はじめまして")"; waitfor "$n" 15; scripts/relay.sh pair "$(code)"
-echo "codes so far: $(grep -c 'relay pair' "$LOG")（DM と営業チームの 2 つ。起動前の依頼は記録だけで、何も返さない）"
+check "ペアリング（承認者の DM）" pair_after say $DM $ALICE "hi"
+check "ペアリング（営業チーム）" pair_after say $SALES $ALICE "$(mention "はじめまして")"
+echo "codes so far: $(grep -c 'relay pair' "$LOG")"
+# 開発チームは登録済みなので、起動前の依頼が渡っていれば、そこへ返事が届く
+not_delivered() { [ "$(grep -c 'relay pair' "$LOG")" -eq 2 ] && ! grep -q '"room":7000' "$LOG"; }
+check "起動前に届いていた依頼は、渡さない（コードは DM と営業チームの 2 つだけ）" not_delivered
 
 echo "== reply in group"
-n="$(lines)"; say $GROUP $ALICE "$(mention "自己紹介を一言で")"; waitfor "$n"
+n="$(lines)"; say $GROUP $ALICE "$(mention "自己紹介を一言で")"
+check "ルームでの返信" waitfor "$n"
 
-echo "== image from someone else, then ask"
-say $GROUP $BOB "[info][title][dtext:file_uploaded][/title][preview id=55 ht=100][download:55]photo.png (1 KB)[/download][/info]"
-sleep 3
-n="$(lines)"; say $GROUP $ALICE "$(mention "さっきボブが送った画像の色を一語で教えて")"; waitfor "$n" 200
+if [ "$FULL" = 1 ]; then
+  echo "== image from someone else, then ask"
+  say $GROUP $BOB "[info][title][dtext:file_uploaded][/title][preview id=55 ht=100][download:55]photo.png (1 KB)[/download][/info]"
+  sleep 3
+  n="$(lines)"; say $GROUP $ALICE "$(mention "さっきボブが送った画像の色を一語で教えて")"
+  waitfor "$n" 120
+  check_model "画像の説明（赤）" sent_after "$n" '赤'
 
-echo "== stale request is readable but was not delivered"
-n="$(lines)"; say $GROUP $ALICE "$(mention "このルームで、停止中に送られていた依頼の合言葉を fetch_messages で調べて、一語で答えて")"; waitfor "$n" 200
+  echo "== stale request is readable but was not delivered"
+  n="$(lines)"; say $GROUP $ALICE "$(mention "このルームで、停止中に送られていた依頼の合言葉を fetch_messages で調べて、一語で答えて")"
+  waitfor "$n" 120
+  check_model "停止中に届いた依頼を、記録から読める" sent_after "$n" 'すずらん'
+fi
 
 echo "== file return with approval (DM text)"
 say $GROUP $ALICE "$(mention "作業ディレクトリに report.csv を作って a,b と 1 行だけ書き、それをこのルームにファイルで送って")"
@@ -76,11 +77,15 @@ for _ in $(seq 200); do
   fi
   sleep 1
 done
+check "承認依頼が届く" test -s "$E/answered-chatwork-$H"
+check "許可のあと、ファイルが届く" grep -q '"kind":"file"' "$LOG"
 rm -f "$E/answered-chatwork-$H"
 
 echo "== bot added to a new room"
-n="$(lines)"; curl -s -o /dev/null "$MOCK_URL/_join" --data-urlencode "room=7004" --data-urlencode "name=新しいルーム"; waitfor "$n" 15
+n="$(lines)"; curl -s -o /dev/null "$MOCK_URL/_join" --data-urlencode "room=7004" --data-urlencode "name=新しいルーム"
+check "ルームに加えられたら、登録のコードを送る" waitfor "$n" 15
 
 sleep 3
 echo "== sent"; cat "$LOG"
 echo "== relay log"; grep -E "ツール|実行承認|失敗|error|できません" "$RLOG" | cut -c1-260
+finish

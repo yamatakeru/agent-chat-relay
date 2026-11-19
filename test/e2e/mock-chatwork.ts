@@ -6,8 +6,8 @@ import { png } from "../fixtures/png.ts"
 const log = process.argv[2]!
 const api = chatworkApi({
   port: 18098,
-  // 長い本文は、記録では先頭だけにする
-  onSent: (s) => appendFileSync(log, JSON.stringify({ ...s, body: s.body.slice(0, 300) }) + "\n"),
+  // 長い本文は、記録では先頭だけにする。承認依頼の末尾の ID（yes <ID>）が切れないよう、2000 文字まで残す
+  onSent: (s) => appendFileSync(log, JSON.stringify({ ...s, body: s.body.slice(0, 2000) }) + "\n"),
 })
 // ボブが送る画像（e2e の本文の [download:55] から取得する）
 api.addFile("55", "photo.png", png(32, 32, [220, 20, 20]))
