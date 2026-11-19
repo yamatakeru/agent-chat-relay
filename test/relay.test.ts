@@ -14,7 +14,7 @@ import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
-import { alwaysOption, startHarness } from "../src/harness/harness.ts"
+import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
@@ -963,6 +963,14 @@ describe("ハーネスの起動と再開", () => {
     const { error, requests } = await run({ resume: true, load: true }, "missing")
     expect(error?.message).toContain("セッション missing を再開できませんでした（session/resume）")
     expect(methods(requests)).toEqual(["initialize", "session/resume"])
+  })
+
+  test("ハーネスが stdin を読まずに終了したら、書き込みの失敗を stream のエラーとして返す", async () => {
+    // パイプが詰まる量を書き、読まないまま終了させる
+    const proc = Bun.spawn(["sleep", "0.3"], { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
+    const writer = stdinStream(proc.stdin).getWriter()
+    await expect(writer.write(new Uint8Array(8 << 20))).rejects.toThrow("EPIPE")
+    await proc.exited
   })
 })
 
