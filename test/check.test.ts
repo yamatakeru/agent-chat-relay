@@ -70,7 +70,7 @@ test("ハーネスとの結合に関わるパスを変えたら、e2e の中核�
   for (const f of ["src/harness/harness.ts", "src/core/mcp.ts", "src/prompt.ts", "src/main.ts", "src/workspace.ts", "src/home.ts", "src/serve-args.ts", "bin/agent-chat-relay", "test/e2e/line.sh", "test/e2e/lib.sh"]) {
     expect(e2eTargets([f, "README.md"], "").filter((t) => CORE.includes(t.script))).toEqual(CORE.map((script) => ({ script, reasons: [f] })))
   }
-  expect(CORE).toEqual(["test/e2e/line.sh claude", "test/e2e/resume.sh claude"])
+  expect(CORE).toEqual(["test/e2e/line.sh claude", "test/e2e/resume.sh claude", "test/e2e/notices.sh claude"])
   // パスは、先頭から末尾まで一致したものだけ
   const near = ["docs/src/harness/a.md", "x/src/core/mcp.ts", "src/core/mcp.tsx", "x/src/prompt.ts", "src/prompt.ts.orig", "x/src/main.ts", "src/main.tsx", "x/bin/a", "x/test/e2e/line.sh", "x/test/e2e/chatwork.sh"]
   expect(e2eTargets(near, "")).toEqual([])

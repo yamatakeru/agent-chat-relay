@@ -4,8 +4,8 @@
 //
 //   bun scripts/e2e-targets.ts [比べるコミット（既定は main）]
 
-/** e2e の中核（ADR 0023）。line.sh は --full を付けないと、モデルの能力に頼る手順を走らせない */
-export const CORE = ["test/e2e/line.sh claude", "test/e2e/resume.sh claude"]
+/** e2e の中核（ADR 0023、0024）。line.sh と notices.sh は --full を付けないと、モデルの能力に頼る手順を走らせない */
+export const CORE = ["test/e2e/line.sh claude", "test/e2e/resume.sh claude", "test/e2e/notices.sh claude"]
 const CHATWORK = "test/e2e/chatwork.sh claude"
 
 /** ハーネスとの結合に関わるパス */
