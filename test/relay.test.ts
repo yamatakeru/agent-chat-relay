@@ -904,7 +904,7 @@ describe("ハーネスの起動と再開", () => {
     const stderrPath = join(dir, "harness.log")
     // 同じテストで何度か起動しても、前の起動の記録を読まない
     rmSync(stderrPath, { force: true })
-    // 偽のエージェントは、受けた要求（REQ）と環境変数の名前（ENV）を stderr に書く
+    // 偽のエージェントは、受けた要求（REQ）と環境変数の名前（ENV）と、実行承認の依頼への答え（PERM）を stderr に書く
     const stderr = (prefix: string) =>
       (existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "")
         .split("\n")
@@ -1002,6 +1002,8 @@ describe("ハーネスの起動と再開", () => {
     { optionId: "once", name: "Allow", kind: "allow_once" },
     { optionId: "reject", name: "Reject", kind: "reject_once" },
   ]
+  /** 発言の中で実行承認の依頼を 1 つ受け、onPermission の答えを返す */
+  const approve = (fake: FakeAcpConfig, onPermission: (req: PermissionRequest) => Promise<Verdict>) => run(fake, undefined, undefined, undefined, onPermission)
   const selected = (optionId: string) => [{ outcome: { outcome: "selected", optionId } }]
 
   test("承認の答え（許可・拒否・常に許可）を、ハーネスに返す ACP の選択肢に対応させる（#79）", async () => {
@@ -1009,9 +1011,9 @@ describe("ハーネスの起動と再開", () => {
     const answer = (verdict: Verdict) => async (req: PermissionRequest) => (asked.push(req), verdict)
     const fake = { permission: { kind: "execute" as const, options: PERMISSION_OPTIONS } }
     const results = {
-      allow: await run(fake, undefined, undefined, undefined, answer("allow")),
-      deny: await run(fake, undefined, undefined, undefined, answer("deny")),
-      always: await run(fake, undefined, undefined, undefined, answer("always")),
+      allow: await approve(fake, answer("allow")),
+      deny: await approve(fake, answer("deny")),
+      always: await approve(fake, answer("always")),
     }
     for (const r of Object.values(results)) expect(r.error).toBeUndefined()
     expect(results.allow.permissions).toEqual(selected("once"))
@@ -1023,7 +1025,7 @@ describe("ハーネスの起動と再開", () => {
 
   test("「常に許可」を示さないツールでは、「常に許可」の答えも 1 回だけの許可にする", async () => {
     const asked: PermissionRequest[] = []
-    const r = await run({ permission: { kind: "edit", options: PERMISSION_OPTIONS } }, undefined, undefined, undefined, async (req) => (asked.push(req), "always"))
+    const r = await approve({ permission: { kind: "edit", options: PERMISSION_OPTIONS } }, async (req) => (asked.push(req), "always"))
     expect(r.error).toBeUndefined()
     expect(asked.map((a) => a.always)).toEqual([undefined])
     expect(r.permissions).toEqual(selected("once"))
@@ -1032,7 +1034,7 @@ describe("ハーネスの起動と再開", () => {
   test("ツールの名前がなければ種類を、種類もなければ「ツールの実行」を示し、入力がなければ空にする", async () => {
     const asked: PermissionRequest[] = []
     for (const kind of ["execute", undefined] as const) {
-      await run({ permission: { kind, options: PERMISSION_OPTIONS, bare: true } }, undefined, undefined, undefined, async (req) => (asked.push(req), "deny"))
+      await approve({ permission: { kind, options: PERMISSION_OPTIONS, bare: true } }, async (req) => (asked.push(req), "deny"))
     }
     expect(asked.map(({ title, input }) => ({ title, input }))).toEqual([
       { title: "execute", input: "" },
@@ -1043,7 +1045,7 @@ describe("ハーネスの起動と再開", () => {
   test("答えに合う選択肢がなければ、ほかの選択肢を選ばずに取り消す", async () => {
     // 拒否したのに、許可の選択肢しかない
     const options = PERMISSION_OPTIONS.filter((o) => o.kind.startsWith("allow"))
-    const r = await run({ permission: { kind: "execute", options } }, undefined, undefined, undefined, async () => "deny")
+    const r = await approve({ permission: { kind: "execute", options } }, async () => "deny")
     expect(r.error).toBeUndefined()
     expect(r.permissions).toEqual([{ outcome: { outcome: "cancelled" } }])
   })
