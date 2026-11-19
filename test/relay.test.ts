@@ -213,6 +213,76 @@ describe("relay", () => {
     expect(s.prompts[1]!.indexOf("two")).toBeLessThan(s.prompts[1]!.indexOf("three"))
   })
 
+  test("差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）", async () => {
+    const { relay } = setup()
+    const prompts: string[] = []
+    const steers: string[] = []
+    let finish!: () => void
+    let injected!: (ok: boolean) => void
+    relay.attach({
+      prompt: (text) => {
+        prompts.push(text)
+        return prompts.length === 1 ? new Promise<void>((r) => (finish = r)) : Promise.resolve()
+      },
+      steer: (text) => {
+        steers.push(text)
+        return new Promise<boolean>((r) => (injected = r))
+      },
+    })
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    expect(steers).toHaveLength(1)
+    finish()
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "three" }))
+    injected(true)
+    await Bun.sleep(0)
+    expect(steers).toHaveLength(1)
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain("three")
+    expect(prompts[1]).not.toContain("two")
+  })
+
+  test("発言の見た目を作る間にターンが終わったら、差し込まず、次のターンで渡す（#50）", async () => {
+    const { relay, conn } = setup()
+    const prompts: string[] = []
+    const steers: string[] = []
+    let finish!: () => void
+    let named: (() => void) | undefined
+    let slow = false
+    // ルームの名前を取りに行く間（render の途中）に、ターンを終わらせる
+    conn.roomName = () => {
+      if (!slow) return Promise.resolve(undefined)
+      slow = false
+      return new Promise<undefined>((r) => (named = () => r(undefined)))
+    }
+    relay.attach({
+      prompt: (text) => {
+        prompts.push(text)
+        return prompts.length === 1 ? new Promise<void>((r) => (finish = r)) : Promise.resolve()
+      },
+      steer: (text) => {
+        steers.push(text)
+        return Promise.resolve(true)
+      },
+    })
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    slow = true
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    expect(named).toBeDefined()
+    finish()
+    await Bun.sleep(0)
+    named!()
+    await Bun.sleep(0)
+    expect(steers).toHaveLength(0)
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain("two")
+  })
+
   test("差し込みに失敗したら、発言を失わず、以後はターンが終わってから渡す", async () => {
     const { relay } = setup()
     const s = steeringSession([new Error("method not found")])
@@ -472,8 +542,12 @@ describe("relay", () => {
             })
           },
           steer(text) {
-            // 終わったターンへの差し込みには、実際のハーネス（idleBehavior: promptRequired）と同じく、差し込まずに false を返す
-            if (!r.endTurn) return Promise.resolve(false)
+            // コマンドの間に中継はターンの終わりを知るので、終わったターンへの差し込みは違反（#50）。
+            // 実際のハーネス（idleBehavior: promptRequired）と同じく、差し込まずに false を返す
+            if (!r.endTurn) {
+              r.violations.push("終わったターンに差し込んだ")
+              return Promise.resolve(false)
+            }
             if (r.steers.length > 0) r.violations.push("差し込みが 2 つ同時に進んだ")
             if (r.failed) r.violations.push("失敗のあとに差し込んだ")
             return new Promise<boolean>((resolve, reject) => r.steers.push({ ids: idsOf(text), resolve, reject }))
