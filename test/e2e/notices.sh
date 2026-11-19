@@ -60,16 +60,6 @@ wait_exit() {
   ELAPSED=-1
   return 1
 }
-# 送信の記録に、パターンを含む送信が出るまで、最大 t 秒待つ。ルームは承認者の DM だけなので、宛先は見ない
-# （Reply トークンが使えれば Reply で、使えなければ Push で送る）
-dm_notice() {
-  local text="$1" t="$2"
-  for _ in $(seq "$t"); do
-    grep -- "$text" "$LOG" >/dev/null && return 0
-    sleep 1
-  done
-  return 1
-}
 # 送信の記録の n 行目より後に、パターンを含む送信が出るまで、最大 t 秒待つ（受け取りの合図などの行は数えない）
 wait_after() {
   local n="$1" text="$2" t="$3"
@@ -79,17 +69,19 @@ wait_after() {
   done
   return 1
 }
+# 送信の記録に、パターンを含む送信が出るまで、最大 t 秒待つ。ルームは承認者の DM だけなので、宛先は見ない
+# （Reply トークンが使えれば Reply で、使えなければ Push で送る）
+dm_notice() { wait_after 0 "$1" "$2"; }
+approvals() { grep -c 'yes [a-km-z]\{5\}' "$LOG"; }
 approval_id() { grep -o 'yes [a-km-z]\{5\}' "$LOG" | tail -1 | awk '{print $2}'; }
 # 承認依頼が新しく届くまで待つ（届いた依頼の数が n を超えるまで）
 wait_approval() {
-  local n="$1"
   for _ in $(seq 150); do
-    [ "$(grep -c 'yes [a-km-z]\{5\}' "$LOG")" -gt "$n" ] && return 0
+    [ "$(approvals)" -gt "$1" ] && return 0
     sleep 1
   done
   return 1
 }
-approvals() { grep -c 'yes [a-km-z]\{5\}' "$LOG"; }
 wh() { scripts/relay.sh line-webhook "$@" >/dev/null; }
 le() { [ "$ELAPSED" -ge 0 ] && [ "$ELAPSED" -le "$1" ]; }
 
