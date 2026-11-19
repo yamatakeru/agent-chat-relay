@@ -467,6 +467,25 @@ describe("relay", () => {
       expect(conn.notices.map((n) => n.text)).not.toContain(TURN_NOTICES.slow)
     })
 
+    test("ターンが終わってから差し込めたと返ったルームにも、時間のたった知らせを、あとから出さない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      let finish!: () => void
+      let steered!: (ok: boolean) => void
+      relay.attach({
+        prompt: () => new Promise<void>((r) => (finish = r)),
+        steer: () => new Promise<boolean>((r) => (steered = r)),
+      })
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ room: ROOM2, text: "two" }))
+      await Bun.sleep(0)
+      finish()
+      await Bun.sleep(0)
+      steered(true)
+      await Bun.sleep(80)
+      expect(conn.notices.map((n) => n.text)).not.toContain(TURN_NOTICES.slow)
+    })
+
     test("終わったターンの時間の知らせは、あとから出さない", async () => {
       const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
       const s = heldSession()
