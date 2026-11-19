@@ -13,6 +13,8 @@ RLOG="$E/relay-resume-$H"
 mkdir -p "$E"
 : >"$LOG"
 rm -rf "$E/relay-resume-$H"
+# 作業ディレクトリが <RELAY_HOME>/workspace であることと、既定の設定の読み込みを前提に確かめるので、シェルに残った指定を外す
+unset RELAY_WORKSPACE RELAY_HARNESS_SETTINGS RELAY_HARNESS_MEMORY
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-resume-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
   RELAY_LINE_CHANNEL_SECRET=dummysecret RELAY_LINE_CHANNEL_TOKEN=dummytoken RELAY_PUBLIC_URL=http://127.0.0.1:18080
 G1=C111aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
