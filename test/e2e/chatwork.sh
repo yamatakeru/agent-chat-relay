@@ -40,11 +40,10 @@ grep -q "セッションを開始しました" "$RLOG" || { echo "relay did not 
 
 say() { curl -s -o /dev/null "$MOCK_URL/_say" --data-urlencode "room=$1" --data-urlencode "account=$2" --data-urlencode "body=$3"; }
 mention() { printf '[To:100]AI係さん\n%s' "$1"; }
-pair_after() { local n; n="$(lines)"; say "$@"; waitfor "$n" 15 && scripts/relay.sh pair "$(code)"; }
 
 echo "== pairing (DM, group)"
-check "ペアリング（承認者の DM）" pair_after $DM $ALICE "hi"
-check "ペアリング（営業チーム）" pair_after $SALES $ALICE "$(mention "はじめまして")"
+check "ペアリング（承認者の DM）" pair_after say $DM $ALICE "hi"
+check "ペアリング（営業チーム）" pair_after say $SALES $ALICE "$(mention "はじめまして")"
 echo "codes so far: $(grep -c 'relay pair' "$LOG")"
 # 開発チームは登録済みなので、起動前の依頼が渡っていれば、そこへ返事が届く
 not_delivered() { [ "$(grep -c 'relay pair' "$LOG")" -eq 2 ] && ! grep -q '"room":7000' "$LOG"; }

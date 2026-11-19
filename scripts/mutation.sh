@@ -7,17 +7,15 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 home="$root/.local/mutation-home"
-scope=changed
+paths=0
 case ${1:-} in
   "" | -*) base=main ;;
-  *) if [ -e "$1" ]; then base=main; scope=paths; else base=$1; shift; fi ;;
+  *) if [ -e "$1" ]; then base=main; paths=1; else base=$1; shift; fi ;;
 esac
 bun --no-env-file --config=/dev/null "$root/scripts/e2e-targets.ts" "$base"
 mkdir -p "$home"
 trap 'rm -rf "$home"' EXIT
+# ファイルを渡したときは、差分の行に絞らない
+[ "$paths" = 1 ] || set -- --changed-since "$base" "$@"
 # fallow の npm のラッパーは node の shebang なので、Bun で、cwd の .env と bunfig.toml を読ませずに起動する
-if [ "$scope" = paths ]; then
-  HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin/fallow" mutation --allow-side-effects "$@"
-else
-  HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin/fallow" mutation --changed-since "$base" --allow-side-effects "$@"
-fi
+HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin/fallow" mutation --allow-side-effects "$@"

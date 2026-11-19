@@ -48,12 +48,11 @@ stop() {
 }
 
 wh() { scripts/relay.sh line-webhook "$@" >/dev/null; }
-pair_after() { local n; n="$(lines)"; wh "$@"; waitfor "$n" 10 && scripts/relay.sh pair "$(code)"; }
 
 echo "== 1st run (new session)"
 start "$RLOG-1.log" "セッションを開始しました"
-check "ペアリング（開発チーム）" pair_after join "$G1"
-check "ペアリング（承認者の DM）" pair_after text "$A" "$A" "hi"
+check "ペアリング（開発チーム）" pair_after wh join "$G1"
+check "ペアリング（承認者の DM）" pair_after wh text "$A" "$A" "hi"
 n="$(lines)"; wh text "$G1" "$A" "合言葉は『あおいろ』です。覚えたら『覚えました』とだけ返して。あとで聞いたら、合言葉を答えて" --mention
 check "新しいセッションでの返信" waitfor "$n"
 sid="$(grep -o '"sessionId":"[^"]*"' "$RLOG-1.log" | head -1 | cut -d'"' -f4)"

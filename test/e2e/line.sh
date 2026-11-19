@@ -38,12 +38,11 @@ done
 grep -q "セッションを開始しました" "$RLOG" || { echo "relay did not start"; tail -20 "$RLOG"; exit 1; }
 
 wh() { scripts/relay.sh line-webhook "$@" >/dev/null; }
-pair_after() { local n; n="$(lines)"; wh "$@"; waitfor "$n" 10 && scripts/relay.sh pair "$(code)"; }
 
 echo "== pairing"
-check "ペアリング（開発チーム）" pair_after join "$G1"
-check "ペアリング（承認者の DM）" pair_after text "$A" "$A" "hi"
-check "ペアリング（営業チーム）" pair_after join "$G2"
+check "ペアリング（開発チーム）" pair_after wh join "$G1"
+check "ペアリング（承認者の DM）" pair_after wh text "$A" "$A" "hi"
+check "ペアリング（営業チーム）" pair_after wh join "$G2"
 
 echo "== reply in group"
 n="$(lines)"; wh text "$G1" "$A" "自己紹介を一言で" --mention
