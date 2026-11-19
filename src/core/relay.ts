@@ -408,7 +408,7 @@ export class Relay {
     try {
       while (this.session && this.queue.length > 0) {
         const batch = this.queue.splice(0)
-        /** このターンに渡した発言のルーム（差し込めた発言の分も足す） */
+        // このターンに渡した発言のルーム（差し込めた発言の分も足す）
         const rooms = new Set(batch.map((m) => m.room))
         const text = await this.render(batch)
         let failed = false
@@ -504,14 +504,12 @@ export class Relay {
   }
 
   private async promptFailureNotice(room: string): Promise<void> {
-    const c = this.connector(room)
-    if (!c) return
-    try {
-      await c.notice(room, PROMPT_FAILURE_NOTICE)
-      this.log.info("返事ができないことを、ルームに知らせました", { room })
-    } catch (err) {
-      this.log.error("返事ができないことを、ルームに知らせられませんでした", { room, error: String(err) })
-    }
+    await this.connector(room)
+      ?.notice(room, PROMPT_FAILURE_NOTICE)
+      .then(
+        () => this.log.info("返事ができないことを、ルームに知らせました", { room }),
+        (err) => this.log.error("返事ができないことを、ルームに知らせられませんでした", { room, error: String(err) }),
+      )
   }
 
   private connector(id: string): Connector | undefined {

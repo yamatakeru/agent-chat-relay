@@ -307,7 +307,7 @@ describe("relay", () => {
   const ROOM2 = "line:C0000000000000000000000000000000b"
 
   /** 最初のターンを fail() または finish() まで終わらせないセッション。steer は、結果を results の順に返す（尽きたら true） */
-  function failingSession(results: boolean[] = []) {
+  function heldSession(results: boolean[] = []) {
     const prompts: string[] = []
     let finish!: () => void
     let fail!: (err: Error) => void
@@ -340,7 +340,7 @@ describe("relay", () => {
   test("そのターンに差し込んだ別のルームにも知らせを出し、差し込めずに次のターンへ回した発言のルームには出さない", async () => {
     const { relay, conn } = setup()
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] }, [ROOM2]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const s = failingSession([true, true, false])
+    const s = heldSession([true, true, false])
     relay.attach(s.session)
     relay.receive(msg({ text: "one" }))
     await Bun.sleep(0)
@@ -363,7 +363,7 @@ describe("relay", () => {
 
   test("session/prompt が成功したら、知らせを出さない", async () => {
     const { relay, conn } = setup()
-    const s = failingSession()
+    const s = heldSession()
     relay.attach(s.session)
     relay.receive(msg({ text: "one" }))
     await Bun.sleep(0)
@@ -378,7 +378,7 @@ describe("relay", () => {
     const errors: { msg: string; extra?: Record<string, unknown> }[] = []
     const { relay, conn } = setup({ info: () => {}, error: (msg, extra) => void errors.push({ msg, extra }) })
     conn.notice = () => Promise.reject(new Error("notice failed"))
-    const s = failingSession()
+    const s = heldSession()
     relay.attach(s.session)
     relay.receive(msg({ text: "one" }))
     await Bun.sleep(0)
