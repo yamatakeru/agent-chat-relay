@@ -1321,6 +1321,29 @@ describe("line", () => {
       void api.stop()
     }
   })
+
+  test("案内は Reply でだけ送り、使える Reply トークンがなければ送らずに false を返す", async () => {
+    const paths: string[] = []
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        paths.push(new URL(req.url).pathname)
+        return new Response("{}", { status: 200 })
+      },
+    })
+    try {
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href }, new Relay(access, quiet), quiet)
+      expect(await line.notice(ROOM, "案内")).toBe(false)
+      expect(paths).toEqual([])
+      await line.handleEvent({ type: "join", timestamp: 0, replyToken: "rt", source: { type: "group", groupId: ROOM.slice(5) } })
+      paths.length = 0
+      expect(await line.notice(ROOM, "案内")).toBe(true)
+      expect(paths).toEqual(["/v2/bot/message/reply"])
+    } finally {
+      void api.stop()
+    }
+  })
 })
 
 describe("line の受け取りの合図", () => {
@@ -1641,9 +1664,11 @@ describe("chatwork", () => {
       await cw.poll()
       await cw.send("chatwork:r7000", "どうぞ", { replyTo: id })
       await cw.sendApproval("chatwork:u1", "許可：yes abcde", "abcde")
+      expect(await cw.notice("chatwork:r7000", "案内")).toBe(true)
       expect(api.sent).toEqual([
         { kind: "message", room: 7000, body: `[rp aid=2 to=7000-${id}]\nどうぞ` },
         { kind: "message", room: 7001, body: "許可：yes abcde" },
+        { kind: "message", room: 7000, body: "案内" },
       ])
       await expect(cw.send("chatwork:u9", "x")).rejects.toThrow("ダイレクトチャットが見つかりません")
     } finally {
@@ -1726,6 +1751,8 @@ describe("discord", () => {
     await Bun.sleep(0)
     expect(d.sent.at(-1)).toMatchObject({ channel: "301", content: expect.stringContaining("relay pair") })
     expect(Object.values(access.load().pending)[0]).toMatchObject({ kind: "room", target: "discord:c300" })
+    expect(await dc.notice("discord:c100", "案内")).toBe(true)
+    expect(d.sent.at(-1)).toMatchObject({ channel: "100", content: "案内" })
   })
 
   test("長い本文は分けて送り、ファイルと返信は 1 通目に付ける。ほかのチャンネルのスレッドには送らない", async () => {
@@ -1817,6 +1844,14 @@ describe("作業ディレクトリ", () => {
   const commit = (ws: string, message: string) =>
     expect(Bun.spawnSync(["git", "-C", ws, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", message]).success).toBe(true)
   const log = (ws: string) => Bun.spawnSync(["git", "-C", ws, "log", "--format=%s"]).stdout.toString()
+  /** 呼ばれた引数を calls に書いてから、git を動かすコマンド。init を noop にすると、git init は成功を返すだけで何もしない */
+  const gitSpy = (calls: string, opts: { noop?: boolean } = {}) => {
+    const spy = join(dir, "git-spy")
+    const init = opts.noop ? `[ "$1" = init ] && exit 0\n` : ""
+    writeFileSync(calls, "")
+    writeFileSync(spy, `#!/bin/sh\necho "$*" >> '${calls}'\n${init}exec git "$@"\n`, { mode: 0o755 })
+    return spy
+  }
 
   test("独立した git リポジトリにする。上位の git リポジトリの中でも、最上位は作業ディレクトリ自身になる", () => {
     // dir はこのリポジトリの .local/ の中にある
@@ -1845,7 +1880,10 @@ describe("作業ディレクトリ", () => {
     initWorkspace(ws)
     // HEAD が壊れていると、git からは上位のリポジトリ（このリポジトリ）の中に見える
     writeFileSync(join(ws, ".git", "HEAD"), "broken\n")
-    expect(() => initWorkspace(ws)).toThrow("独立したリポジトリになっていないため、起動しません")
+    const calls = join(dir, "git-calls")
+    expect(() => initWorkspace(ws, gitSpy(calls))).toThrow("独立したリポジトリになっていないため、起動しません")
+    // 中身のある .git には git init しない
+    expect(readFileSync(calls, "utf8")).not.toContain("init")
     expect(readFileSync(join(ws, ".git", "HEAD"), "utf8")).toBe("broken\n")
   })
 
@@ -1870,14 +1908,17 @@ describe("作業ディレクトリ", () => {
 
   test("独立した既存のリポジトリには、git init しない（環境変数や設定で、既存のリポジトリを書き換えうるため）", () => {
     const calls = join(dir, "git-calls")
-    const spy = join(dir, "git-spy")
-    writeFileSync(spy, `#!/bin/sh\necho "$*" >> '${calls}'\nexec git "$@"\n`, { mode: 0o755 })
+    const spy = gitSpy(calls)
     const ws = join(dir, "ws")
     initWorkspace(ws, spy)
     expect(readFileSync(calls, "utf8")).toContain("init -q")
     writeFileSync(calls, "")
     initWorkspace(ws, spy)
     expect(readFileSync(calls, "utf8")).not.toContain("init")
+  })
+
+  test("git init が成功を返しても、独立したリポジトリになっていなければ、起動しない", () => {
+    expect(() => initWorkspace(join(dir, "ws"), gitSpy(join(dir, "git-calls"), { noop: true }))).toThrow("独立したリポジトリになっていないため、起動しません")
   })
 
   test(".git/commondir でほかのリポジトリと共有していれば、起動せず、そのリポジトリを変えない", () => {
@@ -1887,7 +1928,9 @@ describe("作業ディレクトリ", () => {
     const ws = join(dir, "ws")
     initWorkspace(ws)
     writeFileSync(join(ws, ".git", "commondir"), `${join(other, ".git")}\n`)
-    expect(() => initWorkspace(ws)).toThrow("独立したリポジトリになっていないため、起動しません")
+    const calls = join(dir, "git-calls")
+    expect(() => initWorkspace(ws, gitSpy(calls))).toThrow("独立したリポジトリになっていないため、起動しません")
+    expect(readFileSync(calls, "utf8")).not.toContain("init")
     expect(readFileSync(join(other, ".git", "config"), "utf8")).toBe(before)
   })
 
