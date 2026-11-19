@@ -74,18 +74,52 @@ url="$(grep -o '"image":"[^"]*"' "$LOG" | tail -1 | cut -d'"' -f4)"
 echo "image url: ${url:-none}"
 [ -n "$url" ] && curl -s -o /dev/null -w "GET /media -> %{http_code} %{content_type} %{size_download}B\n" "$url"
 
-echo "== approval"
+# 承認依頼の ID（文面の「yes <ID>」）のうち、まだ答えていないもの
+answered=" "
+new_approvals() {
+  local id
+  for id in $(grep -o 'yes [a-km-z]\{5\}' "$LOG" | awk '{print $2}'); do
+    case "$answered" in *" $id "*) ;; *) echo "$id" ;; esac
+  done
+}
+# ルームへの返事（承認依頼と、承認の答えへの返事を除く）の数
+replies() { grep -v '"to":"Uaaa"' "$LOG" | grep -vc '"text":"✅\|"text":"❌'; }
+# ルームに返事が来るまで、届いた承認依頼すべてに verdict で答える。答えた依頼を表示する
+answer_until_reply() {
+  local verdict="$1" before id
+  before="$(replies)"
+  for _ in $(seq 200); do
+    for id in $(new_approvals); do
+      answered="$answered$id "
+      grep -q "always $id" "$LOG" && echo "approval $id: 常に許可あり" || echo "approval $id: 常に許可なし"
+      echo "answer $verdict $id"
+      wh postback "$A" "perm:$verdict:$id"
+    done
+    [ "$(replies)" -gt "$before" ] && return 0
+    sleep 1
+  done
+  echo "timeout waiting for a reply"
+  return 1
+}
+
+echo "== approval (allow)"
 wh text "$G1" "$A" "作業ディレクトリに note.txt を作って ok と書いて。終わったら一言で報告して" --mention
-id=""
-for _ in $(seq 150); do
-  id="$(grep -o 'yes [a-km-z]\{5\}' "$LOG" | tail -1 | awk '{print $2}')"
-  [ -n "$id" ] && break
-  sleep 1
-done
-echo "approval id: ${id:-none}"
-n="$(lines)"; [ -n "$id" ] && wh postback "$A" "perm:allow:$id"; waitfor "$((n + 1))"
+answer_until_reply allow
+
+# 拒否のあとに頼むと、拒否を避ける別の手段とみなして実行しないことがある（Haiku で起きた）ので、拒否より先に確かめる
+echo "== approval (always)"
+wh text "$G1" "$A" "Bash で \`echo always >> always.txt\` を実行して。終わったら一言で報告して" --mention
+answer_until_reply always
+# 常に許可すると、Claude Code がその範囲を作業ディレクトリの設定（.claude/settings.local.json）に足す。
+# 同じコマンドを 2 回頼んで確かめる形にしないのは、エージェントがコマンドを書き足すと範囲から外れ、承認依頼が出るため
+echo "-- settings.local.json"; cat "$RELAY_HOME/workspace/.claude/settings.local.json" 2>/dev/null || echo "(なし)"
+
+echo "== approval (deny)"
+wh text "$G1" "$A" "作業ディレクトリに denied.txt を作って ng と書いて。拒否されたら、ほかの方法は試さずに一言で報告して" --mention
+answer_until_reply deny
 
 sleep 3
-echo "== workspace"; ls "$RELAY_HOME/workspace"; cat "$RELAY_HOME/workspace/note.txt" 2>/dev/null
+echo "== workspace"; ls "$RELAY_HOME/workspace"
+for f in note.txt denied.txt always.txt; do echo "-- $f"; cat "$RELAY_HOME/workspace/$f" 2>/dev/null || echo "(なし)"; done
 echo "== sent"; cat "$LOG"
 echo "== relay log"; grep -E "ツール|実行承認|届いていない|失敗|error" "$RLOG" | cut -c1-260
