@@ -25,7 +25,7 @@ import { startHarness } from "./harness/harness.ts"
 import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
-import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
+import { type ConnectorFactory, type Log, noticeTimingFromEnv, Relay, type Routes } from "./core/relay.ts"
 import { relayDir, resolveWorkspace } from "./workspace.ts"
 import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
@@ -40,6 +40,8 @@ const PACKAGE_ROOT = resolve(import.meta.dir, "..")
 const accessPath = join(home, "access.json")
 /** Webhook などのコネクターのエンドポイント。line-tunnel は、ここを公開する */
 const HTTP_PORT = Number(process.env.RELAY_HTTP_PORT ?? 18080)
+/** ハーネスが異常終了したとき、ルームへの知らせを送り終わるまで待つ上限 */
+const DRAIN_MS = 10_000
 
 const format = (msg: string, extra?: Record<string, unknown>) => `${new Date().toISOString()} relay: ${msg}${extra ? ` ${JSON.stringify(extra)}` : ""}`
 const log: Log = {
@@ -52,6 +54,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const env = { ...process.env, ...args.env }
   // 不正な指定は、何も起動しないうちに拒否する
   const harnessOptions = harnessOptionsFromEnv(env)
+  const noticeTiming = noticeTimingFromEnv(env)
   // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）。
   // 秘密情報のファイル自体も渡すのは、ファイルがシンボリックリンクのとき、実体の場所も含めないため
   const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile), envFile])
@@ -61,7 +64,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 受け取った添付は 7 日で消す（ADR 0005）
   schedulePrune(inbox, "受け取った添付", log)
 
-  const relay = new Relay(access, log, workspace)
+  const relay = new Relay(access, log, workspace, undefined, noticeTiming)
   const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
   if (connectors.length === 0) {
     throw new Error("チャットサービスの秘密情報がありません。agent-chat-relay secrets line・secrets chatwork・secrets discord のどれかを実行してください（開発時は scripts/relay.sh secrets）")
@@ -134,6 +137,8 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
     log.error(`ハーネスが異常終了したため、中継も止めます。ハーネスのログ：${harnessLog}（最後の 20 行を下に出す）`, { harness: harnessName, code })
     console.error(tail)
   }
+  // 管理者が止めたのでなければ、作業中だったターンのルームへの知らせ（ADR 0024）を、送り終わるまで待つ
+  if (!stopping) await relay.drain(DRAIN_MS)
   for (const close of closers) close()
   process.exit(code === 0 ? 0 : 1)
 }

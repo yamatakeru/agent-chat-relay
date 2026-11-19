@@ -106,6 +106,8 @@ agent-chat-relay serve
 | `RELAY_OPENCODE_MODEL` | OpenCode で使うモデル（省略すると OpenCode の設定に従う） |
 | `RELAY_CHATWORK_POLL_SEC` | Chatwork の API をポーリングする間隔（秒。既定は 5、最小は 2） |
 | `RELAY_PUBLIC_URL` | LINE に返す画像を公開する URL を固定する（省略すると、届いた Webhook のホスト名から決める） |
+| `RELAY_APPROVAL_NOTICE_MIN` | 承認依頼に答えが出ないとき、ルームに「承認待ち」を知らせるまでの時間（分。既定は 10、1〜29。ADR 0024） |
+| `RELAY_SLOW_NOTICE_MIN` | 返事もターンの終わりもないとき、ルームに「時間がかかっている」と知らせるまでの時間（分。既定は 20、1〜1440。ADR 0024） |
 
 ### 普段の環境で動かす
 

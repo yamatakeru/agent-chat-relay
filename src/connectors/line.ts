@@ -282,11 +282,17 @@ export class LineConnector implements Connector {
     })
   }
 
-  async notice(room: string, text: string): Promise<boolean> {
-    // 案内は Reply でだけ送り、Push の通数を使わない
+  async notice(room: string, text: string, opts: { push?: boolean } = {}): Promise<boolean> {
+    const messages = [{ type: "text", text }]
+    // Push が許されても、使うのは 1 対 1 のトークだけ。グループと複数人トークでは、人数分の通数になる（ADR 0024）
+    if (opts.push && localId(room).startsWith("U")) {
+      await this.deliver(room, messages)
+      return true
+    }
+    // それ以外の案内は Reply でだけ送り、Push の通数を使わない
     const token = this.takeToken(room)
     if (!token) return false
-    await this.post("/v2/bot/message/reply", { replyToken: token, messages: [{ type: "text", text }] })
+    await this.post("/v2/bot/message/reply", { replyToken: token, messages })
     return true
   }
 
