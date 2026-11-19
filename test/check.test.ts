@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { adrIndex, BEGIN, currentIndex, END, replaceIndex } from "../scripts/adr-index.ts"
 import { shellLaunchErrors, tsLaunchErrors, wordingErrors } from "../scripts/check.ts"
 import { CORE, e2eTargets } from "../scripts/e2e-targets.ts"
+import { BUN_ISOLATED } from "../src/harness/config.ts"
 
 const TODAY = "2026-11-19"
 
@@ -69,6 +70,11 @@ test("ハーネスとの結合に関わるパスを変えたら、e2e の中核�
   for (const f of ["src/harness/harness.ts", "src/core/mcp.ts", "src/prompt.ts", "src/main.ts", "src/workspace.ts", "src/home.ts", "src/serve-args.ts", "bin/agent-chat-relay", "test/e2e/line.sh", "test/e2e/lib.sh"]) {
     expect(e2eTargets([f, "README.md"], "").filter((t) => CORE.includes(t.script))).toEqual(CORE.map((script) => ({ script, reasons: [f] })))
   }
+  expect(CORE).toEqual(["test/e2e/line.sh claude", "test/e2e/resume.sh claude"])
+  // パスは、先頭から末尾まで一致したものだけ
+  const near = ["docs/src/harness/a.md", "x/src/core/mcp.ts", "src/core/mcp.tsx", "x/src/prompt.ts", "src/prompt.ts.orig", "x/src/main.ts", "src/main.tsx", "x/bin/a", "x/test/e2e/line.sh", "x/test/e2e/chatwork.sh"]
+  expect(e2eTargets(near, "")).toEqual([])
+  for (const f of ["test/e2e/chatwork.sh.orig", "test/e2e/mock-chatwork.ts.orig"]) expect(e2eTargets([f], "").map((t) => t.script)).toEqual(CORE)
 })
 
 test("コネクター・src/core/relay.ts・文書だけの変更では、e2e を挙げない。Chatwork の e2e は、その e2e を変えたときだけ挙げる", () => {
@@ -88,8 +94,18 @@ test("ハーネスのアダプターと ACP・MCP の SDK のバージョンを�
     expect(e2eTargets(["package.json", "bun.lock"], diff(line))).toEqual(CORE.map((script) => ({ script, reasons: [`依存（${name}）`] })))
   }
   expect(e2eTargets(["package.json"], diff('+    "discord.js": "14.29.0",'))).toEqual([])
+  // 複数の依存は、重ねずに「、」でつなぐ
+  const two = diff('-    "@agentclientprotocol/sdk": "2.4.0",\n+    "@agentclientprotocol/sdk": "2.5.0",\n+    "@modelcontextprotocol/sdk": "1.33.0",')
+  expect(e2eTargets(["package.json"], two)[0]!.reasons).toEqual(["依存（@agentclientprotocol、@modelcontextprotocol）"])
   // 差分の見出し（--- a/ や +++ b/）と、変えていない行は数えない
-  expect(e2eTargets(["package.json"], ' "@agentclientprotocol/sdk": "2.4.0",\n--- a/@agentclientprotocol\n')).toEqual([])
+  expect(e2eTargets(["package.json"], ' "@agentclientprotocol/claude-agent-acp": "0.101.0",\n--- a/@agentclientprotocol\n+++ b/@agentclientprotocol\n')).toEqual([])
+})
+
+test("e2e の判定は、コマンドとして起動すると、main との差分から結果を表示する", () => {
+  // 結果は、このブランチの差分しだいなので、表示の形だけを確かめる
+  const r = Bun.spawnSync([...BUN_ISOLATED, "scripts/e2e-targets.ts", "HEAD"], { cwd: join(import.meta.dir, "..") })
+  expect(r.exitCode).toBe(0)
+  expect(r.stdout.toString()).toMatch(/^e2e: /)
 })
 
 // lib.sh を、記録のファイルを与えて bash で動かす
