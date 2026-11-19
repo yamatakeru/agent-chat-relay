@@ -11,4 +11,5 @@ case ${1:-} in
 esac
 mkdir -p "$home"
 trap 'rm -rf "$home"' EXIT
-HOME="$home" "$root/node_modules/.bin/fallow" mutation --changed-since "$base" --allow-side-effects "$@"
+# npm のラッパーは node の shebang なので、Bun で、cwd の .env と bunfig.toml を読ませずに起動する
+HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin/fallow" mutation --changed-since "$base" --allow-side-effects "$@"
