@@ -9,11 +9,11 @@ export function localRefs(text: string): number[] {
   return [...text.matchAll(/(?<![\w./-])#(\d+)(?!\d)/g)].map((m) => Number(m[1]))
 }
 
-/** Refs・Closes・Fixes・Resolves などに続く issue の番号。同じ行の #N をすべて拾う */
+/** Refs・Closes・Fixes・Resolves などで始まる行の issue の番号。同じ行の #N をすべて拾う。説明の文の途中の「Refs #N」は数えない */
 export function refsOf(body: string): number[] {
   const out = new Set<number>()
   for (const line of body.split("\n")) {
-    if (!/\b(refs?|close[sd]?|fix(e[sd])?|resolve[sd]?)\b\s*:?\s*#\d/i.test(line)) continue
+    if (!/^\s*(refs?|close[sd]?|fix(e[sd])?|resolve[sd]?)\b\s*:?\s*#\d/i.test(line)) continue
     for (const n of localRefs(line)) out.add(n)
   }
   return [...out]

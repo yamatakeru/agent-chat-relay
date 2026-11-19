@@ -16,6 +16,8 @@ test("Refs・Closes などに続く番号だけを拾う", () => {
   expect(refsOf(PR54_FIRST_TAIL)).toEqual([53])
   expect(refsOf("Closes #12、#13\nfix: 何か（#14）\nresolves: #15")).toEqual([12, 13, 15])
   expect(refsOf("Refs #53, other/project#71")).toEqual([53])
+  // PR #77 の最初の本文の説明の行。行の途中の Refs を数えて、統括 issue に載っていないのに通っていた
+  expect(refsOf("  - PR #74 の最初の本文：…。`Refs #52` を足すと通る（#52 は 03:41 から #71 の sub-issue）。")).toEqual([])
 })
 
 test("PR #74 の最初の本文は、Refs がなく統括 issue にも載っていないので落ちる。Refs #52 を足すと通る", () => {
