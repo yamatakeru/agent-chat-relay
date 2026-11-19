@@ -1,6 +1,6 @@
 // CLI としての動き（ADR 0019）：データの置き場、秘密情報のファイル、Bun に cwd のファイルを読ませないこと
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { loadSecrets, parseSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "../src/home.ts"
@@ -98,6 +98,32 @@ describe("secrets コマンド", () => {
     expect(run(["secrets", "slack"], "x\n").stderr.toString()).toContain("line・chatwork・discord")
     expect(run(["secrets", "discord"], "\n").exitCode).toBe(1)
     expect(existsSync(join(dir, "home", ".env"))).toBe(false)
+  })
+})
+
+describe("serve コマンド", () => {
+  const serve = (envFile: string, workspace: string) =>
+    Bun.spawnSync([...BUN_ISOLATED, join(repo, "src/main.ts"), "serve"], {
+      cwd: dir,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, RELAY_HOME: join(dir, "home"), RELAY_ENV_FILE: envFile, RELAY_WORKSPACE: workspace },
+      stderr: "pipe",
+      stdout: "pipe",
+    })
+
+  test("秘密情報のファイルがシンボリックリンクで、実体が作業ディレクトリの中にあれば、起動しない", () => {
+    const ws = join(dir, "ws")
+    mkdirSync(ws)
+    mkdirSync(join(dir, "secrets"))
+    writeFileSync(join(ws, ".env"), "", { mode: 0o600 })
+    symlinkSync(join(ws, ".env"), join(dir, "secrets", ".env"))
+    const r = serve(join(dir, "secrets", ".env"), ws)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr.toString()).toContain("含むため")
+    expect(existsSync(join(ws, ".relay"))).toBe(false)
+    // 実体が作業ディレクトリの外なら、作業ディレクトリの検査は通り、秘密情報がないことで止まる
+    const other = join(dir, "other")
+    mkdirSync(other)
+    expect(serve(join(dir, "secrets", ".env"), other).stderr.toString()).toContain("チャットサービスの秘密情報がありません")
   })
 })
 

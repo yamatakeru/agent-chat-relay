@@ -52,8 +52,9 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const env = { ...process.env, ...args.env }
   // 不正な指定は、何も起動しないうちに拒否する
   const harnessOptions = harnessOptionsFromEnv(env)
-  // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）
-  const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile)])
+  // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）。
+  // 秘密情報のファイル自体も渡すのは、ファイルがシンボリックリンクのとき、実体の場所も含めないため
+  const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile), envFile])
   if (specified) log.info("管理者が指定した作業ディレクトリを使います", { workspace })
   const inbox = join(relayDir(workspace), "inbox")
 
