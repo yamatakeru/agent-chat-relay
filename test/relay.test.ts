@@ -1029,6 +1029,17 @@ describe("ハーネスの起動と再開", () => {
     expect(r.permissions).toEqual(selected("once"))
   })
 
+  test("ツールの名前がなければ種類を、種類もなければ「ツールの実行」を示し、入力がなければ空にする", async () => {
+    const asked: PermissionRequest[] = []
+    for (const kind of ["execute", undefined] as const) {
+      await run({ permission: { kind, options: PERMISSION_OPTIONS, bare: true } }, undefined, undefined, undefined, async (req) => (asked.push(req), "deny"))
+    }
+    expect(asked.map(({ title, input }) => ({ title, input }))).toEqual([
+      { title: "execute", input: "" },
+      { title: "ツールの実行", input: "" },
+    ])
+  })
+
   test("答えに合う選択肢がなければ、ほかの選択肢を選ばずに取り消す", async () => {
     // 拒否したのに、許可の選択肢しかない
     const options = PERMISSION_OPTIONS.filter((o) => o.kind.startsWith("allow"))

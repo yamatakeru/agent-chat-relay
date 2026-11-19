@@ -21,7 +21,7 @@ export type FakeAcpConfig = {
    * session/prompt の中で、この種類と選択肢で session/request_permission を送る。
    * 中継の答えは "PERM <JSON>" として stderr に書く
    */
-  permission?: { kind?: acp.ToolKind; options: acp.PermissionOption[] }
+  permission?: { kind?: acp.ToolKind; options: acp.PermissionOption[]; /** ツールの名前（title）と入力（rawInput）を付けない */ bare?: boolean }
 }
 
 const cfg: FakeAcpConfig = JSON.parse(process.env.FAKE_ACP ?? "{}")
@@ -102,7 +102,11 @@ const app = acp
     if (cfg.permission) {
       const res = await client.request("session/request_permission", {
         sessionId: params.sessionId,
-        toolCall: { toolCallId: "tool-1", title: "Bash", kind: cfg.permission.kind, rawInput: { command: "ls" } },
+        toolCall: {
+          toolCallId: "tool-1",
+          kind: cfg.permission.kind,
+          ...(cfg.permission.bare ? {} : { title: "Bash", rawInput: { command: "ls" } }),
+        },
         options: cfg.permission.options,
       })
       process.stderr.write(`PERM ${JSON.stringify(res)}\n`)
