@@ -13,7 +13,7 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import type { PermissionOption } from "@agentclientprotocol/sdk"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, type PermissionRequest, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, type Log, type PermissionRequest, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
@@ -70,8 +70,12 @@ class FakeConnector implements Connector {
   async sendApproval(user: string, text: string, id: string, opts?: { always?: boolean }) {
     this.approvals.push({ user, text, id, always: opts?.always })
   }
+  /** false にすると、送る手段がない（LINE の Reply トークンがない）ときのように、送らずに false を返す */
+  canNotice = true
   async notice(room: string, text: string) {
+    if (!this.canNotice) return false
     this.notices.push({ room, text })
+    return true
   }
   async download() {
     return []
@@ -127,9 +131,9 @@ describe("access", () => {
 })
 
 describe("relay", () => {
-  function setup() {
+  function setup(log: Log = quiet) {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, quiet, undefined, NO_WAIT)
+    const relay = new Relay(access, log, undefined, NO_WAIT)
     const conn = new FakeConnector()
     relay.addConnector(conn)
     return { relay, conn }
@@ -301,6 +305,105 @@ describe("relay", () => {
     expect(s.prompts).toHaveLength(2)
     expect(s.prompts[1]).toContain("two")
     expect(s.prompts[1]).toContain("three")
+  })
+
+  const PROMPT_FAILURE_NOTICE = "今は不調で返事ができません。記録して調べています。"
+  const ROOM2 = "line:C0000000000000000000000000000000b"
+
+  /** 最初のターンを fail() または finish() まで終わらせないセッション。steer は、結果を results の順に返す（尽きたら true） */
+  function heldSession(results: boolean[] = []) {
+    const prompts: string[] = []
+    let finish!: () => void
+    let fail!: (err: Error) => void
+    const session: Session = {
+      prompt: (text) => {
+        prompts.push(text)
+        if (prompts.length > 1) return Promise.resolve()
+        return new Promise<void>((resolve, reject) => {
+          finish = resolve
+          fail = reject
+        })
+      },
+      steer: async () => results.shift() ?? true,
+    }
+    return { session, prompts, finish: () => finish(), fail: (err: Error) => fail(err) }
+  }
+
+  test("session/prompt が失敗したら、そのターンの発言のルームに、固定の知らせを 1 回だけ出す（#33）", async () => {
+    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
+    const { relay, conn } = setup({ info: (msg, extra) => void logs.push({ msg, extra }), error: () => {} })
+    // 同じルームの 2 つの発言を、同じターンで渡す
+    relay.receive(msg({ text: "one" }))
+    relay.receive(msg({ text: "two" }))
+    relay.attach({ prompt: () => Promise.reject(new Error("secret detail")) })
+    await Bun.sleep(0)
+    expect(conn.notices).toEqual([{ room: ROOM, text: PROMPT_FAILURE_NOTICE }])
+    expect(logs).toContainEqual({ msg: "返事ができないことを、ルームに知らせました", extra: { room: ROOM } })
+  })
+
+  test("そのターンに差し込んだ別のルームにも知らせを出し、差し込めずに次のターンへ回した発言のルームには出さない", async () => {
+    const { relay, conn } = setup()
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] }, [ROOM2]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    const s = heldSession([true, true, false])
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ room: ROOM2, text: "two" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "three" }))
+    await Bun.sleep(0)
+    // 差し込めなかった発言（承認者の DM）は、次のターンで渡る
+    relay.receive(msg({ room: ALICE, isDM: true, text: "four" }))
+    await Bun.sleep(0)
+    s.fail(new Error("harness error"))
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(2)
+    expect(s.prompts[1]).toContain("four")
+    expect(conn.notices).toEqual([
+      { room: ROOM, text: PROMPT_FAILURE_NOTICE },
+      { room: ROOM2, text: PROMPT_FAILURE_NOTICE },
+    ])
+  })
+
+  test("知らせを送る手段がなければ、知らせたとはログに書かない", async () => {
+    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
+    const { relay, conn } = setup({ info: (msg, extra) => void logs.push({ msg, extra }), error: () => {} })
+    conn.canNotice = false
+    relay.receive(msg({ text: "one" }))
+    relay.attach({ prompt: () => Promise.reject(new Error("harness error")) })
+    await Bun.sleep(0)
+    expect(logs).toContainEqual({ msg: "返事ができないことを、ルームに知らせる手段がないため、知らせませんでした", extra: { room: ROOM } })
+    expect(logs.map((l) => l.msg)).not.toContain("返事ができないことを、ルームに知らせました")
+  })
+
+  test("session/prompt が成功したら、知らせを出さない", async () => {
+    const { relay, conn } = setup()
+    const s = heldSession()
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    s.finish()
+    await Bun.sleep(0)
+    expect(conn.notices).toHaveLength(0)
+  })
+
+  test("知らせを出せなくてもログに書くだけで、後続の発言は渡す", async () => {
+    const errors: { msg: string; extra?: Record<string, unknown> }[] = []
+    const { relay, conn } = setup({ info: () => {}, error: (msg, extra) => void errors.push({ msg, extra }) })
+    conn.notice = () => Promise.reject(new Error("notice failed"))
+    const s = heldSession()
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    s.fail(new Error("harness error"))
+    await Bun.sleep(0)
+    expect(errors).toContainEqual({ msg: "返事ができないことを、ルームに知らせられませんでした", extra: { room: ROOM, error: "Error: notice failed" } })
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(2)
+    expect(s.prompts[1]).toContain("two")
   })
 
   test("本文と属性は無害化して渡す", async () => {
@@ -1218,6 +1321,29 @@ describe("line", () => {
       void api.stop()
     }
   })
+
+  test("案内は Reply でだけ送り、使える Reply トークンがなければ送らずに false を返す", async () => {
+    const paths: string[] = []
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        paths.push(new URL(req.url).pathname)
+        return new Response("{}", { status: 200 })
+      },
+    })
+    try {
+      const line = new LineConnector({ channelSecret: "s", channelToken: "t", apiBase: api.url.href }, new Relay(access, quiet), quiet)
+      expect(await line.notice(ROOM, "案内")).toBe(false)
+      expect(paths).toEqual([])
+      await line.handleEvent({ type: "join", timestamp: 0, replyToken: "rt", source: { type: "group", groupId: ROOM.slice(5) } })
+      paths.length = 0
+      expect(await line.notice(ROOM, "案内")).toBe(true)
+      expect(paths).toEqual(["/v2/bot/message/reply"])
+    } finally {
+      void api.stop()
+    }
+  })
 })
 
 describe("line の受け取りの合図", () => {
@@ -1538,9 +1664,11 @@ describe("chatwork", () => {
       await cw.poll()
       await cw.send("chatwork:r7000", "どうぞ", { replyTo: id })
       await cw.sendApproval("chatwork:u1", "許可：yes abcde", "abcde")
+      expect(await cw.notice("chatwork:r7000", "案内")).toBe(true)
       expect(api.sent).toEqual([
         { kind: "message", room: 7000, body: `[rp aid=2 to=7000-${id}]\nどうぞ` },
         { kind: "message", room: 7001, body: "許可：yes abcde" },
+        { kind: "message", room: 7000, body: "案内" },
       ])
       await expect(cw.send("chatwork:u9", "x")).rejects.toThrow("ダイレクトチャットが見つかりません")
     } finally {
@@ -1623,6 +1751,8 @@ describe("discord", () => {
     await Bun.sleep(0)
     expect(d.sent.at(-1)).toMatchObject({ channel: "301", content: expect.stringContaining("relay pair") })
     expect(Object.values(access.load().pending)[0]).toMatchObject({ kind: "room", target: "discord:c300" })
+    expect(await dc.notice("discord:c100", "案内")).toBe(true)
+    expect(d.sent.at(-1)).toMatchObject({ channel: "100", content: "案内" })
   })
 
   test("長い本文は分けて送り、ファイルと返信は 1 通目に付ける。ほかのチャンネルのスレッドには送らない", async () => {
@@ -1709,10 +1839,113 @@ describe("discord", () => {
 })
 
 describe("作業ディレクトリ", () => {
-  test("独立した git リポジトリにする", () => {
+  /** git から見たリポジトリの最上位と、git のディレクトリ */
+  const gitRoot = (ws: string) => Bun.spawnSync(["git", "-C", ws, "rev-parse", "--show-toplevel", "--absolute-git-dir"]).stdout.toString()
+  const commit = (ws: string, message: string) =>
+    expect(Bun.spawnSync(["git", "-C", ws, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", message]).success).toBe(true)
+  const log = (ws: string) => Bun.spawnSync(["git", "-C", ws, "log", "--format=%s"]).stdout.toString()
+  /** 呼ばれた引数を calls に書いてから、git を動かすコマンド。init を noop にすると、git init は成功を返すだけで何もしない */
+  const gitSpy = (calls: string, opts: { noop?: boolean } = {}) => {
+    const spy = join(dir, "git-spy")
+    const init = opts.noop ? `[ "$1" = init ] && exit 0\n` : ""
+    writeFileSync(calls, "")
+    writeFileSync(spy, `#!/bin/sh\necho "$*" >> '${calls}'\n${init}exec git "$@"\n`, { mode: 0o755 })
+    return spy
+  }
+
+  test("独立した git リポジトリにする。上位の git リポジトリの中でも、最上位は作業ディレクトリ自身になる", () => {
+    // dir はこのリポジトリの .local/ の中にある
     const ws = join(dir, "ws")
     initWorkspace(ws)
-    expect(existsSync(join(ws, ".git"))).toBe(true)
+    const real = realpathSync(ws)
+    expect(gitRoot(ws)).toBe(`${real}\n${join(real, ".git")}\n`)
+  })
+
+  test("既存のリポジトリは壊さず、.git が空のディレクトリなら直す", () => {
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    commit(ws, "エージェントの作業")
+    initWorkspace(ws)
+    expect(log(ws)).toBe("エージェントの作業\n")
+
+    const empty = join(dir, "empty")
+    mkdirSync(join(empty, ".git"), { recursive: true })
+    initWorkspace(empty)
+    const real = realpathSync(empty)
+    expect(gitRoot(empty)).toBe(`${real}\n${join(real, ".git")}\n`)
+  })
+
+  test(".git が壊れていて git init で直らなければ、起動しない", () => {
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    // HEAD が壊れていると、git からは上位のリポジトリ（このリポジトリ）の中に見える
+    writeFileSync(join(ws, ".git", "HEAD"), "broken\n")
+    const calls = join(dir, "git-calls")
+    expect(() => initWorkspace(ws, gitSpy(calls))).toThrow("独立したリポジトリになっていないため、起動しません")
+    // 中身のある .git には git init しない
+    expect(readFileSync(calls, "utf8")).not.toContain("init")
+    expect(readFileSync(join(ws, ".git", "HEAD"), "utf8")).toBe("broken\n")
+  })
+
+  test(".git がほかのリポジトリを指すファイルかシンボリックリンクなら、起動せず、指す先のリポジトリを変えない", () => {
+    const other = join(dir, "other")
+    expect(Bun.spawnSync(["git", "init", "-q", other]).success).toBe(true)
+    commit(other, "ほかのリポジトリ")
+    const before = readFileSync(join(other, ".git", "config"), "utf8")
+    for (const make of [(ws: string) => writeFileSync(join(ws, ".git"), `gitdir: ${join(other, ".git")}\n`), (ws: string) => symlinkSync(join(other, ".git"), join(ws, ".git"))]) {
+      const ws = mkdtempSync(join(dir, "ws-"))
+      make(ws)
+      expect(() => initWorkspace(ws)).toThrow(".git がディレクトリではない")
+    }
+    // 消えたリンク先を作り直さない
+    const dangling = mkdtempSync(join(dir, "ws-"))
+    symlinkSync(join(dir, "nowhere"), join(dangling, ".git"))
+    expect(() => initWorkspace(dangling)).toThrow(".git がディレクトリではない")
+    expect(existsSync(join(dir, "nowhere"))).toBe(false)
+    expect(readFileSync(join(other, ".git", "config"), "utf8")).toBe(before)
+    expect(log(other)).toBe("ほかのリポジトリ\n")
+  })
+
+  test("独立した既存のリポジトリには、git init しない（環境変数や設定で、既存のリポジトリを書き換えうるため）", () => {
+    const calls = join(dir, "git-calls")
+    const spy = gitSpy(calls)
+    const ws = join(dir, "ws")
+    initWorkspace(ws, spy)
+    expect(readFileSync(calls, "utf8")).toContain("init -q")
+    writeFileSync(calls, "")
+    initWorkspace(ws, spy)
+    expect(readFileSync(calls, "utf8")).not.toContain("init")
+  })
+
+  test("git init が成功を返しても、独立したリポジトリになっていなければ、起動しない", () => {
+    expect(() => initWorkspace(join(dir, "ws"), gitSpy(join(dir, "git-calls"), { noop: true }))).toThrow("独立したリポジトリになっていないため、起動しません")
+  })
+
+  test(".git/commondir でほかのリポジトリと共有していれば、起動せず、そのリポジトリを変えない", () => {
+    const other = join(dir, "other")
+    expect(Bun.spawnSync(["git", "init", "-q", other]).success).toBe(true)
+    const before = readFileSync(join(other, ".git", "config"), "utf8")
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    writeFileSync(join(ws, ".git", "commondir"), `${join(other, ".git")}\n`)
+    const calls = join(dir, "git-calls")
+    expect(() => initWorkspace(ws, gitSpy(calls))).toThrow("独立したリポジトリになっていないため、起動しません")
+    expect(readFileSync(calls, "utf8")).not.toContain("init")
+    expect(readFileSync(join(other, ".git", "config"), "utf8")).toBe(before)
+  })
+
+  test("リポジトリの場所を変える git の環境変数があれば、git init の前に起動しない", () => {
+    const elsewhere = join(dir, "elsewhere")
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_INDEX_FILE"]) {
+      const ws = join(dir, `ws-${name}`)
+      expect(() => initWorkspace(ws, "git", { ...process.env, [name]: elsewhere })).toThrow(`環境変数 ${name} が`)
+      expect(existsSync(ws)).toBe(false)
+    }
+    expect(() => initWorkspace(join(dir, "ws"), "git", { ...process.env, GIT_DIR: elsewhere, GIT_WORK_TREE: elsewhere })).toThrow("環境変数 GIT_DIR・GIT_WORK_TREE が")
+    expect(existsSync(elsewhere)).toBe(false)
+    // 空の値は git に任せる。git が無視するもの（GIT_INDEX_FILE）では起動し、git が誤りとするもの（GIT_DIR）では起動しない
+    initWorkspace(join(dir, "ws"), "git", { ...process.env, GIT_INDEX_FILE: "" })
+    expect(() => initWorkspace(join(dir, "ws"), "git", { ...process.env, GIT_DIR: "" })).toThrow("起動しません")
   })
 
   test("git init に失敗したら、または git が無ければ起動しない", () => {
