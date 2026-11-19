@@ -12,7 +12,8 @@ import { MediaStore } from "../src/connectors/line-media.ts"
 import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
+import type { PermissionOption } from "@agentclientprotocol/sdk"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, type PermissionRequest, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
@@ -891,11 +892,19 @@ describe("ハーネスの起動と再開", () => {
   const META = { claudeCode: { options: { settingSources: ["project", "local"] } } }
 
   /** 偽の ACP エージェントで中継のハーネスを起動し、発言を 1 つ渡す。エージェントが受けた要求と、中継のログを返す */
-  async function run(fake: FakeAcpConfig, sessionId?: string, use?: (session: Session) => Promise<void>, withheld?: string[]) {
+  async function run(
+    fake: FakeAcpConfig,
+    sessionId?: string,
+    use?: (session: Session) => Promise<void>,
+    withheld?: string[],
+    onPermission: (req: PermissionRequest) => Promise<Verdict> = async () => "deny",
+  ) {
     const logs: { msg: string; extra?: Record<string, unknown> }[] = []
     const log = { info: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }), error: (msg: string, extra?: Record<string, unknown>) => logs.push({ msg, extra }) }
     const stderrPath = join(dir, "harness.log")
-    // 偽のエージェントは、受けた要求（REQ）と環境変数の名前（ENV）を stderr に書く
+    // 同じテストで何度か起動しても、前の起動の記録を読まない
+    rmSync(stderrPath, { force: true })
+    // 偽のエージェントは、受けた要求（REQ）と環境変数の名前（ENV）と、実行承認の依頼への答え（PERM）を stderr に書く
     const stderr = (prefix: string) =>
       (existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "")
         .split("\n")
@@ -915,7 +924,7 @@ describe("ハーネスの起動と再開", () => {
           sessionId,
           withheld,
         },
-        async () => "deny",
+        onPermission,
         log,
       )
       try {
@@ -932,7 +941,9 @@ describe("ハーネスの起動と再開", () => {
     }
     const requests: { method: string; params: Record<string, any> }[] = stderr("REQ ")
     const [env]: (string[] | undefined)[] = stderr("ENV ")
-    return { error, logs, requests, env }
+    // 実行承認の依頼に、中継が返した答え
+    const permissions: unknown[] = stderr("PERM ")
+    return { error, logs, requests, env, permissions }
   }
   const methods = (reqs: { method: string }[]) => reqs.map((r) => r.method)
 
@@ -983,6 +994,61 @@ describe("ハーネスの起動と再開", () => {
     expect(String(error)).toContain("想定外")
   })
   const chatServer = [{ type: "http", name: "chat", url: MCP.url, headers: [{ name: "Authorization", value: "Bearer launch-token" }] }]
+
+  // 先頭に allow_always と reject_always を置き、種類で選んでいること（順番ではないこと）を確かめる
+  const PERMISSION_OPTIONS: PermissionOption[] = [
+    { optionId: "always", name: "Always allow Bash", kind: "allow_always" },
+    { optionId: "never", name: "Always reject", kind: "reject_always" },
+    { optionId: "once", name: "Allow", kind: "allow_once" },
+    { optionId: "reject", name: "Reject", kind: "reject_once" },
+  ]
+  /** 発言の中で実行承認の依頼を 1 つ受け、onPermission の答えを返す */
+  const approve = (fake: FakeAcpConfig, onPermission: (req: PermissionRequest) => Promise<Verdict>) => run(fake, undefined, undefined, undefined, onPermission)
+  const selected = (optionId: string) => [{ outcome: { outcome: "selected", optionId } }]
+
+  test("承認の答え（許可・拒否・常に許可）を、ハーネスに返す ACP の選択肢に対応させる（#79）", async () => {
+    const asked: PermissionRequest[] = []
+    const answer = (verdict: Verdict) => async (req: PermissionRequest) => (asked.push(req), verdict)
+    const fake = { permission: { kind: "execute" as const, options: PERMISSION_OPTIONS } }
+    const results = {
+      allow: await approve(fake, answer("allow")),
+      deny: await approve(fake, answer("deny")),
+      always: await approve(fake, answer("always")),
+    }
+    for (const r of Object.values(results)) expect(r.error).toBeUndefined()
+    expect(results.allow.permissions).toEqual(selected("once"))
+    expect(results.deny.permissions).toEqual(selected("reject"))
+    expect(results.always.permissions).toEqual(selected("always"))
+    // 承認者には、ツールの名前と入力と、「常に許可」の選択肢の名前を示す
+    expect(asked).toEqual(Array(3).fill({ title: "Bash", input: JSON.stringify({ command: "ls" }, null, 2), always: "Always allow Bash" }))
+  })
+
+  test("「常に許可」を示さないツールでは、「常に許可」の答えも 1 回だけの許可にする", async () => {
+    const asked: PermissionRequest[] = []
+    const r = await approve({ permission: { kind: "edit", options: PERMISSION_OPTIONS } }, async (req) => (asked.push(req), "always"))
+    expect(r.error).toBeUndefined()
+    expect(asked.map((a) => a.always)).toEqual([undefined])
+    expect(r.permissions).toEqual(selected("once"))
+  })
+
+  test("ツールの名前がなければ種類を、種類もなければ「ツールの実行」を示し、入力がなければ空にする", async () => {
+    const asked: PermissionRequest[] = []
+    for (const kind of ["execute", undefined] as const) {
+      await approve({ permission: { kind, options: PERMISSION_OPTIONS, bare: true } }, async (req) => (asked.push(req), "deny"))
+    }
+    expect(asked.map(({ title, input }) => ({ title, input }))).toEqual([
+      { title: "execute", input: "" },
+      { title: "ツールの実行", input: "" },
+    ])
+  })
+
+  test("答えに合う選択肢がなければ、ほかの選択肢を選ばずに取り消す", async () => {
+    // 拒否したのに、許可の選択肢しかない
+    const options = PERMISSION_OPTIONS.filter((o) => o.kind.startsWith("allow"))
+    const r = await approve({ permission: { kind: "execute", options } }, async () => "deny")
+    expect(r.error).toBeUndefined()
+    expect(r.permissions).toEqual([{ outcome: { outcome: "cancelled" } }])
+  })
 
   test("ID がなければ session/new で作り、モードを default にしてから発言を入れる。ID をログに出す", async () => {
     const { error, logs, requests } = await run({ resume: true, load: true, list: true })
@@ -1036,7 +1102,6 @@ describe("ハーネスの起動と再開", () => {
       const { error, requests } = await run({ resume: true, list: true, sessions }, id)
       expect(error?.message).toContain(`作業ディレクトリのセッションに ${id} がありません`)
       expect(methods(requests)).toEqual(["initialize", "session/list"])
-      rmSync(join(dir, "harness.log"), { force: true })
     }
   })
 
