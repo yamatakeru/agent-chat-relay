@@ -5,7 +5,7 @@ LINE・LINE WORKS・Chatwork・Discord のルームを、任意のハーネス�
 ## 方針
 
 - ハーネスとは ACP と MCP だけでつなぐ。特定のハーネスに固有の機能に頼らない。
-- 作業の前に、`GLOSSARY.md`（用語）、`docs/adr/`（確定した判断）、GitHub の統括 issue（進捗と未決事項）を読む。
+- 作業の前に、`GLOSSARY.md`（用語）、`docs/adr/`（確定した判断）、その作業の統括 issue（ラベル `tracking`）、関係する未決事項（ラベル `undecided`）を読む。
 - ハーネスや ACP のアダプターの挙動は、ドキュメントよりソースとテストを信じる。
 
 ## このディレクトリの中で完結させる
