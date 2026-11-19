@@ -13,7 +13,7 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import type { PermissionOption } from "@agentclientprotocol/sdk"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, type PermissionRequest, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, type Log, type PermissionRequest, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
@@ -127,9 +127,9 @@ describe("access", () => {
 })
 
 describe("relay", () => {
-  function setup() {
+  function setup(log: Log = quiet) {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const relay = new Relay(access, quiet, undefined, NO_WAIT)
+    const relay = new Relay(access, log, undefined, NO_WAIT)
     const conn = new FakeConnector()
     relay.addConnector(conn)
     return { relay, conn }
@@ -301,6 +301,94 @@ describe("relay", () => {
     expect(s.prompts).toHaveLength(2)
     expect(s.prompts[1]).toContain("two")
     expect(s.prompts[1]).toContain("three")
+  })
+
+  const PROMPT_FAILURE_NOTICE = "今は不調で返事ができません。記録して調べています。"
+  const ROOM2 = "line:C0000000000000000000000000000000b"
+
+  /** 最初のターンを fail() または finish() まで終わらせないセッション。steer は、結果を results の順に返す（尽きたら true） */
+  function failingSession(results: boolean[] = []) {
+    const prompts: string[] = []
+    let finish!: () => void
+    let fail!: (err: Error) => void
+    const session: Session = {
+      prompt: (text) => {
+        prompts.push(text)
+        if (prompts.length > 1) return Promise.resolve()
+        return new Promise<void>((resolve, reject) => {
+          finish = resolve
+          fail = reject
+        })
+      },
+      steer: async () => results.shift() ?? true,
+    }
+    return { session, prompts, finish: () => finish(), fail: (err: Error) => fail(err) }
+  }
+
+  test("session/prompt が失敗したら、そのターンの発言のルームに、固定の知らせを 1 回だけ出す（#33）", async () => {
+    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
+    const { relay, conn } = setup({ info: (msg, extra) => void logs.push({ msg, extra }), error: () => {} })
+    // 同じルームの 2 つの発言を、同じターンで渡す
+    relay.receive(msg({ text: "one" }))
+    relay.receive(msg({ text: "two" }))
+    relay.attach({ prompt: () => Promise.reject(new Error("secret detail")) })
+    await Bun.sleep(0)
+    expect(conn.notices).toEqual([{ room: ROOM, text: PROMPT_FAILURE_NOTICE }])
+    expect(logs).toContainEqual({ msg: "返事ができないことを、ルームに知らせました", extra: { room: ROOM } })
+  })
+
+  test("そのターンに差し込んだ別のルームにも知らせを出し、差し込めずに次のターンへ回した発言のルームには出さない", async () => {
+    const { relay, conn } = setup()
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] }, [ROOM2]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    const s = failingSession([true, true, false])
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ room: ROOM2, text: "two" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "three" }))
+    await Bun.sleep(0)
+    // 差し込めなかった発言（承認者の DM）は、次のターンで渡る
+    relay.receive(msg({ room: ALICE, isDM: true, text: "four" }))
+    await Bun.sleep(0)
+    s.fail(new Error("harness error"))
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(2)
+    expect(s.prompts[1]).toContain("four")
+    expect(conn.notices).toEqual([
+      { room: ROOM, text: PROMPT_FAILURE_NOTICE },
+      { room: ROOM2, text: PROMPT_FAILURE_NOTICE },
+    ])
+  })
+
+  test("session/prompt が成功したら、知らせを出さない", async () => {
+    const { relay, conn } = setup()
+    const s = failingSession()
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    s.finish()
+    await Bun.sleep(0)
+    expect(conn.notices).toHaveLength(0)
+  })
+
+  test("知らせを出せなくてもログに書くだけで、後続の発言は渡す", async () => {
+    const errors: { msg: string; extra?: Record<string, unknown> }[] = []
+    const { relay, conn } = setup({ info: () => {}, error: (msg, extra) => void errors.push({ msg, extra }) })
+    conn.notice = () => Promise.reject(new Error("notice failed"))
+    const s = failingSession()
+    relay.attach(s.session)
+    relay.receive(msg({ text: "one" }))
+    await Bun.sleep(0)
+    s.fail(new Error("harness error"))
+    await Bun.sleep(0)
+    expect(errors).toContainEqual({ msg: "返事ができないことを、ルームに知らせられませんでした", extra: { room: ROOM, error: "Error: notice failed" } })
+    relay.receive(msg({ text: "two" }))
+    await Bun.sleep(0)
+    expect(s.prompts).toHaveLength(2)
+    expect(s.prompts[1]).toContain("two")
   })
 
   test("本文と属性は無害化して渡す", async () => {

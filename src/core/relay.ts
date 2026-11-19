@@ -129,6 +129,8 @@ const APPROVAL_MARGIN = 50
 /** コネクターの本文の上限の下限。依頼 1 件の題名・答え方・「常に許可」の範囲を省かずに、承認依頼の文面に収めるため */
 const MIN_TEXT = 1000
 const RECORD_LIMIT = 200
+/** session/prompt が失敗したときに、そのターンの発言のルームへ出す知らせ。エラーの中身と会話の中身は出さない（#33） */
+const PROMPT_FAILURE_NOTICE = "今は不調で返事ができません。記録して調べています。"
 
 const INSTRUCTIONS = [
   "あなたは、業務チャットのルームにつながったエージェントです。複数のルームの発言が、1 つの会話としてここに届きます。",
@@ -405,11 +407,17 @@ export class Relay {
   private async run(): Promise<void> {
     try {
       while (this.session && this.queue.length > 0) {
-        const text = await this.render(this.queue.splice(0))
+        const batch = this.queue.splice(0)
+        /** このターンに渡した発言のルーム（差し込めた発言の分も足す） */
+        const rooms = new Set(batch.map((m) => m.room))
+        const text = await this.render(batch)
+        let failed = false
         const turn = this.session.prompt(text).catch((err) => {
+          failed = true
           this.log.error("セッションへの入力に失敗しました", { error: String(err) })
         })
-        await this.steerUntil(this.session, turn)
+        await this.steerUntil(this.session, turn, rooms)
+        if (failed) for (const room of rooms) void this.promptFailureNotice(room)
       }
     } finally {
       this.running = false
@@ -419,9 +427,10 @@ export class Relay {
   /**
    * ターンが終わるまで、届いた発言をそのターンに差し込む（ADR 0018）。
    * 差し込めないハーネスや、差し込めなかった発言は、ためておき、ターンが終わってからまとめて渡す。
-   * 差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）
+   * 差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）。
+   * 差し込めた発言のルームは、rooms に足す
    */
-  private async steerUntil(session: Session, turn: Promise<void>): Promise<void> {
+  private async steerUntil(session: Session, turn: Promise<void>, rooms: Set<string>): Promise<void> {
     const steer = session.steer?.bind(session)
     if (!steer || !this.steerable) return turn
     let done = false
@@ -435,7 +444,10 @@ export class Relay {
         const batch = this.queue.splice(0)
         try {
           const text = await this.render(batch)
-          if (!done && (await steer(text))) continue
+          if (!done && (await steer(text))) {
+            for (const m of batch) rooms.add(m.room)
+            continue
+          }
         } catch (err) {
           this.steerable = false
           this.log.error("作業中のターンへの差し込みに失敗しました。以後は、ターンが終わってから渡します", { error: String(err) })
@@ -489,6 +501,17 @@ export class Relay {
     await this.connector(room)
       ?.notice(room, `${lead}。管理者が端末で次を実行すると登録されます。\n\nrelay pair ${code}`)
       .catch((err) => this.log.error("ペアリングのコードを送れませんでした", { error: String(err) }))
+  }
+
+  private async promptFailureNotice(room: string): Promise<void> {
+    const c = this.connector(room)
+    if (!c) return
+    try {
+      await c.notice(room, PROMPT_FAILURE_NOTICE)
+      this.log.info("返事ができないことを、ルームに知らせました", { room })
+    } catch (err) {
+      this.log.error("返事ができないことを、ルームに知らせられませんでした", { room, error: String(err) })
+    }
   }
 
   private connector(id: string): Connector | undefined {
