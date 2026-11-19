@@ -17,6 +17,7 @@ import { type Capabilities, type ChatMessage, type Connector, type Incoming, typ
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
+import { DRAIN_MS, stopper, untilHarnessExits } from "../src/shutdown.ts"
 import pkg from "../package.json" with { type: "json" }
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
@@ -1466,7 +1467,7 @@ describe("ハーネスの起動と再開", () => {
     expect(await h.exited).toBe(3)
   })
 
-  test("作業中にハーネスが落ちたら、ターンは失敗で終わり、drain はルームへの知らせを送り終わるまで待つ（ADR 0024）", async () => {
+  test("作業中にハーネスが落ちたら、ターンは失敗で終わり、中継はルームへの知らせを送り終わってから止まる（ADR 0024）", async () => {
     const h = await startHarness(
       {
         command: [...BUN_ISOLATED, join(import.meta.dir, "fixtures/acp-agent.ts")],
@@ -1483,13 +1484,61 @@ describe("ハーネスの起動と再開", () => {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
     const relay = new Relay(access, quiet, undefined, NO_WAIT)
     const conn = new FakeConnector()
+    // 知らせの送信に時間がかかっても、送り終わるまで待つ
+    const send = conn.notice.bind(conn)
+    conn.notice = async (room, text, opts) => {
+      await Bun.sleep(50)
+      return send(room, text, opts)
+    }
     relay.addConnector(conn)
     relay.attach(h.session)
     relay.receive(msg({ text: "調べて" }))
-    expect(await h.exited).toBe(4)
-    // main.ts と同じく、終了を待ってから drain する
-    await relay.drain(5000)
+    const errors: string[] = []
+    const code = await untilHarnessExits({ exited: h.exited, name: "fake", logPath: join(dir, "harness.log") }, relay, stopper(() => {}), { info: () => {}, error: (m) => void errors.push(m) })
+    expect(code).toBe(1)
+    expect(errors[0]).toContain("ハーネスが異常終了したため")
     expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.failed, push: true }])
+  })
+})
+
+describe("中継の止まり方（ADR 0024）", () => {
+  const exited = (code: number) => ({ exited: Promise.resolve(code), name: "fake", logPath: join(dir, "harness.log") })
+  const never = new Promise<void>(() => {})
+
+  test("異常終了なら、知らせを待つ上限を渡して待つ。待っている間に止められたら、待つのをやめる", async () => {
+    writeFileSync(join(dir, "harness.log"), "last line\n")
+    const waits: number[] = []
+    const stop = stopper(() => {})
+    const done = untilHarnessExits(exited(4), { drain: (ms) => (waits.push(ms), never) }, stop, quiet)
+    await Bun.sleep(10)
+    expect(waits).toEqual([DRAIN_MS])
+    let returned = false
+    void done.then(() => (returned = true))
+    await Bun.sleep(10)
+    expect(returned).toBe(false)
+    stop.stop()
+    expect(await done).toBe(1)
+  })
+
+  test("管理者が止めたら、知らせを待たない。ハーネスが自分で終わったら、終了コードによらず待つ", async () => {
+    let drained = 0
+    const relay = { drain: () => (drained++, never) }
+    const stop = stopper(() => {})
+    stop.stop()
+    expect(await untilHarnessExits(exited(143), relay, stop, quiet)).toBe(1)
+    // 終了コードが 0 でも、管理者が止めたのでなければ、作業中だったターンの知らせを待つ
+    expect(await untilHarnessExits(exited(0), { drain: async () => void drained++ }, stopper(() => {}), quiet)).toBe(0)
+    expect(drained).toBe(1)
+  })
+
+  test("停止の合図は、何度届いても 1 回だけ扱う", () => {
+    let calls = 0
+    const stop = stopper(() => calls++)
+    expect(stop.stopping).toBe(false)
+    stop.stop()
+    stop.stop()
+    expect(stop.stopping).toBe(true)
+    expect(calls).toBe(1)
   })
 })
 

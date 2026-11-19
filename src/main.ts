@@ -14,7 +14,6 @@
 // データの置き場は RELAY_HOME（既定は ~/.agent-chat-relay）。秘密情報は <home>/.env（RELAY_ENV_FILE で変えられる）から読み、環境変数を優先する
 
 import { randomBytes } from "node:crypto"
-import { readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { AccessStore, localId, serviceOf } from "./core/access.ts"
 import { chatworkFromEnv } from "./connectors/chatwork.ts"
@@ -26,6 +25,7 @@ import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, noticeTimingFromEnv, Relay, type Routes } from "./core/relay.ts"
+import { stopper, untilHarnessExits } from "./shutdown.ts"
 import { relayDir, resolveWorkspace } from "./workspace.ts"
 import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
@@ -40,8 +40,6 @@ const PACKAGE_ROOT = resolve(import.meta.dir, "..")
 const accessPath = join(home, "access.json")
 /** Webhook などのコネクターのエンドポイント。line-tunnel は、ここを公開する */
 const HTTP_PORT = Number(process.env.RELAY_HTTP_PORT ?? 18080)
-/** ハーネスが異常終了したとき、ルームへの知らせを送り終わるまで待つ上限 */
-const DRAIN_MS = 10_000
 
 const format = (msg: string, extra?: Record<string, unknown>) => `${new Date().toISOString()} relay: ${msg}${extra ? ` ${JSON.stringify(extra)}` : ""}`
 const log: Log = {
@@ -120,31 +118,15 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   relay.attach(harness.session)
 
   // Ctrl+C は、端末と dotenvx の両方から届くことがある
-  let stopping = false
-  // 知らせを待っている間に止められたら、待つのをやめる
-  let cancelDrain = () => {}
-  const stopped = new Promise<void>((r) => (cancelDrain = r))
-  const stop = () => {
-    if (stopping) return
-    stopping = true
-    cancelDrain()
+  const stop = stopper(() => {
     log.info("停止します")
     harness.stop()
-  }
-  process.on("SIGINT", stop)
-  process.on("SIGTERM", stop)
-  const code = await harness.exited
-  if (code === 0 || stopping) {
-    log.info("ハーネスが終了したため、中継も止めます", { harness: harnessName, code })
-  } else {
-    const tail = readFileSync(harnessLog, "utf8").trimEnd().split("\n").slice(-20).join("\n")
-    log.error(`ハーネスが異常終了したため、中継も止めます。ハーネスのログ：${harnessLog}（最後の 20 行を下に出す）`, { harness: harnessName, code })
-    console.error(tail)
-  }
-  // 管理者が止めたのでなければ、作業中だったターンのルームへの知らせ（ADR 0024）を、送り終わるまで待つ
-  if (!stopping) await Promise.race([relay.drain(DRAIN_MS), stopped])
+  })
+  process.on("SIGINT", stop.stop)
+  process.on("SIGTERM", stop.stop)
+  const code = await untilHarnessExits({ exited: harness.exited, name: harnessName, logPath: harnessLog }, relay, stop, log)
   for (const close of closers) close()
-  process.exit(code === 0 ? 0 : 1)
+  process.exit(code)
 }
 
 /** 秘密情報の項目。サービスごとに、入力してもらう順 */
