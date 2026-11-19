@@ -972,6 +972,26 @@ describe("ハーネスの起動と再開", () => {
     await expect(writer.write(new Uint8Array(8 << 20))).rejects.toThrow("EPIPE")
     await proc.exited
   })
+
+  test("ハーネスが stdin を読まずに固まってから落ちても、中継は落ちずに、発言の失敗と終了として扱う", async () => {
+    const h = await startHarness(
+      {
+        command: [...BUN_ISOLATED, join(import.meta.dir, "fixtures/acp-agent.ts")],
+        env: { FAKE_ACP: JSON.stringify({ hang: true }) },
+        cwd: dir,
+        mcp: MCP,
+        meta: META,
+        // 偽のエージェントの始めのモード。切り替えの要求を挟まず、すぐに大きな発言を書く
+        mode: "auto",
+        stderrPath: join(dir, "harness.log"),
+      },
+      async () => "deny",
+      { info: () => {}, error: () => {} },
+    )
+    // パイプの容量を超える発言。読まれないまま、ハーネスが終了する
+    await expect(h.session.prompt("x".repeat(8 << 20))).rejects.toThrow()
+    expect(await h.exited).toBe(3)
+  })
 })
 
 describe("serve の引数", () => {

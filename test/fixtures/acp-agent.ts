@@ -15,10 +15,14 @@ export type FakeAcpConfig = {
   sessions?: { id: string; cwd: string; mode: string }[]
   /** _session/steering を宣言し、この結果を返す（claude-agent-acp などの拡張） */
   steering?: "injected" | "promptRequired" | "startedNewTurn"
+  /** session/new のあと、stdin を読むのをやめ、0.5 秒後に終了コード 3 で終わる（固まってから落ちるハーネス） */
+  hang?: boolean
 }
 
 const cfg: FakeAcpConfig = JSON.parse(process.env.FAKE_ACP ?? "{}")
 const sessions = cfg.sessions ?? []
+/** false にすると、stdin を読むのをやめる（hang） */
+let reading = true
 const MODES = ["default", "auto", "acceptEdits", "plan"].map((id) => ({ id, name: id }))
 
 function record(method: string, params: unknown): void {
@@ -54,6 +58,10 @@ const app = acp
   })
   .onRequest("session/new", ({ params }) => {
     record("session/new", params)
+    if (cfg.hang) {
+      reading = false
+      setTimeout(() => process.exit(3), 500)
+    }
     // claude-agent-acp と同じく、指定がなければ auto で始める
     return { sessionId: "new-session", modes: modes("auto") }
   })
@@ -97,9 +105,20 @@ const app = acp
     return { outcome: cfg.steering }
   })
 
+// hang のときに読むのをやめられるように、stdin を包む
+const stdin = Bun.stdin.stream().getReader()
+const input = new ReadableStream<Uint8Array>({
+  async pull(controller) {
+    if (!reading) return new Promise<void>(() => {})
+    const { done, value } = await stdin.read()
+    if (done) controller.close()
+    else controller.enqueue(value)
+  },
+})
+
 const output = new WritableStream<Uint8Array>({
   write(chunk) {
     process.stdout.write(chunk)
   },
 })
-await app.connect(acp.ndJsonStream(output, Bun.stdin.stream())).closed
+await app.connect(acp.ndJsonStream(output, input)).closed
