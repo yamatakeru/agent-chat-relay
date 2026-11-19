@@ -1,4 +1,4 @@
-// LINE の Messaging API のモック。送信を sent.jsonl に記録し、画像の本体として赤い PNG を返す
+// LINE の Messaging API のモック。送信を sent.jsonl に記録し（文面は 2000 文字まで。承認依頼の ID が切れないように）、画像の本体として赤い PNG を返す
 import { appendFileSync } from "node:fs"
 import { png } from "../fixtures/png.ts"
 const log = process.argv[2]!
@@ -13,7 +13,7 @@ Bun.serve({
     if (req.method === "GET") return Response.json({ displayName: url.pathname.includes("Uaaa") ? "アリス" : "ボブ" })
     const body = await req.json() as { to?: string; replyToken?: string; messages?: { type: string; text?: string; quickReply?: unknown; originalContentUrl?: string }[] }
     const kind = url.pathname.split("/").pop()
-    appendFileSync(log, JSON.stringify({ kind, to: body.to?.slice(0, 4), messages: body.messages?.map((m) => ({ type: m.type, text: m.text?.slice(0, 300), quick: !!m.quickReply, image: m.originalContentUrl })) }) + "\n")
+    appendFileSync(log, JSON.stringify({ kind, to: body.to?.slice(0, 4), messages: body.messages?.map((m) => ({ type: m.type, text: m.text?.slice(0, 2000), quick: !!m.quickReply, image: m.originalContentUrl })) }) + "\n")
     return Response.json({ sentMessages: (body.messages ?? []).map(() => ({ id: String(900000 + ++n), quoteToken: `q${n}` })) })
   },
 })
