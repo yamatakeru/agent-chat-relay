@@ -38,7 +38,8 @@
     "relay": "bin/agent-chat-relay",
     "test": "bun test",
     "check": "tsc --noEmit && oxlint && bun --no-env-file --config=/dev/null scripts/check.ts",
-    "docs:adr": "bun --no-env-file --config=/dev/null scripts/adr-index.ts"
+    "docs:adr": "bun --no-env-file --config=/dev/null scripts/adr-index.ts",
+    "mutation": "scripts/mutation.sh"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.101.0",
@@ -49,6 +50,7 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
+    "fallow": "3.44.0",
     "fast-check": "4.10.3",
     "oxlint": "1.94.0",
     "oxlint-tsgolint": "7.0.2007",

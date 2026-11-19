@@ -22,6 +22,7 @@ agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました�
 | [0018](adr/0018-steer-messages-into-running-turn.md) | 作業中に届いた発言は、ハーネスが対応していれば、そのターンに差し込む |
 | [0019](adr/0019-distribute-as-cli.md) | 中継を、どこからでも起動できる CLI として配布する |
 | [0020](adr/0020-lint-with-oxlint.md) | 一般の lint は Oxlint で行い、型の情報を使う検査も `bun run check` で動かす |
+| [0021](adr/0021-mutation-testing-with-fallow.md) | 変更した行のミューテーションテストを、fallow で、レビューの補助として行う |
 
 <!-- ADR の一覧ここまで -->
 
