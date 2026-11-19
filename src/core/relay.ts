@@ -74,8 +74,11 @@ export interface Connector {
   send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]>
   /** 承認者の DM へ、実行承認の依頼を送る */
   sendApproval(user: string, text: string, requestId: string, opts?: { always?: boolean }): Promise<void>
-  /** 直前の発言への返事として、短い案内を送る（ペアリングのコードなど）。送れる手段がないときは何もせず、false を返す */
-  notice(room: string, text: string): Promise<boolean>
+  /**
+   * 直前の発言への返事として、短い案内を送る（ペアリングのコードなど）。送れる手段がないときは何もせず、false を返す。
+   * push は、返事として送れないとき、通数を使って送ってよいこと。通数がルームの人数分になるところ（LINE のグループ）では、使わない（ADR 0024）
+   */
+  notice(room: string, text: string, opts?: { push?: boolean }): Promise<boolean>
   /** 添付をローカルに取得し、パスを返す */
   download(room: string, messageId: string, dir: string): Promise<string[]>
   roomName(room: string): Promise<string | undefined>
@@ -129,8 +132,45 @@ const APPROVAL_MARGIN = 50
 /** コネクターの本文の上限の下限。依頼 1 件の題名・答え方・「常に許可」の範囲を省かずに、承認依頼の文面に収めるため */
 const MIN_TEXT = 1000
 const RECORD_LIMIT = 200
-/** session/prompt が失敗したときに、そのターンの発言のルームへ出す知らせ。エラーの中身と会話の中身は出さない（#33） */
-const PROMPT_FAILURE_NOTICE = "今は不調で返事ができません。記録して調べています。"
+/**
+ * ターンの知らせ（ADR 0024）。メンションのあったルームへ、種類ごとに 1 回まで出す。文は固定で、エラーの中身と会話の中身は出さない。
+ * failed：session/prompt が失敗した（ハーネスの異常終了を含む）。approval：承認依頼に答えがないまま時間がたった。
+ * slow：返事もターンの終わりもないまま時間がたった。silent：返事を送らないままターンが終わった
+ */
+export const TURN_NOTICES = {
+  failed: "今は不調で返事ができません。記録して調べています。",
+  approval: "実行の承認を待っているため、作業が止まっています。",
+  slow: "時間がかかっています。止まっている可能性もあります。",
+  silent: "返事を送らないまま、作業を終えました。",
+} as const
+type TurnNoticeKind = keyof typeof TURN_NOTICES
+/** 知らせを出すまでの時間。approval は承認依頼を送ってから、slow はルームの発言を渡してから */
+type NoticeTiming = { approvalMs: number; slowMs: number }
+const NOTICE_TIMING: NoticeTiming = { approvalMs: 10 * 60 * 1000, slowMs: 20 * 60 * 1000 }
+
+/** 管理者が環境変数で変える、知らせを出すまでの時間（分）。決めた範囲の整数以外は、書き間違いとして起動しない */
+export function noticeTimingFromEnv(env: Record<string, string | undefined>): NoticeTiming {
+  return {
+    // 承認依頼は PERMISSION_TIMEOUT_MS で拒否になるので、それより前に知らせる
+    approvalMs: minutes(env, "RELAY_APPROVAL_NOTICE_MIN", NOTICE_TIMING.approvalMs, PERMISSION_TIMEOUT_MS / 60_000 - 1),
+    slowMs: minutes(env, "RELAY_SLOW_NOTICE_MIN", NOTICE_TIMING.slowMs, 24 * 60),
+  }
+}
+
+function minutes(env: Record<string, string | undefined>, name: string, fallback: number, max: number): number {
+  const v = env[name]
+  if (!v) return fallback
+  const n = Number(v)
+  if (!/^\d+$/.test(v) || n < 1 || n > max) throw new Error(`${name} に指定できるのは 1〜${max} の整数（分）です（今は ${JSON.stringify(v)}）`)
+  return n * 60_000
+}
+
+/** ターンに渡した発言のルームごとの状態 */
+type TurnRoom = { mentioned: boolean; replied: boolean; notified: Set<TurnNoticeKind>; slow?: Timer }
+
+function stopSlowTimers(turn: Map<string, TurnRoom>): void {
+  for (const r of turn.values()) clearTimeout(r.slow)
+}
 
 const INSTRUCTIONS = [
   "あなたは、業務チャットのルームにつながったエージェントです。複数のルームの発言が、1 つの会話としてここに届きます。",
@@ -149,13 +189,13 @@ const INSTRUCTIONS = [
 
 type PendingRequest = { id: string; req: PermissionRequest; resolve: (v: Verdict) => void }
 /** 承認依頼の束。送るまでは opened、送ったあとは id で答えられる */
-type Batch = { id: string; items: PendingRequest[]; opened: number; timeout: Timer; flush?: Timer }
+type Batch = { id: string; items: PendingRequest[]; opened: number; timeout: Timer; flush?: Timer; waiting?: Timer }
 
 export class Relay {
   private readonly connectors = new Map<string, Connector>()
   /** 中継が受けた発言と送った発言の記録（メモリだけ）。どのサービスでも記録するが、fetch_messages で読むのは、履歴を読めないコネクターのときだけ */
   private readonly records = new Map<string, ChatMessage[]>()
-  private readonly queue: ChatMessage[] = []
+  private readonly queue: Incoming[] = []
   /** 送った承認依頼の束（束の ID から） */
   private readonly batches = new Map<string, Batch>()
   /** まだ送っていない束 */
@@ -167,6 +207,12 @@ export class Relay {
   /** 差し込みに失敗したら、以後は使わない */
   private steerable = true
   private introduced = false
+  /** 作業中のターンに渡した発言のルーム。ターンの知らせ（ADR 0024）に使う */
+  private turn?: Map<string, TurnRoom>
+  /** 送っている途中の知らせ。中継が止まる前に待つ */
+  private readonly sending = new Set<Promise<void>>()
+  /** run() が動いていれば、その Promise */
+  private runningTurns?: Promise<void>
 
   constructor(
     private readonly access: AccessStore,
@@ -174,6 +220,7 @@ export class Relay {
     /** reply で送れるファイルの置き場所（作業ディレクトリ）。ない場合はファイルを送れない（ADR 0009） */
     private readonly workspace?: string,
     private readonly batching = BATCHING,
+    private readonly timing = NOTICE_TIMING,
   ) {}
 
   addConnector(c: Connector): void {
@@ -274,6 +321,7 @@ export class Relay {
     // 依頼が 1 つなら、その依頼の ID をそのまま束の ID にする
     b.id = b.items.length === 1 ? b.items[0]!.id : this.newPermissionId()
     this.batches.set(b.id, b)
+    b.waiting = setTimeout(() => this.noticeTurn("approval"), this.timing.approvalMs)
     for (const user of this.access.load().allowFrom) this.sendBatchTo(user, b)
   }
 
@@ -308,6 +356,7 @@ export class Relay {
     b.items = b.items.filter((i) => !items.includes(i))
     if (b.items.length > 0) return
     clearTimeout(b.timeout)
+    clearTimeout(b.waiting)
     this.batches.delete(b.id)
   }
 
@@ -354,6 +403,7 @@ export class Relay {
     const paths = sendablePaths(files, this.workspace)
     checkFiles(c, paths)
     const ids = await c.send(room, text, { replyTo, files: paths })
+    this.replied(room)
     const attachments = paths.map((p) => ({ name: basename(p), type: "file" }))
     this.record({ id: ids[0] ?? `sent-${Date.now()}`, room, sender: "me", text, ts: Date.now(), attachments, fromMe: true })
     return ids
@@ -401,23 +451,28 @@ export class Relay {
     this.arrived?.()
     if (this.running || !this.session || this.queue.length === 0) return
     this.running = true
-    void this.run()
+    this.runningTurns = this.run()
   }
 
   private async run(): Promise<void> {
     try {
       while (this.session && this.queue.length > 0) {
         const batch = this.queue.splice(0)
-        // このターンに渡した発言のルーム（差し込めた発言の分も足す）
-        const rooms = new Set(batch.map((m) => m.room))
         const text = await this.render(batch)
+        const turnRooms = new Map<string, TurnRoom>()
+        this.turn = turnRooms
+        this.delivered(turnRooms, batch)
         let failed = false
-        const turn = this.session.prompt(text).catch((err) => {
-          failed = true
-          this.log.error("セッションへの入力に失敗しました", { error: String(err) })
-        })
-        await this.steerUntil(this.session, turn, rooms)
-        if (failed) for (const room of rooms) void this.promptFailureNotice(room)
+        const turn = this.session
+          .prompt(text)
+          .catch((err) => {
+            failed = true
+            this.log.error("セッションへの入力に失敗しました", { error: String(err) })
+          })
+          // 差し込みの結果を待つ間にターンが終わっても、時間のたった知らせを出さない
+          .finally(() => stopSlowTimers(turnRooms))
+        await this.steerUntil(this.session, turn, turnRooms)
+        this.endTurn(turnRooms, failed)
       }
     } finally {
       this.running = false
@@ -430,7 +485,7 @@ export class Relay {
    * 差し込みの結果を待つ間にターンが終わったら、次の発言は差し込まず、次のターンで渡す（#50）。
    * 差し込めた発言のルームは、rooms に足す
    */
-  private async steerUntil(session: Session, turn: Promise<void>, rooms: Set<string>): Promise<void> {
+  private async steerUntil(session: Session, turn: Promise<void>, rooms: Map<string, TurnRoom>): Promise<void> {
     const steer = session.steer?.bind(session)
     if (!steer || !this.steerable) return turn
     let done = false
@@ -445,7 +500,7 @@ export class Relay {
         try {
           const text = await this.render(batch)
           if (!done && (await steer(text))) {
-            for (const m of batch) rooms.add(m.room)
+            this.delivered(rooms, batch)
             continue
           }
         } catch (err) {
@@ -503,16 +558,68 @@ export class Relay {
       .catch((err) => this.log.error("ペアリングのコードを送れませんでした", { error: String(err) }))
   }
 
-  private async promptFailureNotice(room: string): Promise<void> {
-    await this.connector(room)
-      ?.notice(room, PROMPT_FAILURE_NOTICE)
+  // ---- ターンの知らせ（ADR 0024） ----
+
+  /** ターンに渡した発言のルームを足す。ルームに最初のメンションを渡してから slowMs、返事もターンの終わりもなければ、知らせる */
+  private delivered(turn: Map<string, TurnRoom>, batch: Incoming[]): void {
+    for (const m of batch) {
+      const r = turn.get(m.room) ?? { mentioned: false, replied: false, notified: new Set() }
+      turn.set(m.room, r)
+      r.mentioned ||= m.mentioned
+      if (r.mentioned) r.slow ??= setTimeout(() => this.noticeRoom(m.room, r, "slow"), this.timing.slowMs)
+    }
+  }
+
+  /** そのターンで、ルームへ返事した */
+  private replied(room: string): void {
+    const r = this.turn?.get(room)
+    if (r) r.replied = true
+  }
+
+  private endTurn(turn: Map<string, TurnRoom>, failed: boolean): void {
+    // 時間のたった知らせを、次のターンに持ち越さない
+    stopSlowTimers(turn)
+    for (const [room, r] of turn) this.noticeRoom(room, r, failed ? "failed" : "silent")
+    this.turn = undefined
+  }
+
+  /** 作業中のターンのルームすべてに知らせる */
+  private noticeTurn(kind: TurnNoticeKind): void {
+    for (const [room, r] of this.turn ?? []) this.noticeRoom(room, r, kind)
+  }
+
+  /**
+   * メンションのあったルームにだけ、種類ごとに 1 回まで知らせる。受信モードが「すべて」のルームの雑談では、だれも返事を待っていない。
+   * 時間がかかっていることと、返事のない終わりは、そのターンにルームへ返事していれば知らせない
+   */
+  private noticeRoom(room: string, r: TurnRoom, kind: TurnNoticeKind): void {
+    if (!r.mentioned || r.notified.has(kind)) return
+    if ((kind === "slow" || kind === "silent") && r.replied) return
+    r.notified.add(kind)
+    const p = this.connector(room)
+      ?.notice(room, TURN_NOTICES[kind], { push: true })
       .then(
-        (sent) =>
-          sent
-            ? this.log.info("返事ができないことを、ルームに知らせました", { room })
-            : this.log.info("返事ができないことを、ルームに知らせる手段がないため、知らせませんでした", { room }),
-        (err) => this.log.error("返事ができないことを、ルームに知らせられませんでした", { room, error: String(err) }),
+        (sent) => (sent ? this.log.info("ルームに知らせました", { room, kind }) : this.log.info("ルームに知らせる手段がないため、知らせませんでした", { room, kind })),
+        (err) => this.log.error("ルームに知らせられませんでした", { room, kind, error: String(err) }),
       )
+    if (!p) return
+    this.sending.add(p)
+    void p.finally(() => this.sending.delete(p))
+  }
+
+  /**
+   * 作業中のターンが終わり、知らせを送り終わるまで待つ（最大 timeoutMs）。ハーネスが落ちたとき、中継を止める前に呼ぶ。
+   * ターンは、ハーネスとの接続が切れると失敗で終わる
+   */
+  async drain(timeoutMs: number): Promise<void> {
+    let timer: Timer | undefined
+    const timeout = new Promise<void>((r) => (timer = setTimeout(r, timeoutMs)))
+    const settled = (async () => {
+      await this.runningTurns
+      await Promise.allSettled(this.sending)
+    })()
+    await Promise.race([settled, timeout])
+    clearTimeout(timer)
   }
 
   private connector(id: string): Connector | undefined {

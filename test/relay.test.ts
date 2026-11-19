@@ -13,10 +13,11 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import type { PermissionOption } from "@agentclientprotocol/sdk"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, type Log, type PermissionRequest, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
+import { type Capabilities, type ChatMessage, type Connector, type Incoming, type Log, type PermissionRequest, noticeTimingFromEnv, Relay, type Session, sendablePaths, TURN_NOTICES, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
+import { DRAIN_MS, stopper, untilHarnessExits } from "../src/shutdown.ts"
 import pkg from "../package.json" with { type: "json" }
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
@@ -47,6 +48,23 @@ const ROOM = "line:C0000000000000000000000000000000a"
 const ALICE = "line:U0000000000000000000000000000000a"
 const BOB = "line:U0000000000000000000000000000000b"
 
+/**
+ * 最初のターンを終えず、以後の発言は差し込んで受けるセッション。渡した発言は prompts に入る。
+ * ターンが終わらないので、返事のないままターンが終わったという知らせ（ADR 0024）を出さない。コネクターのテストで使う
+ */
+function workingSession(prompts: string[]): Session {
+  return {
+    prompt: (t) => {
+      prompts.push(t)
+      return new Promise<void>(() => {})
+    },
+    steer: async (t) => {
+      prompts.push(t)
+      return true
+    },
+  }
+}
+
 function msg(over: Partial<Incoming> = {}): Incoming {
   return { id: String(now++), room: ROOM, sender: ALICE, text: "hi", ts: now, attachments: [], isDM: false, mentioned: true, ...over }
 }
@@ -61,7 +79,7 @@ class FakeConnector implements Connector {
   async start() {}
   stop() {}
   sent: { room: string; text: string }[] = []
-  notices: { room: string; text: string }[] = []
+  notices: { room: string; text: string; push?: boolean }[] = []
   approvals: { user: string; text: string; id: string; always?: boolean }[] = []
   async send(room: string, text: string) {
     this.sent.push({ room, text })
@@ -72,9 +90,9 @@ class FakeConnector implements Connector {
   }
   /** false にすると、送る手段がない（LINE の Reply トークンがない）ときのように、送らずに false を返す */
   canNotice = true
-  async notice(room: string, text: string) {
+  async notice(room: string, text: string, opts?: { push?: boolean }) {
     if (!this.canNotice) return false
-    this.notices.push({ room, text })
+    this.notices.push({ room, text, ...(opts?.push ? { push: true } : {}) })
     return true
   }
   async download() {
@@ -307,10 +325,7 @@ describe("relay", () => {
     expect(s.prompts[1]).toContain("three")
   })
 
-  const PROMPT_FAILURE_NOTICE = "今は不調で返事ができません。記録して調べています。"
-  const ROOM2 = "line:C0000000000000000000000000000000b"
-
-  /** 最初のターンを fail() または finish() まで終わらせないセッション。steer は、結果を results の順に返す（尽きたら true） */
+  /** 最初のターンを fail() か finish() まで終わらせないセッション。steer は、結果を results の順に返す（尽きたら true） */
   function heldSession(results: boolean[] = []) {
     const prompts: string[] = []
     let finish!: () => void
@@ -329,81 +344,288 @@ describe("relay", () => {
     return { session, prompts, finish: () => finish(), fail: (err: Error) => fail(err) }
   }
 
-  test("session/prompt が失敗したら、そのターンの発言のルームに、固定の知らせを 1 回だけ出す（#33）", async () => {
-    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
-    const { relay, conn } = setup({ info: (msg, extra) => void logs.push({ msg, extra }), error: () => {} })
-    // 同じルームの 2 つの発言を、同じターンで渡す
-    relay.receive(msg({ text: "one" }))
-    relay.receive(msg({ text: "two" }))
-    relay.attach({ prompt: () => Promise.reject(new Error("secret detail")) })
-    await Bun.sleep(0)
-    expect(conn.notices).toEqual([{ room: ROOM, text: PROMPT_FAILURE_NOTICE }])
-    expect(logs).toContainEqual({ msg: "返事ができないことを、ルームに知らせました", extra: { room: ROOM } })
-  })
+  describe("ターンの知らせ（ADR 0024）", () => {
+    const ROOM2 = "line:C0000000000000000000000000000000b"
+    const ROOM3 = "line:C0000000000000000000000000000000c"
+    type Entry = { msg: string; extra?: Record<string, unknown> }
 
-  test("そのターンに差し込んだ別のルームにも知らせを出し、差し込めずに次のターンへ回した発言のルームには出さない", async () => {
-    const { relay, conn } = setup()
-    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] }, [ROOM2]: { requireMention: true, allowFrom: [] } }, pending: {} })
-    const s = heldSession([true, true, false])
-    relay.attach(s.session)
-    relay.receive(msg({ text: "one" }))
-    await Bun.sleep(0)
-    relay.receive(msg({ room: ROOM2, text: "two" }))
-    await Bun.sleep(0)
-    relay.receive(msg({ text: "three" }))
-    await Bun.sleep(0)
-    // 差し込めなかった発言（承認者の DM）は、次のターンで渡る
-    relay.receive(msg({ room: ALICE, isDM: true, text: "four" }))
-    await Bun.sleep(0)
-    s.fail(new Error("harness error"))
-    await Bun.sleep(0)
-    expect(s.prompts).toHaveLength(2)
-    expect(s.prompts[1]).toContain("four")
-    expect(conn.notices).toEqual([
-      { room: ROOM, text: PROMPT_FAILURE_NOTICE },
-      { room: ROOM2, text: PROMPT_FAILURE_NOTICE },
-    ])
-  })
+    function setupTurn(timing = { approvalMs: 60_000, slowMs: 60_000 }) {
+      const logs: Entry[] = []
+      const errors: Entry[] = []
+      const relay = new Relay(access, { info: (msg, extra) => void logs.push({ msg, extra }), error: (msg, extra) => void errors.push({ msg, extra }) }, undefined, NO_WAIT, timing)
+      const conn = new FakeConnector()
+      relay.addConnector(conn)
+      access.save({
+        allowFrom: [ALICE],
+        rooms: { [ROOM]: { requireMention: true, allowFrom: [] }, [ROOM2]: { requireMention: true, allowFrom: [] }, [ROOM3]: { requireMention: false, allowFrom: [] } },
+        pending: {},
+      })
+      return { relay, conn, logs, errors }
+    }
 
-  test("知らせを送る手段がなければ、知らせたとはログに書かない", async () => {
-    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
-    const { relay, conn } = setup({ info: (msg, extra) => void logs.push({ msg, extra }), error: () => {} })
-    conn.canNotice = false
-    relay.receive(msg({ text: "one" }))
-    relay.attach({ prompt: () => Promise.reject(new Error("harness error")) })
-    await Bun.sleep(0)
-    expect(logs).toContainEqual({ msg: "返事ができないことを、ルームに知らせる手段がないため、知らせませんでした", extra: { room: ROOM } })
-    expect(logs.map((l) => l.msg)).not.toContain("返事ができないことを、ルームに知らせました")
-  })
+    test("session/prompt が失敗したら、メンションのあったルームに 1 回だけ、Push してよいとして知らせる（#33）", async () => {
+      const { relay, conn, logs } = setupTurn()
+      // 同じルームの 2 つの発言と、受信モードが「すべて」のルームの、メンションのない発言を、同じターンで渡す
+      relay.receive(msg({ text: "one" }))
+      relay.receive(msg({ text: "two" }))
+      relay.receive(msg({ room: ROOM3, text: "chat", mentioned: false }))
+      relay.attach({ prompt: () => Promise.reject(new Error("secret detail")) })
+      await Bun.sleep(0)
+      expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.failed, push: true }])
+      expect(logs).toContainEqual({ msg: "ルームに知らせました", extra: { room: ROOM, kind: "failed" } })
+    })
 
-  test("session/prompt が成功したら、知らせを出さない", async () => {
-    const { relay, conn } = setup()
-    const s = heldSession()
-    relay.attach(s.session)
-    relay.receive(msg({ text: "one" }))
-    await Bun.sleep(0)
-    relay.receive(msg({ text: "two" }))
-    await Bun.sleep(0)
-    s.finish()
-    await Bun.sleep(0)
-    expect(conn.notices).toHaveLength(0)
-  })
+    test("そのターンに差し込んだ別のルームにも知らせ、差し込めずに次のターンへ回した発言のルームには知らせない", async () => {
+      const { relay, conn } = setupTurn()
+      const s = heldSession([true, true, false])
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ room: ROOM2, text: "two" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ text: "three" }))
+      await Bun.sleep(0)
+      // 差し込めなかった発言（承認者の DM）は、次のターンで渡る
+      relay.receive(msg({ room: ALICE, isDM: true, text: "four" }))
+      await Bun.sleep(0)
+      s.fail(new Error("harness error"))
+      await Bun.sleep(0)
+      expect(s.prompts).toHaveLength(2)
+      expect(s.prompts[1]).toContain("four")
+      // 承認者の DM には、失敗ではなく、次のターン（返事のないまま終わった）の分だけを知らせる
+      expect(conn.notices).toEqual([
+        { room: ROOM, text: TURN_NOTICES.failed, push: true },
+        { room: ROOM2, text: TURN_NOTICES.failed, push: true },
+        { room: ALICE, text: TURN_NOTICES.silent, push: true },
+      ])
+    })
 
-  test("知らせを出せなくてもログに書くだけで、後続の発言は渡す", async () => {
-    const errors: { msg: string; extra?: Record<string, unknown> }[] = []
-    const { relay, conn } = setup({ info: () => {}, error: (msg, extra) => void errors.push({ msg, extra }) })
-    conn.notice = () => Promise.reject(new Error("notice failed"))
-    const s = heldSession()
-    relay.attach(s.session)
-    relay.receive(msg({ text: "one" }))
-    await Bun.sleep(0)
-    s.fail(new Error("harness error"))
-    await Bun.sleep(0)
-    expect(errors).toContainEqual({ msg: "返事ができないことを、ルームに知らせられませんでした", extra: { room: ROOM, error: "Error: notice failed" } })
-    relay.receive(msg({ text: "two" }))
-    await Bun.sleep(0)
-    expect(s.prompts).toHaveLength(2)
-    expect(s.prompts[1]).toContain("two")
+    test("返事をしてターンが終わったら知らせず、返事のないまま終わったら、メンションのあったルームに知らせる", async () => {
+      const { relay, conn } = setupTurn()
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ room: ROOM2, text: "two" }))
+      relay.receive(msg({ room: ROOM3, text: "chat", mentioned: false }))
+      await Bun.sleep(0)
+      await relay.reply(ROOM, "どうぞ")
+      s.finish()
+      await Bun.sleep(0)
+      expect(conn.notices).toEqual([{ room: ROOM2, text: TURN_NOTICES.silent, push: true }])
+    })
+
+    test("返事もターンの終わりもないまま時間がたったら、1 回だけ知らせる。返事をしたルームには知らせない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      relay.receive(msg({ room: ROOM2, text: "two" }))
+      await Bun.sleep(0)
+      await relay.reply(ROOM2, "調べます")
+      await Bun.sleep(80)
+      expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.slow, push: true }])
+      // 種類が違えば、同じルームにも知らせる。返事をしたルームにも、返事のない終わりは知らせない
+      s.finish()
+      await Bun.sleep(0)
+      expect(conn.notices).toEqual([
+        { room: ROOM, text: TURN_NOTICES.slow, push: true },
+        { room: ROOM, text: TURN_NOTICES.silent, push: true },
+      ])
+    })
+
+    test("返事をしたルームに、あとから差し込んだ発言があっても、そのターンは返事をしたものとして扱う", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      await relay.reply(ROOM, "調べます")
+      relay.receive(msg({ text: "あと、これも" }))
+      await Bun.sleep(80)
+      s.finish()
+      await Bun.sleep(0)
+      expect(s.prompts).toHaveLength(1)
+      expect(conn.notices).toHaveLength(0)
+    })
+
+    test("差し込みの結果を待つ間にターンが終わったら、時間のたった知らせを出さない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      let finish!: () => void
+      let steered!: (ok: boolean) => void
+      relay.attach({
+        prompt: () => new Promise<void>((r) => (finish = r)),
+        steer: () => new Promise<boolean>((r) => (steered = r)),
+      })
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ text: "two" }))
+      await Bun.sleep(0)
+      finish()
+      await Bun.sleep(80)
+      steered(false)
+      await Bun.sleep(0)
+      expect(conn.notices.map((n) => n.text)).not.toContain(TURN_NOTICES.slow)
+    })
+
+    test("ターンが終わってから差し込めたと返ったルームにも、時間のたった知らせを、あとから出さない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      let finish!: () => void
+      let steered!: (ok: boolean) => void
+      relay.attach({
+        prompt: () => new Promise<void>((r) => (finish = r)),
+        steer: () => new Promise<boolean>((r) => (steered = r)),
+      })
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ room: ROOM2, text: "two" }))
+      await Bun.sleep(0)
+      finish()
+      await Bun.sleep(0)
+      steered(true)
+      await Bun.sleep(80)
+      expect(conn.notices.map((n) => n.text)).not.toContain(TURN_NOTICES.slow)
+    })
+
+    test("終わったターンの時間の知らせは、あとから出さない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      s.finish()
+      await Bun.sleep(80)
+      expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.silent, push: true }])
+    })
+
+    test("承認依頼に答えがないまま時間がたったら、ターンのルームに 1 回だけ知らせる。答えれば知らせない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 30, slowMs: 60_000 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      // すぐに答えた依頼では、知らせない
+      const quick = relay.requestPermission({ title: "Bash", input: "date" })
+      await Bun.sleep(5)
+      relay.answer(ALICE, conn.approvals[0]!.id, "allow")
+      expect(await quick).toBe("allow")
+      await Bun.sleep(80)
+      expect(conn.notices).toHaveLength(0)
+      conn.approvals.length = 0
+      const first = relay.requestPermission({ title: "Bash", input: "ls" })
+      const second = relay.requestPermission({ title: "Bash", input: "pwd" })
+      await Bun.sleep(80)
+      expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.approval, push: true }])
+      expect(conn.approvals).toHaveLength(1)
+      relay.answer(ALICE, conn.approvals[0]!.id, "allow")
+      expect(await first).toBe("allow")
+      expect(await second).toBe("allow")
+      // 答えた依頼の分は、もう知らせない
+      const third = relay.requestPermission({ title: "Bash", input: "id" })
+      await Bun.sleep(5)
+      expect(conn.approvals).toHaveLength(2)
+      relay.answer(ALICE, conn.approvals.at(-1)!.id, "deny")
+      expect(await third).toBe("deny")
+      await Bun.sleep(80)
+      expect(conn.notices).toHaveLength(1)
+    })
+
+    test("返事をしたルームにも、承認待ちと失敗は知らせる。承認待ちは、束が分かれても 1 回だけ", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 30, slowMs: 60_000 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      await relay.reply(ROOM, "調べます")
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "pwd" })
+      await Bun.sleep(80)
+      expect(conn.approvals).toHaveLength(2)
+      s.fail(new Error("harness error"))
+      await Bun.sleep(0)
+      expect(conn.notices).toEqual([
+        { room: ROOM, text: TURN_NOTICES.approval, push: true },
+        { room: ROOM, text: TURN_NOTICES.failed, push: true },
+      ])
+    })
+
+    test("時間がかかっていることは、ルームに最初のメンションを渡してから数える", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 150 })
+      const s = heldSession()
+      relay.attach(s.session)
+      // 受信モードが「すべて」のルームの、メンションのない発言のあとに、メンションを差し込む
+      relay.receive(msg({ room: ROOM3, text: "chat", mentioned: false }))
+      await Bun.sleep(100)
+      relay.receive(msg({ room: ROOM3, text: "お願い" }))
+      await Bun.sleep(100)
+      expect(conn.notices).toHaveLength(0)
+      await Bun.sleep(100)
+      expect(conn.notices).toEqual([{ room: ROOM3, text: TURN_NOTICES.slow, push: true }])
+    })
+
+    test("知らせを送る手段がなければ、知らせたとはログに書かない", async () => {
+      const { relay, conn, logs } = setupTurn()
+      conn.canNotice = false
+      relay.receive(msg({ text: "one" }))
+      relay.attach({ prompt: () => Promise.reject(new Error("harness error")) })
+      await Bun.sleep(0)
+      expect(logs).toContainEqual({ msg: "ルームに知らせる手段がないため、知らせませんでした", extra: { room: ROOM, kind: "failed" } })
+      expect(logs.map((l) => l.msg)).not.toContain("ルームに知らせました")
+    })
+
+    test("知らせを出せなくてもログに書くだけで、後続の発言は渡す", async () => {
+      const { relay, conn, errors } = setupTurn()
+      conn.notice = () => Promise.reject(new Error("notice failed"))
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      s.fail(new Error("harness error"))
+      await Bun.sleep(0)
+      expect(errors).toContainEqual({ msg: "ルームに知らせられませんでした", extra: { room: ROOM, kind: "failed", error: "Error: notice failed" } })
+      relay.receive(msg({ text: "two" }))
+      await Bun.sleep(0)
+      expect(s.prompts).toHaveLength(2)
+      expect(s.prompts[1]).toContain("two")
+    })
+
+    test("drain は、作業中のターンが終わり、知らせを送り終わるまで待つ。終わらなければ timeoutMs で戻る", async () => {
+      const { relay, conn } = setupTurn()
+      let release!: () => void
+      conn.notice = async (room, text) => {
+        await new Promise<void>((r) => (release = r))
+        conn.notices.push({ room, text })
+        return true
+      }
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      const t0 = Date.now()
+      await relay.drain(30)
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(25)
+      const drained = relay.drain(5000)
+      s.fail(new Error("harness exited"))
+      await Bun.sleep(0)
+      let done = false
+      void drained.then(() => (done = true))
+      await Bun.sleep(20)
+      expect(done).toBe(false)
+      release()
+      await drained
+      expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.failed }])
+    })
+
+    test("知らせを出すまでの時間は、環境変数で分を指定する。範囲の外や整数でなければ起動しない", () => {
+      expect(noticeTimingFromEnv({})).toEqual({ approvalMs: 10 * 60_000, slowMs: 20 * 60_000 })
+      // 空の値は、ほかの環境変数と同じく、指定なしとして扱う
+      expect(noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: "", RELAY_SLOW_NOTICE_MIN: "" })).toEqual({ approvalMs: 10 * 60_000, slowMs: 20 * 60_000 })
+      expect(noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: "29", RELAY_SLOW_NOTICE_MIN: "1" })).toEqual({ approvalMs: 29 * 60_000, slowMs: 60_000 })
+      // 承認依頼は 30 分で拒否になるので、それより前でなければならない
+      for (const v of ["0", "30", "1.5", "abc", "-1", " 5"]) expect(() => noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: v })).toThrow("RELAY_APPROVAL_NOTICE_MIN に指定できるのは 1〜29 の整数")
+      expect(() => noticeTimingFromEnv({ RELAY_SLOW_NOTICE_MIN: "1441" })).toThrow("RELAY_SLOW_NOTICE_MIN に指定できるのは 1〜1440 の整数")
+    })
   })
 
   test("本文と属性は無害化して渡す", async () => {
@@ -1244,6 +1466,92 @@ describe("ハーネスの起動と再開", () => {
     await expect(h.session.prompt("x".repeat(8 << 20))).rejects.toThrow()
     expect(await h.exited).toBe(3)
   })
+
+  test("作業中にハーネスが落ちたら、ターンは失敗で終わり、中継はルームへの知らせを送り終わってから止まる（ADR 0024）", async () => {
+    const h = await startHarness(
+      {
+        command: [...BUN_ISOLATED, join(import.meta.dir, "fixtures/acp-agent.ts")],
+        env: { FAKE_ACP: JSON.stringify({ crash: true }) },
+        cwd: dir,
+        mcp: MCP,
+        meta: META,
+        mode: "auto",
+        stderrPath: join(dir, "harness.log"),
+      },
+      async () => "deny",
+      { info: () => {}, error: () => {} },
+    )
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: true, allowFrom: [] } }, pending: {} })
+    const relay = new Relay(access, quiet, undefined, NO_WAIT)
+    const conn = new FakeConnector()
+    // 知らせの送信に時間がかかっても、送り終わるまで待つ
+    const send = conn.notice.bind(conn)
+    conn.notice = async (room, text, opts) => {
+      await Bun.sleep(50)
+      return send(room, text, opts)
+    }
+    relay.addConnector(conn)
+    relay.attach(h.session)
+    relay.receive(msg({ text: "調べて" }))
+    const errors: string[] = []
+    const code = await untilHarnessExits({ exited: h.exited, name: "fake", logPath: join(dir, "harness.log") }, relay, stopper(() => {}), { info: () => {}, error: (m) => void errors.push(m) })
+    expect(code).toBe(1)
+    expect(errors[0]).toContain("ハーネスが異常終了したため")
+    expect(conn.notices).toEqual([{ room: ROOM, text: TURN_NOTICES.failed, push: true }])
+  })
+})
+
+describe("中継の止まり方（ADR 0024）", () => {
+  const exited = (code: number) => ({ exited: Promise.resolve(code), name: "fake", logPath: join(dir, "harness.log") })
+  const never = new Promise<void>(() => {})
+
+  test("異常終了なら、ハーネスのログの最後の 20 行を出し、知らせを待つ上限を渡して待つ。待っている間に止められたら、待つのをやめる", async () => {
+    writeFileSync(join(dir, "harness.log"), Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
+    const printed: unknown[] = []
+    const original = console.error
+    console.error = (...a: unknown[]) => void printed.push(...a)
+    const waits: number[] = []
+    const stop = stopper(() => {})
+    let done: Promise<number>
+    try {
+      done = untilHarnessExits(exited(4), { drain: (ms) => (waits.push(ms), never) }, stop, quiet)
+      await Bun.sleep(0)
+    } finally {
+      console.error = original
+    }
+    expect(printed).toEqual([Array.from({ length: 20 }, (_, i) => `line ${i + 6}`).join("\n")])
+    await Bun.sleep(10)
+    expect(waits).toEqual([DRAIN_MS])
+    let returned = false
+    void done.then(() => (returned = true))
+    await Bun.sleep(10)
+    expect(returned).toBe(false)
+    stop.stop()
+    expect(await done).toBe(1)
+  })
+
+  test("管理者が止めたら、知らせを待たない。ハーネスが自分で終わったら、終了コードによらず待つ", async () => {
+    let drained = 0
+    const relay = { drain: () => (drained++, never) }
+    const stop = stopper(() => {})
+    stop.stop()
+    const infos: unknown[] = []
+    expect(await untilHarnessExits(exited(143), relay, stop, { info: (m, e) => void infos.push([m, e]), error: () => {} })).toBe(1)
+    expect(infos).toEqual([["ハーネスが終了したため、中継も止めます", { harness: "fake", code: 143 }]])
+    // 終了コードが 0 でも、管理者が止めたのでなければ、作業中だったターンの知らせを待つ
+    expect(await untilHarnessExits(exited(0), { drain: async () => void drained++ }, stopper(() => {}), quiet)).toBe(0)
+    expect(drained).toBe(1)
+  })
+
+  test("停止の合図は、何度届いても 1 回だけ扱う", () => {
+    let calls = 0
+    const stop = stopper(() => calls++)
+    expect(stop.stopping).toBe(false)
+    stop.stop()
+    stop.stop()
+    expect(stop.stopping).toBe(true)
+    expect(calls).toBe(1)
+  })
 })
 
 describe("serve の引数", () => {
@@ -1322,13 +1630,15 @@ describe("line", () => {
     }
   })
 
-  test("案内は Reply でだけ送り、使える Reply トークンがなければ送らずに false を返す", async () => {
+  test("案内は Reply で送り、使える Reply トークンがなければ送らずに false を返す。Push してよいときも、Push は 1 対 1 のトークだけ", async () => {
     const paths: string[] = []
+    const bodies: unknown[] = []
     const api = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(req) {
+      async fetch(req) {
         paths.push(new URL(req.url).pathname)
+        bodies.push(await req.json().catch(() => ({})))
         return new Response("{}", { status: 200 })
       },
     })
@@ -1340,6 +1650,14 @@ describe("line", () => {
       paths.length = 0
       expect(await line.notice(ROOM, "案内")).toBe(true)
       expect(paths).toEqual(["/v2/bot/message/reply"])
+      // Push してよいとされても、グループでは Push しない。1 対 1 のトークでは Push する（ADR 0024）
+      paths.length = 0
+      expect(await line.notice(ROOM, "知らせ", { push: true })).toBe(false)
+      expect(paths).toEqual([])
+      expect(await line.notice(ALICE, "知らせ")).toBe(false)
+      expect(await line.notice(ALICE, "知らせ", { push: true })).toBe(true)
+      expect(paths).toEqual(["/v2/bot/message/push"])
+      expect(bodies.at(-1)).toMatchObject({ to: ALICE.slice(5), messages: [{ type: "text", text: "知らせ" }] })
     } finally {
       void api.stop()
     }
@@ -1615,7 +1933,7 @@ describe("chatwork", () => {
     access.save({ allowFrom: ["chatwork:u1"], rooms: { "chatwork:r7000": { requireMention: true, allowFrom: [] } }, pending: {} })
     const relay = new Relay(access, quiet, dir)
     const prompts: string[] = []
-    relay.attach({ prompt: async (t) => void prompts.push(t) })
+    relay.attach(workingSession(prompts))
     // 起動は Unix 時刻 1000 秒
     const cw = new ChatworkConnector({ apiToken: "t", apiBase: api.server.url.href }, relay, quiet, () => 1_000_000)
     relay.addConnector(cw)
@@ -1709,7 +2027,7 @@ describe("discord", () => {
     access.save({ allowFrom: [ALICE_D], rooms: { "discord:c100": { requireMention: true, allowFrom: [] } }, pending: {} })
     const relay = new Relay(access, quiet, dir, NO_WAIT)
     const prompts: string[] = []
-    relay.attach({ prompt: async (t) => void prompts.push(t) })
+    relay.attach(workingSession(prompts))
     const dc = new DiscordConnector({ token: "t" }, relay, quiet, d.client, () => 1_000_000)
     relay.addConnector(dc)
     await dc.start()

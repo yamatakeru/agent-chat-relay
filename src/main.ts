@@ -14,7 +14,6 @@
 // データの置き場は RELAY_HOME（既定は ~/.agent-chat-relay）。秘密情報は <home>/.env（RELAY_ENV_FILE で変えられる）から読み、環境変数を優先する
 
 import { randomBytes } from "node:crypto"
-import { readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { AccessStore, localId, serviceOf } from "./core/access.ts"
 import { chatworkFromEnv } from "./connectors/chatwork.ts"
@@ -25,7 +24,8 @@ import { startHarness } from "./harness/harness.ts"
 import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
-import { type ConnectorFactory, type Log, Relay, type Routes } from "./core/relay.ts"
+import { type ConnectorFactory, type Log, noticeTimingFromEnv, Relay, type Routes } from "./core/relay.ts"
+import { stopper, untilHarnessExits } from "./shutdown.ts"
 import { relayDir, resolveWorkspace } from "./workspace.ts"
 import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
@@ -52,6 +52,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const env = { ...process.env, ...args.env }
   // 不正な指定は、何も起動しないうちに拒否する
   const harnessOptions = harnessOptionsFromEnv(env)
+  const noticeTiming = noticeTimingFromEnv(env)
   // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）。
   // 秘密情報のファイル自体も渡すのは、ファイルがシンボリックリンクのとき、実体の場所も含めないため
   const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile), envFile])
@@ -61,7 +62,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 受け取った添付は 7 日で消す（ADR 0005）
   schedulePrune(inbox, "受け取った添付", log)
 
-  const relay = new Relay(access, log, workspace)
+  const relay = new Relay(access, log, workspace, undefined, noticeTiming)
   const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
   if (connectors.length === 0) {
     throw new Error("チャットサービスの秘密情報がありません。agent-chat-relay secrets line・secrets chatwork・secrets discord のどれかを実行してください（開発時は scripts/relay.sh secrets）")
@@ -117,25 +118,15 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   relay.attach(harness.session)
 
   // Ctrl+C は、端末と dotenvx の両方から届くことがある
-  let stopping = false
-  const stop = () => {
-    if (stopping) return
-    stopping = true
+  const stop = stopper(() => {
     log.info("停止します")
     harness.stop()
-  }
-  process.on("SIGINT", stop)
-  process.on("SIGTERM", stop)
-  const code = await harness.exited
-  if (code === 0 || stopping) {
-    log.info("ハーネスが終了したため、中継も止めます", { harness: harnessName, code })
-  } else {
-    const tail = readFileSync(harnessLog, "utf8").trimEnd().split("\n").slice(-20).join("\n")
-    log.error(`ハーネスが異常終了したため、中継も止めます。ハーネスのログ：${harnessLog}（最後の 20 行を下に出す）`, { harness: harnessName, code })
-    console.error(tail)
-  }
+  })
+  process.on("SIGINT", stop.stop)
+  process.on("SIGTERM", stop.stop)
+  const code = await untilHarnessExits({ exited: harness.exited, name: harnessName, logPath: harnessLog }, relay, stop, log)
   for (const close of closers) close()
-  process.exit(code === 0 ? 0 : 1)
+  process.exit(code)
 }
 
 /** 秘密情報の項目。サービスごとに、入力してもらう順 */

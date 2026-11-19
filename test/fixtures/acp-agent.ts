@@ -17,6 +17,8 @@ export type FakeAcpConfig = {
   steering?: "injected" | "promptRequired" | "startedNewTurn"
   /** session/new のあと、stdin を読むのをやめ、0.5 秒後に終了コード 3 で終わる（固まってから落ちるハーネス） */
   hang?: boolean
+  /** session/prompt を受けたら、答えずに終了コード 4 で終わる（作業中に落ちるハーネス） */
+  crash?: boolean
   /**
    * session/prompt の中で、この種類と選択肢で session/request_permission を送る。
    * 中継の答えは "PERM <JSON>" として stderr に書く
@@ -99,6 +101,7 @@ const app = acp
   })
   .onRequest("session/prompt", async ({ params, client }) => {
     record("session/prompt", params)
+    if (cfg.crash) process.exit(4)
     if (cfg.permission) {
       const res = await client.request("session/request_permission", {
         sessionId: params.sessionId,

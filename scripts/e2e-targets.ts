@@ -6,7 +6,11 @@
 
 /** e2e の中核（ADR 0023）。line.sh は --full を付けないと、モデルの能力に頼る手順を走らせない */
 export const CORE = ["test/e2e/line.sh claude", "test/e2e/resume.sh claude"]
-const CHATWORK = "test/e2e/chatwork.sh claude"
+/** 中核の外の e2e。そのスクリプトか、それが使うモックと共通の部分を変えたときだけ挙げる（Chatwork は ADR 0023、知らせは ADR 0024） */
+const OPTIONAL = [
+  { script: "test/e2e/chatwork.sh claude", paths: [/^test\/e2e\/(chatwork\.sh|mock-chatwork\.ts|lib\.sh)$/] },
+  { script: "test/e2e/notices.sh claude", paths: [/^test\/e2e\/(notices\.sh|mock-line\.ts|lib\.sh)$/] },
+]
 
 /** ハーネスとの結合に関わるパス */
 const CORE_PATHS = [
@@ -15,9 +19,8 @@ const CORE_PATHS = [
   /^src\/prompt\.ts$/,
   /^src\/(main|workspace|home|serve-args)\.ts$/,
   /^bin\//,
-  /^test\/e2e\/(?!chatwork\.sh$|mock-chatwork\.ts$)/,
+  /^test\/e2e\/(?!chatwork\.sh$|mock-chatwork\.ts$|notices\.sh$)/,
 ]
-const CHATWORK_PATHS = [/^test\/e2e\/(chatwork\.sh|mock-chatwork\.ts|lib\.sh)$/]
 /** ハーネス（アダプター）と ACP・MCP の SDK。package.json と bun.lock の差分の行に現れる名前 */
 const CORE_DEPS = /@agentclientprotocol\/|@modelcontextprotocol\/|@anthropic-ai\/claude/
 
@@ -34,11 +37,8 @@ export function e2eTargets(files: string[], depDiff: string): Target[] {
     .filter((l) => /^[+-](?![+-])/.test(l) && CORE_DEPS.test(l))
     .map((l) => l.match(CORE_DEPS)![0].replace(/\/$/, ""))
   if (deps.length) core.push(`依存（${[...new Set(deps)].join("、")}）`)
-  const chatwork = files.filter((f) => CHATWORK_PATHS.some((r) => r.test(f)))
-  return [
-    ...(core.length ? CORE.map((script) => ({ script, reasons: core })) : []),
-    ...(chatwork.length ? [{ script: CHATWORK, reasons: chatwork }] : []),
-  ]
+  const optional = OPTIONAL.map(({ script, paths }) => ({ script, reasons: files.filter((f) => paths.some((r) => r.test(f))) }))
+  return [...(core.length ? CORE.map((script) => ({ script, reasons: core })) : []), ...optional.filter((t) => t.reasons.length)]
 }
 
 function git(...args: string[]): string {
