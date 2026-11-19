@@ -1505,11 +1505,21 @@ describe("中継の止まり方（ADR 0024）", () => {
   const exited = (code: number) => ({ exited: Promise.resolve(code), name: "fake", logPath: join(dir, "harness.log") })
   const never = new Promise<void>(() => {})
 
-  test("異常終了なら、知らせを待つ上限を渡して待つ。待っている間に止められたら、待つのをやめる", async () => {
-    writeFileSync(join(dir, "harness.log"), "last line\n")
+  test("異常終了なら、ハーネスのログの最後の 20 行を出し、知らせを待つ上限を渡して待つ。待っている間に止められたら、待つのをやめる", async () => {
+    writeFileSync(join(dir, "harness.log"), Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
+    const printed: unknown[] = []
+    const original = console.error
+    console.error = (...a: unknown[]) => void printed.push(...a)
     const waits: number[] = []
     const stop = stopper(() => {})
-    const done = untilHarnessExits(exited(4), { drain: (ms) => (waits.push(ms), never) }, stop, quiet)
+    let done: Promise<number>
+    try {
+      done = untilHarnessExits(exited(4), { drain: (ms) => (waits.push(ms), never) }, stop, quiet)
+      await Bun.sleep(0)
+    } finally {
+      console.error = original
+    }
+    expect(printed).toEqual([Array.from({ length: 20 }, (_, i) => `line ${i + 6}`).join("\n")])
     await Bun.sleep(10)
     expect(waits).toEqual([DRAIN_MS])
     let returned = false
@@ -1525,7 +1535,9 @@ describe("中継の止まり方（ADR 0024）", () => {
     const relay = { drain: () => (drained++, never) }
     const stop = stopper(() => {})
     stop.stop()
-    expect(await untilHarnessExits(exited(143), relay, stop, quiet)).toBe(1)
+    const infos: unknown[] = []
+    expect(await untilHarnessExits(exited(143), relay, stop, { info: (m, e) => void infos.push([m, e]), error: () => {} })).toBe(1)
+    expect(infos).toEqual([["ハーネスが終了したため、中継も止めます", { harness: "fake", code: 143 }]])
     // 終了コードが 0 でも、管理者が止めたのでなければ、作業中だったターンの知らせを待つ
     expect(await untilHarnessExits(exited(0), { drain: async () => void drained++ }, stopper(() => {}), quiet)).toBe(0)
     expect(drained).toBe(1)
