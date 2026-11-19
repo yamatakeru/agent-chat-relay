@@ -13,6 +13,8 @@ mkdir -p "$E"
 : >"$LOG"
 rm -rf "$E/relay-chatwork-$H"
 unset RELAY_LINE_CHANNEL_SECRET RELAY_LINE_CHANNEL_TOKEN
+# 作業ディレクトリが <RELAY_HOME>/workspace であることと、既定の設定の読み込みを前提に確かめるので、シェルに残った指定を外す
+unset RELAY_WORKSPACE RELAY_HARNESS_SETTINGS RELAY_HARNESS_MEMORY
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-chatwork-$H" RELAY_CHATWORK_API_BASE=$MOCK_URL \
   RELAY_CHATWORK_API_TOKEN=dummytoken RELAY_CHATWORK_POLL_SEC=2
 GROUP=7000 DM=7001 SALES=7003 ALICE=1 BOB=2

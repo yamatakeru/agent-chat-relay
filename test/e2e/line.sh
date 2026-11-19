@@ -12,6 +12,8 @@ mkdir -p "$E"
 : >"$LOG"
 # 前回の作業ディレクトリが残っていると、承認が不要な結果になる（ファイルがすでにある）ので、作り直す
 rm -rf "$E/relay-line-$H"
+# 作業ディレクトリが <RELAY_HOME>/workspace であることと、既定の設定の読み込みを前提に確かめるので、シェルに残った指定を外す
+unset RELAY_WORKSPACE RELAY_HARNESS_SETTINGS RELAY_HARNESS_MEMORY
 # モックの Webhook には X-Forwarded-Proto が付かないので、画像の公開 URL は固定で渡す
 export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-line-$H" RELAY_LINE_API_BASE=http://127.0.0.1:18099 \
   RELAY_LINE_CHANNEL_SECRET=dummysecret RELAY_LINE_CHANNEL_TOKEN=dummytoken RELAY_PUBLIC_URL=http://127.0.0.1:18080
