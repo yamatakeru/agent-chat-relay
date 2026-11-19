@@ -1709,10 +1709,74 @@ describe("discord", () => {
 })
 
 describe("作業ディレクトリ", () => {
-  test("独立した git リポジトリにする", () => {
+  /** git から見たリポジトリの最上位と、git のディレクトリ */
+  const gitRoot = (ws: string) => Bun.spawnSync(["git", "-C", ws, "rev-parse", "--show-toplevel", "--absolute-git-dir"]).stdout.toString()
+  const commit = (ws: string, message: string) =>
+    expect(Bun.spawnSync(["git", "-C", ws, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", message]).success).toBe(true)
+  const log = (ws: string) => Bun.spawnSync(["git", "-C", ws, "log", "--format=%s"]).stdout.toString()
+
+  test("独立した git リポジトリにする。上位の git リポジトリの中でも、最上位は作業ディレクトリ自身になる", () => {
+    // dir はこのリポジトリの .local/ の中にある
     const ws = join(dir, "ws")
     initWorkspace(ws)
-    expect(existsSync(join(ws, ".git"))).toBe(true)
+    const real = realpathSync(ws)
+    expect(gitRoot(ws)).toBe(`${real}\n${join(real, ".git")}\n`)
+  })
+
+  test("既存のリポジトリは壊さず、.git が空のディレクトリなら直す", () => {
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    commit(ws, "エージェントの作業")
+    initWorkspace(ws)
+    expect(log(ws)).toBe("エージェントの作業\n")
+
+    const empty = join(dir, "empty")
+    mkdirSync(join(empty, ".git"), { recursive: true })
+    initWorkspace(empty)
+    const real = realpathSync(empty)
+    expect(gitRoot(empty)).toBe(`${real}\n${join(real, ".git")}\n`)
+  })
+
+  test(".git が壊れていて git init で直らなければ、起動しない", () => {
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    // HEAD が壊れていると、git からは上位のリポジトリ（このリポジトリ）の中に見える
+    writeFileSync(join(ws, ".git", "HEAD"), "broken\n")
+    expect(() => initWorkspace(ws)).toThrow("独立したリポジトリになっていないため、起動しません")
+    expect(readFileSync(join(ws, ".git", "HEAD"), "utf8")).toBe("broken\n")
+  })
+
+  test(".git がほかのリポジトリを指すファイルかシンボリックリンクなら、起動せず、指す先のリポジトリを変えない", () => {
+    const other = join(dir, "other")
+    expect(Bun.spawnSync(["git", "init", "-q", other]).success).toBe(true)
+    commit(other, "ほかのリポジトリ")
+    const before = readFileSync(join(other, ".git", "config"), "utf8")
+    for (const make of [(ws: string) => writeFileSync(join(ws, ".git"), `gitdir: ${join(other, ".git")}\n`), (ws: string) => symlinkSync(join(other, ".git"), join(ws, ".git"))]) {
+      const ws = mkdtempSync(join(dir, "ws-"))
+      make(ws)
+      expect(() => initWorkspace(ws)).toThrow(".git がディレクトリではない")
+    }
+    // 消えたリンク先を作り直さない
+    const dangling = mkdtempSync(join(dir, "ws-"))
+    symlinkSync(join(dir, "nowhere"), join(dangling, ".git"))
+    expect(() => initWorkspace(dangling)).toThrow(".git がディレクトリではない")
+    expect(existsSync(join(dir, "nowhere"))).toBe(false)
+    expect(readFileSync(join(other, ".git", "config"), "utf8")).toBe(before)
+    expect(log(other)).toBe("ほかのリポジトリ\n")
+  })
+
+  test("リポジトリの場所を変える git の環境変数があれば、git init の前に起動しない", () => {
+    const elsewhere = join(dir, "elsewhere")
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_INDEX_FILE"]) {
+      const ws = join(dir, `ws-${name}`)
+      expect(() => initWorkspace(ws, "git", { ...process.env, [name]: elsewhere })).toThrow(`環境変数 ${name} が`)
+      expect(existsSync(ws)).toBe(false)
+    }
+    expect(() => initWorkspace(join(dir, "ws"), "git", { ...process.env, GIT_DIR: elsewhere, GIT_WORK_TREE: elsewhere })).toThrow("環境変数 GIT_DIR・GIT_WORK_TREE が")
+    expect(existsSync(elsewhere)).toBe(false)
+    // 空の値は git に任せる。git が無視するもの（GIT_INDEX_FILE）では起動し、git が誤りとするもの（GIT_DIR）では起動しない
+    initWorkspace(join(dir, "ws"), "git", { ...process.env, GIT_INDEX_FILE: "" })
+    expect(() => initWorkspace(join(dir, "ws"), "git", { ...process.env, GIT_DIR: "" })).toThrow("起動しません")
   })
 
   test("git init に失敗したら、または git が無ければ起動しない", () => {

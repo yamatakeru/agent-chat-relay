@@ -44,7 +44,7 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 
 - Claude Code（`claude`）をインストールし、ログインしておきます。中継は、PATH 上の `claude` を `claude-agent-acp` 経由で起動します。
 - 秘密情報を保存します。LINE は `agent-chat-relay secrets line`、Chatwork は `agent-chat-relay secrets chatwork`、Discord は `agent-chat-relay secrets discord` で入力します。どれか 1 つだけでも動きます。環境変数で渡すこともできます（[README.md](../README.md#秘密情報の管理)）。
-- 作業ディレクトリを独立した git リポジトリにできない場合（git がインストールされていない場合など）、中継は起動しません。
+- 作業ディレクトリを独立した git リポジトリにできない場合（git がインストールされていない場合、作業ディレクトリの `.git` が壊れている場合、`GIT_DIR` などの git の環境変数でリポジトリの場所を変えている場合など）、中継は起動しません。エラーの文に、直し方（`.git` を確かめるか退避する、環境変数を外す、など）を表示します（[docs/relay.md](relay.md#構成)）。
 
 中継が使うファイルは次のとおりです。置き場は `~/.agent-chat-relay/` で、`RELAY_HOME` で変えられます（ADR 0019）。
 
