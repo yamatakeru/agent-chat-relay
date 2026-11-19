@@ -168,6 +168,10 @@ function minutes(env: Record<string, string | undefined>, name: string, fallback
 /** ターンに渡した発言のルームごとの状態 */
 type TurnRoom = { mentioned: boolean; replied: boolean; notified: Set<TurnNoticeKind>; slow?: Timer }
 
+function stopSlowTimers(turn: Map<string, TurnRoom>): void {
+  for (const r of turn.values()) clearTimeout(r.slow)
+}
+
 const INSTRUCTIONS = [
   "あなたは、業務チャットのルームにつながったエージェントです。複数のルームの発言が、1 つの会話としてここに届きます。",
   "",
@@ -459,10 +463,14 @@ export class Relay {
         this.turn = turnRooms
         this.delivered(turnRooms, batch)
         let failed = false
-        const turn = this.session.prompt(text).catch((err) => {
-          failed = true
-          this.log.error("セッションへの入力に失敗しました", { error: String(err) })
-        })
+        const turn = this.session
+          .prompt(text)
+          .catch((err) => {
+            failed = true
+            this.log.error("セッションへの入力に失敗しました", { error: String(err) })
+          })
+          // 差し込みの結果を待つ間にターンが終わっても、時間のたった知らせを出さない
+          .finally(() => stopSlowTimers(turnRooms))
         await this.steerUntil(this.session, turn, turnRooms)
         this.endTurn(turnRooms, failed)
       }
@@ -569,11 +577,9 @@ export class Relay {
   }
 
   private endTurn(turn: Map<string, TurnRoom>, failed: boolean): void {
-    for (const [room, r] of turn) {
-      // 時間のたった知らせを、次のターンに持ち越さない
-      clearTimeout(r.slow)
-      this.noticeRoom(room, r, failed ? "failed" : "silent")
-    }
+    // 時間のたった知らせを、次のターンに持ち越さない
+    stopSlowTimers(turn)
+    for (const [room, r] of turn) this.noticeRoom(room, r, failed ? "failed" : "silent")
     this.turn = undefined
   }
 

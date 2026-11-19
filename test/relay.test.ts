@@ -448,6 +448,25 @@ describe("relay", () => {
       expect(conn.notices).toHaveLength(0)
     })
 
+    test("差し込みの結果を待つ間にターンが終わったら、時間のたった知らせを出さない", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
+      let finish!: () => void
+      let steered!: (ok: boolean) => void
+      relay.attach({
+        prompt: () => new Promise<void>((r) => (finish = r)),
+        steer: () => new Promise<boolean>((r) => (steered = r)),
+      })
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      relay.receive(msg({ text: "two" }))
+      await Bun.sleep(0)
+      finish()
+      await Bun.sleep(80)
+      steered(false)
+      await Bun.sleep(0)
+      expect(conn.notices.map((n) => n.text)).not.toContain(TURN_NOTICES.slow)
+    })
+
     test("終わったターンの時間の知らせは、あとから出さない", async () => {
       const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 30 })
       const s = heldSession()
@@ -580,6 +599,8 @@ describe("relay", () => {
 
     test("知らせを出すまでの時間は、環境変数で分を指定する。範囲の外や整数でなければ起動しない", () => {
       expect(noticeTimingFromEnv({})).toEqual({ approvalMs: 10 * 60_000, slowMs: 20 * 60_000 })
+      // 空の値は、ほかの環境変数と同じく、指定なしとして扱う
+      expect(noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: "", RELAY_SLOW_NOTICE_MIN: "" })).toEqual({ approvalMs: 10 * 60_000, slowMs: 20 * 60_000 })
       expect(noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: "29", RELAY_SLOW_NOTICE_MIN: "1" })).toEqual({ approvalMs: 29 * 60_000, slowMs: 60_000 })
       // 承認依頼は 30 分で拒否になるので、それより前でなければならない
       for (const v of ["0", "30", "1.5", "abc", "-1", " 5"]) expect(() => noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: v })).toThrow("RELAY_APPROVAL_NOTICE_MIN に指定できるのは 1〜29 の整数")

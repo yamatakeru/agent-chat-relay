@@ -121,9 +121,13 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
 
   // Ctrl+C は、端末と dotenvx の両方から届くことがある
   let stopping = false
+  // 知らせを待っている間に止められたら、待つのをやめる
+  let cancelDrain = () => {}
+  const stopped = new Promise<void>((r) => (cancelDrain = r))
   const stop = () => {
     if (stopping) return
     stopping = true
+    cancelDrain()
     log.info("停止します")
     harness.stop()
   }
@@ -138,7 +142,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
     console.error(tail)
   }
   // 管理者が止めたのでなければ、作業中だったターンのルームへの知らせ（ADR 0024）を、送り終わるまで待つ
-  if (!stopping) await relay.drain(DRAIN_MS)
+  if (!stopping) await Promise.race([relay.drain(DRAIN_MS), stopped])
   for (const close of closers) close()
   process.exit(code === 0 ? 0 : 1)
 }
