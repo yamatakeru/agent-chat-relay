@@ -14,7 +14,7 @@ import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import { type Capabilities, type ChatMessage, type Connector, type Incoming, Relay, type Session, sendablePaths, type Verdict } from "../src/core/relay.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
-import { alwaysOption, startHarness } from "../src/harness/harness.ts"
+import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
@@ -963,6 +963,34 @@ describe("ハーネスの起動と再開", () => {
     const { error, requests } = await run({ resume: true, load: true }, "missing")
     expect(error?.message).toContain("セッション missing を再開できませんでした（session/resume）")
     expect(methods(requests)).toEqual(["initialize", "session/resume"])
+  })
+
+  test("ハーネスが stdin を読まずに終了したら、書き込みの失敗を stream のエラーとして返す", async () => {
+    // パイプが詰まる量を書き、読まないまま終了させる
+    const proc = Bun.spawn(["sleep", "0.3"], { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
+    const writer = stdinStream(proc.stdin).getWriter()
+    await expect(writer.write(new Uint8Array(8 << 20))).rejects.toThrow("EPIPE")
+    await proc.exited
+  })
+
+  test("ハーネスが stdin を読まずに固まってから落ちても、中継は落ちずに、発言の失敗と終了として扱う", async () => {
+    const h = await startHarness(
+      {
+        command: [...BUN_ISOLATED, join(import.meta.dir, "fixtures/acp-agent.ts")],
+        env: { FAKE_ACP: JSON.stringify({ hang: true }) },
+        cwd: dir,
+        mcp: MCP,
+        meta: META,
+        // 偽のエージェントの始めのモード。切り替えの要求を挟まず、すぐに大きな発言を書く
+        mode: "auto",
+        stderrPath: join(dir, "harness.log"),
+      },
+      async () => "deny",
+      { info: () => {}, error: () => {} },
+    )
+    // パイプの容量を超える発言。読まれないまま、ハーネスが終了する
+    await expect(h.session.prompt("x".repeat(8 << 20))).rejects.toThrow()
+    expect(await h.exited).toBe(3)
   })
 })
 

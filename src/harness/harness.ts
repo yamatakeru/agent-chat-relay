@@ -28,6 +28,22 @@ export type HarnessConfig = {
 
 const MAX_STDERR_BYTES = 10 * 1024 * 1024
 
+/**
+ * ハーネスの stdin を、ACP の SDK に渡す stream にする。書き込みの失敗（ハーネスが読まずに終了したときの EPIPE など）は
+ * Promise で返し、SDK に接続を閉じさせる。受けずに捨てると、受け手のない reject になり、中継のプロセスごと終了する
+ */
+export function stdinStream(sink: Bun.FileSink): WritableStream<Uint8Array> {
+  return new WritableStream<Uint8Array>({
+    async write(chunk) {
+      await sink.write(chunk)
+      await sink.flush()
+    },
+    async close() {
+      await sink.end()
+    },
+  })
+}
+
 export async function startHarness(
   cfg: HarnessConfig,
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
@@ -59,16 +75,7 @@ export async function startHarness(
       stderrLog.close()
     }
   })()
-  const stdin = new WritableStream<Uint8Array>({
-    write(chunk) {
-      proc.stdin.write(chunk)
-      proc.stdin.flush()
-    },
-    close() {
-      proc.stdin.end()
-    },
-  })
-  const stream = acp.ndJsonStream(stdin, proc.stdout as ReadableStream<Uint8Array>)
+  const stream = acp.ndJsonStream(stdinStream(proc.stdin), proc.stdout as ReadableStream<Uint8Array>)
 
   let turnText = ""
   // session/load が応答の前に再送する履歴は、新しい出力として扱わない
