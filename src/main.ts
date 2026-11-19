@@ -77,7 +77,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   })
   // 終了時に閉じるもの
   const closers: (() => void)[] = [() => void mcp.stop()]
-  log.info("チャット用ツールのエンドポイントを開きました", { mcp: `${mcp.url}mcp` })
+  log.info("チャット用ツールのエンドポイントを開きました", { mcp: `${mcp.url.href}mcp` })
 
   // コネクターのエンドポイント（Webhook など）は、1 つのサーバーにまとめる。外へはトンネルで公開する。同じパスを 2 つのコネクターが出したら起動しない
   const routes: Routes = {}
@@ -104,7 +104,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const harnessLog = join(home, "harness.log")
   const harness = await startHarness(
     {
-      ...harnessConfig(harnessName, workspace, { url: `${mcp.url}mcp`, token }, harnessOptions, log, specified, env),
+      ...harnessConfig(harnessName, workspace, { url: `${mcp.url.href}mcp`, token }, harnessOptions, log, specified, env),
       // 秘密情報のファイルに手で足した行（RELAY_ 以外のキー）も渡さない
       withheld: secretKeys(envFile),
       sessionId,

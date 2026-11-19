@@ -6,7 +6,7 @@ import { AccessStore, canSendTo } from "../src/core/access.ts"
 import { ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
 import { DiscordConnector, renderContent } from "../src/connectors/discord.ts"
 import { splitText } from "../src/connectors/common.ts"
-import { ApiClient, sign, verifySignature } from "../src/connectors/http.ts"
+import { ApiClient, jsonError, sign, verifySignature } from "../src/connectors/http.ts"
 import { LineConnector, stripSelfMentions } from "../src/connectors/line.ts"
 import { MediaStore } from "../src/connectors/line-media.ts"
 import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
@@ -803,6 +803,13 @@ describe("コネクターの共通の部分", () => {
       void server.stop()
     }
   })
+
+  test("API のエラーの本文から文面を取り出す。文字列でなければ JSON にする", () => {
+    expect(jsonError('{"message":"bad"}', (b) => b.message)).toBe("bad")
+    expect(jsonError('{"message":{"code":1}}', (b) => b.message)).toBe('{"code":1}')
+    expect(jsonError("{}", (b) => b.message)).toBe("")
+    expect(jsonError("not json", (b) => b.message)).toBe("not json")
+  })
 })
 
 describe("ハーネスの起動と再開", () => {
@@ -876,9 +883,9 @@ describe("ハーネスの起動と再開", () => {
 
   test("_session/steering を宣言していなければ、差し込みを使わない", async () => {
     let steer: unknown = "unset"
-    const r = await run({}, undefined, async (s) => void (steer = s.steer))
+    const r = await run({}, undefined, async (s) => void (steer = typeof s.steer))
     expect(r.error).toBeUndefined()
-    expect(steer).toBeUndefined()
+    expect(steer).toBe("undefined")
   })
 
   test("_session/steering を宣言していれば、ターンが終わっていたら新しいターンを始めさせない指定を付けて差し込む", async () => {

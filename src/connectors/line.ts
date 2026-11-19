@@ -386,7 +386,7 @@ function roomOf(s: Source): string | undefined {
 
 /** 本文から Bot へのメンションを取り除く。LINE の index と length は UTF-16 の単位 */
 export function stripSelfMentions(text: string, mentionees: Mentionee[]): string {
-  const remove = new Array<boolean>(text.length).fill(false)
+  const remove = Array.from({ length: text.length }, () => false)
   for (const m of mentionees) {
     if (!m.isSelf || m.index < 0 || m.length <= 0 || m.index + m.length > text.length) continue
     remove.fill(true, m.index, m.index + m.length)

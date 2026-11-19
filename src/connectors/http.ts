@@ -129,7 +129,8 @@ export function verifySignature(secret: string, body: string, signature: string)
 /** JSON のエラーの本文から、文面を取り出す。読めなければ先頭を返す */
 export function jsonError(raw: string, pick: (body: Record<string, unknown>) => unknown): string {
   try {
-    return String(pick(JSON.parse(raw) as Record<string, unknown>) ?? "")
+    const message = pick(JSON.parse(raw) as Record<string, unknown>)
+    return typeof message === "string" ? message : message == null ? "" : JSON.stringify(message)
   } catch {
     return raw.slice(0, 200)
   }

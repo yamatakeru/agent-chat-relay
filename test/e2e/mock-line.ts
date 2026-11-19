@@ -8,8 +8,8 @@ Bun.serve({
   hostname: "127.0.0.1", port: 18099,
   async fetch(req) {
     const url = new URL(req.url)
-    if (req.method === "GET" && /\/content$/.test(url.pathname)) return new Response(PNG, { headers: { "Content-Type": "image/png" } })
-    if (req.method === "GET" && /\/summary$/.test(url.pathname)) return Response.json({ groupName: url.pathname.includes("C111") ? "開発チーム" : "営業チーム" })
+    if (req.method === "GET" && url.pathname.endsWith("/content")) return new Response(PNG, { headers: { "Content-Type": "image/png" } })
+    if (req.method === "GET" && url.pathname.endsWith("/summary")) return Response.json({ groupName: url.pathname.includes("C111") ? "開発チーム" : "営業チーム" })
     if (req.method === "GET") return Response.json({ displayName: url.pathname.includes("Uaaa") ? "アリス" : "ボブ" })
     const body = await req.json() as { to?: string; replyToken?: string; messages?: { type: string; text?: string; quickReply?: unknown; originalContentUrl?: string }[] }
     const kind = url.pathname.split("/").pop()
