@@ -17,6 +17,7 @@ import { type Capabilities, type ChatMessage, type Connector, type Incoming, typ
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
+import pkg from "../package.json" with { type: "json" }
 import type { FakeAcpConfig } from "./fixtures/acp-agent.ts"
 import { pruneOld, RETENTION_MS } from "../src/core/retention.ts"
 import { RotatingFile } from "../src/harness/log-file.ts"
@@ -1054,6 +1055,8 @@ describe("ハーネスの起動と再開", () => {
     const { error, logs, requests } = await run({ resume: true, load: true, list: true })
     expect(error).toBeUndefined()
     expect(methods(requests)).toEqual(["initialize", "session/new", "session/set_mode", "session/prompt"])
+    // 中継のバージョンは package.json のものを名乗る
+    expect(requests[0]!.params.clientInfo).toEqual({ name: "agent-chat-relay", version: pkg.version })
     expect(requests[1]!.params).toMatchObject({ cwd: dir, mcpServers: chatServer, _meta: META })
     expect(requests[2]!.params).toEqual({ sessionId: "new-session", modeId: "default" })
     expect(logs.find((l) => l.msg === "セッションを開始しました")?.extra).toMatchObject({ sessionId: "new-session", start: "new", mode: "default" })
@@ -1288,6 +1291,8 @@ describe("チャット用ツール", () => {
     const client = new Client({ name: "test", version: "0" })
     await Promise.all([buildTools(relay, dir).connect(a), client.connect(b)])
     const list = (await client.listTools()).tools
+    // 中継のバージョンは package.json のものを名乗る
+    expect(client.getServerVersion()).toMatchObject({ name: "chat", version: pkg.version })
     await client.close()
     return Object.fromEntries(list.map((t) => [t.name, t.description ?? ""]))
   }

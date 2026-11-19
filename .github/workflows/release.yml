@@ -1,0 +1,59 @@
+# GitHub のリリースを公開したら、そのタグのバージョンを npm に staged publishing で上げる（ADR 0022）。
+# 上げただけでは、インストールできない。管理者が npm で 2FA を通して承認すると、公開される。手順は docs/releasing.md
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  stage:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # npm の trusted publishing（OIDC）
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      # staged publishing には npm 11.15.0 以降が必要。Node 24.22.3 には npm 11.19.1 が付いている
+      - name: タグと package.json のバージョンが違えば上げない
+        run: |
+          version="$(mise exec node@24.22.3 -- node -p "require('./package.json').version")"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "タグ ${GITHUB_REF_NAME} は、package.json のバージョン v${version} と違います"
+            exit 1
+          fi
+      - name: 配布物に、入り口と本体のほかが入っていれば上げない
+        # test/cli.test.ts の確かめ（Bun で詰める）と同じ条件を、実際に上げる npm の詰め方で確かめる
+        run: |
+          mise exec node@24.22.3 -- npm pack --dry-run --json --ignore-scripts >.pack.json
+          mise exec node@24.22.3 -- node -e '
+            const files = JSON.parse(require("fs").readFileSync(".pack.json", "utf8"))[0].files.map((f) => f.path)
+            const extra = files.filter((f) => !/^(bin|src)\//.test(f) && !["package.json", "LICENSE", "README.md"].includes(f))
+            console.log(files.join("\n"))
+            if (extra.length) { console.error("配布物に入れないファイル: " + extra.join(", ")); process.exit(1) }'
+          rm .pack.json
+      - name: すでに npm にあるバージョンなら上げない
+        id: published
+        run: |
+          if mise exec node@24.22.3 -- npm view "agent-chat-relay@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
+            echo "agent-chat-relay@${GITHUB_REF_NAME#v} は、すでに npm にあります"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.skip != 'true'
+        run: mise exec node@24.22.3 -- npm stage publish --ignore-scripts

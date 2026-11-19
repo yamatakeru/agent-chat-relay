@@ -23,6 +23,7 @@ agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました�
 | [0019](adr/0019-distribute-as-cli.md) | 中継を、どこからでも起動できる CLI として配布する |
 | [0020](adr/0020-lint-with-oxlint.md) | 一般の lint は Oxlint で行い、型の情報を使う検査も `bun run check` で動かす |
 | [0021](adr/0021-mutation-testing-with-fallow.md) | 変更した行のミューテーションテストを、fallow で、レビューの補助として行う |
+| [0022](adr/0022-release-by-staged-trusted-publishing.md) | npm への公開は、GitHub のリリースを契機に、trusted publishing と staged publishing で行う |
 
 <!-- ADR の一覧ここまで -->
 

@@ -4,6 +4,7 @@
 import * as acp from "@agentclientprotocol/sdk"
 import type { Log, PermissionRequest, Session, Verdict } from "../core/relay.ts"
 import { RotatingFile } from "./log-file.ts"
+import { VERSION } from "../version.ts"
 
 export type HarnessConfig = {
   command: string[]
@@ -107,7 +108,7 @@ export async function startHarness(
       const init = await ctx.request("initialize", {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: {},
-        clientInfo: { name: "agent-chat-relay", version: "0.1.0" },
+        clientInfo: { name: "agent-chat-relay", version: VERSION },
       })
       if (!init.agentCapabilities?.mcpCapabilities?.http) {
         throw new Error("このハーネスは HTTP の MCP サーバーに対応していません")

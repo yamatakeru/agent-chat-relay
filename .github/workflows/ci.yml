@@ -1,10 +1,12 @@
-# 新しい Ubuntu で、依存関係のインストール・型検査・単体テストを確認する。e2e は実際のハーネスを使うので含めない
+# 新しい Ubuntu で、依存関係のインストール・型検査・単体テストを確認する。e2e は実際のハーネスを使うので含めない。
+# 公開のワークフロー（release.yml）も、公開の前にこれを呼ぶ
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
