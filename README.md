@@ -122,6 +122,7 @@ agent-chat-relay secrets chatwork   # 使っているサービスの分だけ、
 |---|---|
 | [docs/relay-setup.md](docs/relay-setup.md) | チャットサービスの準備、起動、ペアリング、動作確認の項目 |
 | [docs/relay.md](docs/relay.md) | 仕様 |
+| [docs/releasing.md](docs/releasing.md) | npm へのリリースの手順 |
 | [docs/adr/](docs/adr/) | 設計判断の記録 |
 | [GLOSSARY.md](GLOSSARY.md) | 用語集 |
 

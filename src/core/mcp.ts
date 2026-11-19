@@ -5,6 +5,7 @@ import { timingSafeEqual } from "node:crypto"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import { z } from "zod"
+import { VERSION } from "../version.ts"
 import type { Relay } from "./relay.ts"
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean }
@@ -22,7 +23,7 @@ async function run(name: string, op: () => Promise<string>): Promise<ToolResult>
 }
 
 export function buildTools(relay: Relay, inboxDir: string): McpServer {
-  const server = new McpServer({ name: "chat", version: "0.1.0" }, { instructions: relay.instructions() })
+  const server = new McpServer({ name: "chat", version: VERSION }, { instructions: relay.instructions() })
 
   server.registerTool(
     "reply",
