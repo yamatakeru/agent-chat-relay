@@ -491,6 +491,40 @@ describe("relay", () => {
       expect(conn.notices).toHaveLength(1)
     })
 
+    test("返事をしたルームにも、承認待ちと失敗は知らせる。承認待ちは、束が分かれても 1 回だけ", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 30, slowMs: 60_000 })
+      const s = heldSession()
+      relay.attach(s.session)
+      relay.receive(msg({ text: "one" }))
+      await Bun.sleep(0)
+      await relay.reply(ROOM, "調べます")
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "pwd" })
+      await Bun.sleep(80)
+      expect(conn.approvals).toHaveLength(2)
+      s.fail(new Error("harness error"))
+      await Bun.sleep(0)
+      expect(conn.notices).toEqual([
+        { room: ROOM, text: TURN_NOTICES.approval, push: true },
+        { room: ROOM, text: TURN_NOTICES.failed, push: true },
+      ])
+    })
+
+    test("時間がかかっていることは、ルームに最初のメンションを渡してから数える", async () => {
+      const { relay, conn } = setupTurn({ approvalMs: 60_000, slowMs: 150 })
+      const s = heldSession()
+      relay.attach(s.session)
+      // 受信モードが「すべて」のルームの、メンションのない発言のあとに、メンションを差し込む
+      relay.receive(msg({ room: ROOM3, text: "chat", mentioned: false }))
+      await Bun.sleep(100)
+      relay.receive(msg({ room: ROOM3, text: "お願い" }))
+      await Bun.sleep(100)
+      expect(conn.notices).toHaveLength(0)
+      await Bun.sleep(100)
+      expect(conn.notices).toEqual([{ room: ROOM3, text: TURN_NOTICES.slow, push: true }])
+    })
+
     test("知らせを送る手段がなければ、知らせたとはログに書かない", async () => {
       const { relay, conn, logs } = setupTurn()
       conn.canNotice = false
