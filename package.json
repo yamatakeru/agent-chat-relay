@@ -1,6 +1,6 @@
 {
   "name": "agent-chat-relay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LINE・Chatwork・Discord のルームから、Claude Code などのコーディングエージェントに作業を依頼するための中継サーバー（ACP・MCP）",
   "license": "MIT",
   "repository": {
