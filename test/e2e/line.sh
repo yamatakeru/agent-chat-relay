@@ -125,7 +125,8 @@ check "常に許可：コマンドが実行される" has always.txt always
 # 常に許可すると、Claude Code がその範囲を作業ディレクトリの設定（.claude/settings.local.json）に足す。
 # 同じコマンドを 2 回頼んで確かめる形にしないのは、エージェントがコマンドを書き足すと範囲から外れ、承認依頼が出るため
 echo "-- settings.local.json"; cat "$W/.claude/settings.local.json" 2>/dev/null || echo "(なし)"
-[ "$H" = claude ] && check "常に許可：範囲が作業ディレクトリの設定に足される" has .claude/settings.local.json 'Bash(echo always'
+# エージェントは、cd を前に付けるなど、コマンドを組み立て直すことがあるので、範囲の先頭は決めない
+[ "$H" = claude ] && check "常に許可：範囲が作業ディレクトリの設定に足される" has .claude/settings.local.json '"Bash(.*echo always'
 
 echo "== approval (deny)"
 wh text "$G1" "$A" "作業ディレクトリに denied.txt を作って ng と書いて。拒否されたら、ほかの方法は試さずに一言で報告して" --mention

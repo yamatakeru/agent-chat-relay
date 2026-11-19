@@ -54,7 +54,7 @@ echo "== 1st run (new session)"
 start "$RLOG-1.log" "セッションを開始しました"
 check "ペアリング（開発チーム）" pair_after join "$G1"
 check "ペアリング（承認者の DM）" pair_after text "$A" "$A" "hi"
-n="$(lines)"; wh text "$G1" "$A" "合言葉は『あおいろ』です。覚えたら、合言葉は書かずに『覚えました』とだけ返して" --mention
+n="$(lines)"; wh text "$G1" "$A" "合言葉は『あおいろ』です。覚えたら『覚えました』とだけ返して。あとで聞いたら、合言葉を答えて" --mention
 check "新しいセッションでの返信" waitfor "$n"
 sid="$(grep -o '"sessionId":"[^"]*"' "$RLOG-1.log" | head -1 | cut -d'"' -f4)"
 echo "session id: ${sid:-none}"
