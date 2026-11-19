@@ -185,8 +185,9 @@ export class ChatworkConnector implements Connector {
     await this.post(await this.roomId(user), text)
   }
 
-  async notice(room: string, text: string): Promise<void> {
+  async notice(room: string, text: string): Promise<boolean> {
     await this.post(await this.roomId(room), text)
+    return true
   }
 
   async download(room: string, messageId: string, dir: string): Promise<string[]> {

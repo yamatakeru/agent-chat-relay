@@ -74,8 +74,8 @@ export interface Connector {
   send(room: string, text: string, opts?: { replyTo?: string; files?: string[] }): Promise<string[]>
   /** 承認者の DM へ、実行承認の依頼を送る */
   sendApproval(user: string, text: string, requestId: string, opts?: { always?: boolean }): Promise<void>
-  /** 直前の発言への返事として、短い案内を送る（ペアリングのコードなど）。送れないときは何もしない */
-  notice(room: string, text: string): Promise<void>
+  /** 直前の発言への返事として、短い案内を送る（ペアリングのコードなど）。送れる手段がないときは何もせず、false を返す */
+  notice(room: string, text: string): Promise<boolean>
   /** 添付をローカルに取得し、パスを返す */
   download(room: string, messageId: string, dir: string): Promise<string[]>
   roomName(room: string): Promise<string | undefined>
@@ -507,7 +507,10 @@ export class Relay {
     await this.connector(room)
       ?.notice(room, PROMPT_FAILURE_NOTICE)
       .then(
-        () => this.log.info("返事ができないことを、ルームに知らせました", { room }),
+        (sent) =>
+          sent
+            ? this.log.info("返事ができないことを、ルームに知らせました", { room })
+            : this.log.info("返事ができないことを、ルームに知らせる手段がないため、知らせませんでした", { room }),
         (err) => this.log.error("返事ができないことを、ルームに知らせられませんでした", { room, error: String(err) }),
       )
   }

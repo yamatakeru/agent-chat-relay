@@ -282,11 +282,12 @@ export class LineConnector implements Connector {
     })
   }
 
-  async notice(room: string, text: string): Promise<void> {
+  async notice(room: string, text: string): Promise<boolean> {
     // 案内は Reply でだけ送り、Push の通数を使わない
     const token = this.takeToken(room)
-    if (!token) return
+    if (!token) return false
     await this.post("/v2/bot/message/reply", { replyToken: token, messages: [{ type: "text", text }] })
+    return true
   }
 
   async download(_room: string, messageId: string, dir: string): Promise<string[]> {

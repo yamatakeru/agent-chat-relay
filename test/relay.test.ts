@@ -70,8 +70,12 @@ class FakeConnector implements Connector {
   async sendApproval(user: string, text: string, id: string, opts?: { always?: boolean }) {
     this.approvals.push({ user, text, id, always: opts?.always })
   }
+  /** false にすると、送る手段がない（LINE の Reply トークンがない）ときのように、送らずに false を返す */
+  canNotice = true
   async notice(room: string, text: string) {
+    if (!this.canNotice) return false
     this.notices.push({ room, text })
+    return true
   }
   async download() {
     return []
@@ -359,6 +363,17 @@ describe("relay", () => {
       { room: ROOM, text: PROMPT_FAILURE_NOTICE },
       { room: ROOM2, text: PROMPT_FAILURE_NOTICE },
     ])
+  })
+
+  test("知らせを送る手段がなければ、知らせたとはログに書かない", async () => {
+    const logs: { msg: string; extra?: Record<string, unknown> }[] = []
+    const { relay, conn } = setup({ info: (msg, extra) => void logs.push({ msg, extra }), error: () => {} })
+    conn.canNotice = false
+    relay.receive(msg({ text: "one" }))
+    relay.attach({ prompt: () => Promise.reject(new Error("harness error")) })
+    await Bun.sleep(0)
+    expect(logs).toContainEqual({ msg: "返事ができないことを、ルームに知らせる手段がないため、知らせませんでした", extra: { room: ROOM } })
+    expect(logs.map((l) => l.msg)).not.toContain("返事ができないことを、ルームに知らせました")
   })
 
   test("session/prompt が成功したら、知らせを出さない", async () => {
@@ -1851,6 +1866,29 @@ describe("作業ディレクトリ", () => {
     expect(existsSync(join(dir, "nowhere"))).toBe(false)
     expect(readFileSync(join(other, ".git", "config"), "utf8")).toBe(before)
     expect(log(other)).toBe("ほかのリポジトリ\n")
+  })
+
+  test("独立した既存のリポジトリには、git init しない（環境変数や設定で、既存のリポジトリを書き換えうるため）", () => {
+    const calls = join(dir, "git-calls")
+    const spy = join(dir, "git-spy")
+    writeFileSync(spy, `#!/bin/sh\necho "$*" >> '${calls}'\nexec git "$@"\n`, { mode: 0o755 })
+    const ws = join(dir, "ws")
+    initWorkspace(ws, spy)
+    expect(readFileSync(calls, "utf8")).toContain("init -q")
+    writeFileSync(calls, "")
+    initWorkspace(ws, spy)
+    expect(readFileSync(calls, "utf8")).not.toContain("init")
+  })
+
+  test(".git/commondir でほかのリポジトリと共有していれば、起動せず、そのリポジトリを変えない", () => {
+    const other = join(dir, "other")
+    expect(Bun.spawnSync(["git", "init", "-q", other]).success).toBe(true)
+    const before = readFileSync(join(other, ".git", "config"), "utf8")
+    const ws = join(dir, "ws")
+    initWorkspace(ws)
+    writeFileSync(join(ws, ".git", "commondir"), `${join(other, ".git")}\n`)
+    expect(() => initWorkspace(ws)).toThrow("独立したリポジトリになっていないため、起動しません")
+    expect(readFileSync(join(other, ".git", "config"), "utf8")).toBe(before)
   })
 
   test("リポジトリの場所を変える git の環境変数があれば、git init の前に起動しない", () => {

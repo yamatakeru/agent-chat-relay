@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 /** 作業ディレクトリ。specified は、管理者が RELAY_WORKSPACE で指定したものか（ADR 0017） */
@@ -81,8 +81,9 @@ const GIT_LOCATION_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJ
 
 /**
  * 作業ディレクトリを独立した git リポジトリにして、上位の設定や AGENTS.md を拾わせない。
- * .git があるかではなく、git から見たリポジトリの最上位が作業ディレクトリ自身であることを確かめる。
- * 直すのは、既存のリポジトリも上書きしない git init だけにする（.git を消して作り直すと、エージェントの履歴を失いうる）。
+ * .git があるかではなく、git から見たリポジトリの最上位・git のディレクトリ・共有のディレクトリが、作業ディレクトリ自身のものであることを確かめる。
+ * git init は、.git がないか空のときだけ実行する。既存の .git に実行すると、環境変数（GIT_DEFAULT_HASH など）や
+ * .git/commondir 次第で、そのリポジトリや、指す先のリポジトリを書き換えうるため。.git は消さない（エージェントの履歴を失いうる）。
  * 確かめられなければ起動しない。
  * git の環境変数は取り除かず、ハーネスが受け取るのと同じ環境（env）で確かめる。別の場所を向いていれば、起動しない
  */
@@ -91,6 +92,8 @@ export function initWorkspace(workspace: string, git = "git", env: Record<string
   if (relocating.length > 0) {
     throw new Error(`環境変数 ${relocating.join("・")} が git のリポジトリの場所を変えるため、起動しません。外してから起動してください: ${workspace}`)
   }
+  const noGit = `作業ディレクトリを git リポジトリにできないため、起動しません。git がインストールされているか確かめてください: ${workspace}`
+  if (!Bun.which(git)) throw new Error(noGit)
   mkdirSync(workspace, { recursive: true, mode: 0o700 })
   // .git がリンクか、gitdir: を書いたファイルだと、git init がその先のリポジトリに書き、作業ディレクトリの外に及ぶ
   const dotGit = join(workspace, ".git")
@@ -98,13 +101,17 @@ export function initWorkspace(workspace: string, git = "git", env: Record<string
   if (dotGitStat && !dotGitStat.isDirectory()) {
     throw new Error(`作業ディレクトリの .git がディレクトリではない（シンボリックリンクか、別の場所を指すファイル）ため、起動しません。.git を確かめるか、退避してから起動してください: ${dotGit}`)
   }
-  // 既存のリポジトリでも安全で、欠けた部分（空の .git など）を補う
-  if (!Bun.which(git) || !Bun.spawnSync([git, "init", "-q", workspace], { env }).success) {
-    throw new Error(`作業ディレクトリを git リポジトリにできないため、起動しません。git がインストールされているか確かめてください: ${workspace}`)
-  }
+  if (isOwnRepository(workspace, git, env)) return
+  const notIsolated = `作業ディレクトリが、git から見て独立したリポジトリになっていないため、起動しません。.git を確かめるか、退避してから起動してください: ${workspace}`
+  if (dotGitStat && readdirSync(dotGit).length > 0) throw new Error(notIsolated)
+  if (!Bun.spawnSync([git, "init", "-q", workspace], { env }).success) throw new Error(noGit)
+  if (!isOwnRepository(workspace, git, env)) throw new Error(notIsolated)
+}
+
+/** git から見たリポジトリの最上位が workspace 自身で、git のディレクトリと共有のディレクトリが <workspace>/.git か */
+function isOwnRepository(workspace: string, git: string, env: Record<string, string | undefined>): boolean {
   const real = realpathSync(workspace)
-  const found = Bun.spawnSync([git, "-C", real, "rev-parse", "--show-toplevel", "--absolute-git-dir"], { env })
-  if (!found.success || found.stdout.toString() !== `${real}\n${join(real, ".git")}\n`) {
-    throw new Error(`作業ディレクトリが、git から見て独立したリポジトリになっていないため、起動しません。.git を確かめるか、退避してから起動してください: ${workspace}`)
-  }
+  const dotGit = join(real, ".git")
+  const found = Bun.spawnSync([git, "-C", real, "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], { env })
+  return found.success && found.stdout.toString() === `${real}\n${dotGit}\n${dotGit}\n`
 }

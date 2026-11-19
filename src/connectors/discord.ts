@@ -176,8 +176,9 @@ export class DiscordConnector implements Connector {
     await ch.send({ content: truncate(text, this.capabilities.text.max), components: [row], allowedMentions: NO_MENTIONS })
   }
 
-  async notice(room: string, text: string): Promise<void> {
+  async notice(room: string, text: string): Promise<boolean> {
     await (await this.channel(room)).send({ content: text, allowedMentions: NO_MENTIONS })
+    return true
   }
 
   async download(room: string, messageId: string, dir: string): Promise<string[]> {
