@@ -15,6 +15,7 @@ test("Refs・Closes などに続く番号だけを拾う", () => {
   expect(refsOf(PR74_FIRST)).toEqual([])
   expect(refsOf(PR54_FIRST_TAIL)).toEqual([53])
   expect(refsOf("Closes #12、#13\nfix: 何か（#14）\nresolves: #15")).toEqual([12, 13, 15])
+  expect(refsOf("Refs #53, other/project#71")).toEqual([53])
 })
 
 test("PR #74 の最初の本文は、Refs がなく統括 issue にも載っていないので落ちる。Refs #52 を足すと通る", () => {
@@ -29,5 +30,6 @@ test("PR #54 は、指した #53 が統括 issue の sub-issue でなく、PR �
 test("issue のない PR は、統括 issue の本文に PR の番号があれば通る。統括 issue そのものを指しても通る", () => {
   expect(linkErrors(56, [], ["- [x] AGENTS.md の規則の表に、…2 行を足す（PR #56）"])).toEqual([])
   expect(linkErrors(56, [], ["- [x] …（PR #560）"])).toHaveLength(1)
+  expect(linkErrors(74, [], ["- [x] other/project#74"])).toHaveLength(1)
   expect(linkErrors(72, [{ number: 71, tracking: true, parentTracking: false }], [])).toEqual([])
 })

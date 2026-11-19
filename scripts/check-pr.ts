@@ -2,14 +2,19 @@
 // 正本は sub-issues の親子関係。PR の本文の Refs・Closes などで指す issue の親が、開いている統括 issue（ラベル tracking）であれば通す。
 // issue のない PR は、開いている統括 issue の本文に PR の番号があれば通す
 //
-//   bun scripts/check-pr.ts <PR の番号>
+//   mise exec -- bun --no-env-file --config=/dev/null scripts/check-pr.ts <PR の番号>
+
+/** このリポジトリへの参照（#N）の番号。別のリポジトリへの参照（owner/repo#N）は拾わない */
+export function localRefs(text: string): number[] {
+  return [...text.matchAll(/(?<![\w./-])#(\d+)(?!\d)/g)].map((m) => Number(m[1]))
+}
 
 /** Refs・Closes・Fixes・Resolves などに続く issue の番号。同じ行の #N をすべて拾う */
 export function refsOf(body: string): number[] {
   const out = new Set<number>()
   for (const line of body.split("\n")) {
     if (!/\b(refs?|close[sd]?|fix(e[sd])?|resolve[sd]?)\b\s*:?\s*#\d/i.test(line)) continue
-    for (const m of line.matchAll(/#(\d+)/g)) out.add(Number(m[1]))
+    for (const n of localRefs(line)) out.add(n)
   }
   return [...out]
 }
@@ -19,7 +24,7 @@ export type Ref = { number: number; tracking: boolean; parentTracking: boolean }
 
 export function linkErrors(pr: number, refs: Ref[], trackingBodies: string[]): string[] {
   if (refs.some((r) => r.tracking || r.parentTracking)) return []
-  if (trackingBodies.some((b) => new RegExp(`#${pr}(?!\\d)`).test(b))) return []
+  if (trackingBodies.some((b) => localRefs(b).includes(pr))) return []
   const hint = refs.length === 0
     ? "PR の本文に「Refs #<issue>」を書き、その issue を統括 issue の sub-issue にする"
     : `指した issue（${refs.map((r) => `#${r.number}`).join("、")}）を、統括 issue の sub-issue にする`
@@ -39,7 +44,7 @@ function gh(args: string[]): string {
 
 if (import.meta.main) {
   const pr = Number(process.argv[2])
-  if (!Number.isInteger(pr) || pr <= 0) throw new Error("PR の番号を渡す: bun scripts/check-pr.ts <PR の番号>")
+  if (!Number.isInteger(pr) || pr <= 0) throw new Error("PR の番号を渡す: mise exec -- bun --no-env-file --config=/dev/null scripts/check-pr.ts <PR の番号>")
   const [owner, name] = (process.env.GITHUB_REPOSITORY ?? gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).trim()).split("/")
   const repo = (body: string) => `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${body}}}`
   const q = (body: string) => JSON.parse(gh(["api", "graphql", "-f", `query=${repo(body)}`, "-f", `owner=${owner}`, "-f", `name=${name}`])).data.repository
