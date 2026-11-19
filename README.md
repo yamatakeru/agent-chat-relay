@@ -100,7 +100,7 @@ scripts/relay.sh serve
 
 - [mise](https://mise.jdx.dev/)：Bun と cloudflared は、`mise.toml` で固定したバージョンを mise でインストールします。Ubuntu では、git と curl も必要です（`sudo apt install git curl`）。
 - [dotenvx](https://dotenvx.com/)：`scripts/relay.sh secrets` で使います。1.51 と 2.38 で動作を確認しています。インストール方法は、`brew tap dotenvx/brew && brew trust dotenvx/brew && brew install dotenvx`、`mise use -g dotenvx`、`curl -sfS https://dotenvx.sh | sh`、`npm i -g @dotenvx/dotenvx` のいずれかです。使わない場合は、`.env` を作らずに、秘密情報を環境変数で渡してください。
-- テストは `mise exec -- bun test`、型検査は `mise exec -- bun run check` です。実際のハーネスを使う確認は [docs/relay-setup.md](docs/relay-setup.md#モックでの確認) にあります。
+- テストは `mise exec -- bun test`、型検査と lint（Oxlint）は `mise exec -- bun run check` です。実際のハーネスを使う確認は [docs/relay-setup.md](docs/relay-setup.md#モックでの確認) にあります。
 
 ### clone して使っていた環境からの移行
 

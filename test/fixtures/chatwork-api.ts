@@ -97,7 +97,8 @@ export function chatworkApi(opts: { port?: number; onSent?: (s: Sent) => void } 
       if (req.method === "POST" && m) {
         const form = await req.formData()
         const file = form.get("file") as File
-        const body = String(form.get("message") ?? "")
+        const message = form.get("message")
+        const body = typeof message === "string" ? message : ""
         const content = await file.text()
         record({ kind: "file", room: Number(m[1]), body, file: file.name, size: file.size, content: content.slice(0, 100) })
         const fid = String(++seq)
