@@ -88,7 +88,7 @@ Chatwork と Discord だけを使う場合は、`agent-chat-relay serve` だけ�
 | `RELAY_ENV_FILE` | `<RELAY_HOME>/.env` | 秘密情報のファイルだけを別の場所にする（通常は `RELAY_HOME` を分ければ足りる） |
 | `RELAY_HTTP_PORT` | `18080` | Webhook と画像の配信のポートが重ならないようにする |
 | `RELAY_MCP_PORT` | `18090` | チャット用ツールの MCP サーバーのポートが重ならないようにする |
-| `RELAY_WORKSPACE`（`--workspace <dir>`） | `<RELAY_HOME>/workspace` | 指定しなければ、`RELAY_HOME` を分けると分かれる。指定する場合は、中継ごとに別のディレクトリにする。作業ディレクトリの中（受け取った添付の置き場 `.relay/inbox/` を含む）は承認なしで読めてルームへ返せるので、共有すると、もう一方の集団のファイルを引き出せる |
+| `RELAY_WORKSPACE`（`--workspace <dir>`） | `<RELAY_HOME>/workspace` | 指定しなければ、`RELAY_HOME` を分けると分かれる。指定する場合は、中継ごとに、互いに重ならないディレクトリにする（一方が他方を中に含まない）。もう一方の中継の `RELAY_HOME` も中に含めない。作業ディレクトリの中（受け取った添付の置き場 `.relay/inbox/` を含む）は承認なしで読めてルームへ返せるので、重なると、もう一方の集団のファイルや秘密情報を引き出せる。中継が起動時に確かめるのは、自分の `RELAY_HOME`、中継のパッケージ、秘密情報の置き場を含まないことだけ |
 
 例：
 
