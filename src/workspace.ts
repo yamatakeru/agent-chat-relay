@@ -73,11 +73,38 @@ function isLink(p: string): boolean {
   }
 }
 
-/** 作業ディレクトリを独立した git リポジトリにして、上位の設定や AGENTS.md を拾わせない。できなければ起動しない */
-export function initWorkspace(workspace: string, git = "git"): void {
-  if (existsSync(join(workspace, ".git"))) return
+/**
+ * git のリポジトリの場所を変える環境変数。git init は、作業ディレクトリではなく、これらが指す場所に書く。
+ * 確認で止まる前に作業ディレクトリの外へ書かないよう、git init の前に止める
+ */
+const GIT_LOCATION_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_INDEX_FILE"]
+
+/**
+ * 作業ディレクトリを独立した git リポジトリにして、上位の設定や AGENTS.md を拾わせない。
+ * .git があるかではなく、git から見たリポジトリの最上位が作業ディレクトリ自身であることを確かめる。
+ * 直すのは、既存のリポジトリも上書きしない git init だけにする（.git を消して作り直すと、エージェントの履歴を失いうる）。
+ * 確かめられなければ起動しない。
+ * git の環境変数は取り除かず、ハーネスが受け取るのと同じ環境（env）で確かめる。別の場所を向いていれば、起動しない
+ */
+export function initWorkspace(workspace: string, git = "git", env: Record<string, string | undefined> = process.env): void {
+  const relocating = GIT_LOCATION_ENV.filter((name) => env[name])
+  if (relocating.length > 0) {
+    throw new Error(`環境変数 ${relocating.join("・")} が git のリポジトリの場所を変えるため、起動しません。外してから起動してください: ${workspace}`)
+  }
   mkdirSync(workspace, { recursive: true, mode: 0o700 })
-  if (!Bun.which(git) || !Bun.spawnSync([git, "init", "-q", workspace]).success) {
-    throw new Error("作業ディレクトリを git リポジトリにできないため、起動しません")
+  // .git がリンクか、gitdir: を書いたファイルだと、git init がその先のリポジトリに書き、作業ディレクトリの外に及ぶ
+  const dotGit = join(workspace, ".git")
+  const dotGitStat = lstatSync(dotGit, { throwIfNoEntry: false })
+  if (dotGitStat && !dotGitStat.isDirectory()) {
+    throw new Error(`作業ディレクトリの .git がディレクトリではない（シンボリックリンクか、別の場所を指すファイル）ため、起動しません。.git を確かめるか、退避してから起動してください: ${dotGit}`)
+  }
+  // 既存のリポジトリでも安全で、欠けた部分（空の .git など）を補う
+  if (!Bun.which(git) || !Bun.spawnSync([git, "init", "-q", workspace], { env }).success) {
+    throw new Error(`作業ディレクトリを git リポジトリにできないため、起動しません。git がインストールされているか確かめてください: ${workspace}`)
+  }
+  const real = realpathSync(workspace)
+  const found = Bun.spawnSync([git, "-C", real, "rev-parse", "--show-toplevel", "--absolute-git-dir"], { env })
+  if (!found.success || found.stdout.toString() !== `${real}\n${join(real, ".git")}\n`) {
+    throw new Error(`作業ディレクトリが、git から見て独立したリポジトリになっていないため、起動しません。.git を確かめるか、退避してから起動してください: ${workspace}`)
   }
 }
