@@ -124,6 +124,13 @@ test("e2e は、どれかの手順が失敗したら、続く手順も走らせ�
   expect(lib('check "A" true; finish').code).toBe(0)
 })
 
+test("e2e の記録の検索は、一致した行の後に記録が長く続いても、一致したとみなす（pipefail で SIGPIPE を失敗にしない）", () => {
+  const big = join(dir, "big.jsonl")
+  writeFileSync(big, `a\n赤\n${"x\n".repeat(200_000)}`)
+  expect(lib(`LOG=${JSON.stringify(big)}; sent_after 1 赤`).code).toBe(0)
+  expect(lib(`LOG=${JSON.stringify(big)}; sent_after 2 赤`).code).toBe(1)
+})
+
 test("e2e の引数は、ハーネス名（既定は claude）と --full", () => {
   expect(lib('echo "$H $FULL"').out).toBe("claude 0\n")
   expect(lib('echo "$H $FULL"', "opencode", "--full").out).toBe("opencode 1\n")

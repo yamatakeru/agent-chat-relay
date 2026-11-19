@@ -25,7 +25,7 @@ waitfor() {
   return 1
 }
 # 送信の記録の n 行目より後に、パターンがあるか
-sent_after() { tail -n "+$(($1 + 1))" "$LOG" | grep -q -- "$2"; }
+sent_after() { tail -n "+$(($1 + 1))" "$LOG" | grep -- "$2" >/dev/null; }
 code() { grep -o 'relay pair [0-9a-f]\{6\}' "$LOG" | tail -1 | awk '{print $3}'; }
 
 # 手順の結果を記録する。check <手順の名前> <判定のコマンド...>
