@@ -54,4 +54,4 @@ skill は、段としては文章のままです。読まなくても何も失�
 ## Consequences
 
 - 下書きの数が正しいことは、本文が正しい証拠ではありません。下書きが埋めるのは、道具の出す数と区分だけです。手段の区別、理由、e2e の結果は、人が埋めます。
-- `scripts/pre-pr.ts` は、fallow の JSON の形（`summary.counts`、`mutants[].status`、`test_reach`）に依存します。fallow を上げるときは、下書きが読めることを確かめます。
+- 下書きを作る `scripts/pr-draft.ts` は、fallow の JSON の形（`summary.counts`、`mutants[].status`、`test_reach`）に依存します。fallow を上げるときは、下書きが読めることを確かめます。
