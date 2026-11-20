@@ -27,6 +27,7 @@ import { claudeOptions, harnessConfig, harnessOptionsFromEnv } from "../src/harn
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { buildTools } from "../src/core/mcp.ts"
+import { tempDir } from "./tmp.ts"
 
 let dir: string
 let access: AccessStore
@@ -36,10 +37,7 @@ const quiet = { info: () => {}, error: () => {} }
 const NO_WAIT = { quietMs: 0, maxMs: 0 }
 
 beforeEach(() => {
-  // /tmp は使わない（AGENTS.md）
-  const base = join(import.meta.dir, "../.local")
-  mkdirSync(base, { recursive: true })
-  dir = mkdtempSync(join(base, "test-"))
+  dir = tempDir("test-")
   access = new AccessStore(join(dir, "access.json"), () => now)
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
