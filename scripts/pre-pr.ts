@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { type Target, targetsSince } from "./e2e-targets.ts"
 
-type Mutant = { file: string; line: number; status: string; operator?: string; change?: { from: string; to: string }; test_reach?: { reach: string } | null; prune_reason?: string | null }
+type Mutant = { file: string; line: number; status: string; operator: string; change: { from: string; to: string }; test_reach?: { reach: string } | null; prune_reason?: string | null }
 export type Mutation = { summary: { counts: Record<string, number> }; mutants: Mutant[] }
 export type Results = { base: string; tests: { pass: number; fail: number } | undefined; check: boolean; mutation: Mutation | undefined; e2e: Target[] }
 
@@ -30,10 +30,10 @@ export function testCounts(out: string): { pass: number; fail: number } | undefi
 }
 
 function mutationLines(m: Mutation): string[] {
-  const counts = Object.entries(m.summary.counts).filter(([k, n]) => k !== "total" && n > 0)
-  const lines = [
-    `- \`bun run mutation\`：変異 ${m.summary.counts.total ?? m.mutants.length} 個のうち、${counts.map(([k, n]) => `${STATUS[k] ?? k} ${n} 個`).join("、") || "0 個"}`,
-  ]
+  const total = m.summary.counts.total
+  if (!total) return ["- `bun run mutation`：変異 0 個（変えた行に、変異させる箇所がない）"]
+  const counts = Object.entries(m.summary.counts).filter(([k, n]) => k !== "total" && n)
+  const lines = [`- \`bun run mutation\`：変異 ${total} 個のうち、${counts.map(([k, n]) => `${STATUS[k] ?? k} ${n} 個`).join("、")}`]
   const rest = m.mutants.filter((x) => !CAUGHT.has(x.status))
   if (!rest.length) return lines
   lines.push("  - 捕まえていない変異。テストで捕まえるか、捕まえない理由を書く：")
@@ -42,7 +42,7 @@ function mutationLines(m: Mutation): string[] {
   for (const x of rest) {
     const key =
       x.status === "survived"
-        ? `\`${x.file}:${x.line}\`（${STATUS.survived}。${x.operator} \`${x.change?.from}\` → \`${x.change?.to}\`）`
+        ? `\`${x.file}:${x.line}\`（${STATUS.survived}。${x.operator} \`${x.change.from}\` → \`${x.change.to}\`）`
         : `\`${x.file}\`（${STATUS[x.status] ?? x.status}。${x.test_reach ? `区分 ${x.test_reach.reach}` : x.prune_reason ? `理由 ${x.prune_reason}` : "区分なし"}）`
     groups.set(key, (groups.get(key) ?? 0) + 1)
   }
