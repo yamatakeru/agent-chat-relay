@@ -112,7 +112,7 @@ export interface Session {
 }
 
 /** always は、ハーネスが示した「常に許可」の範囲（選択肢の名前）。示されていなければ書かない */
-export type PermissionRequest = { title: string; input: string; always?: string }
+export type PermissionRequest = { title: string; input: string; always?: string; requireFullDisplay?: true }
 /** always は「常に許可」（ADR 0015） */
 export type Verdict = "allow" | "always" | "deny"
 
@@ -127,6 +127,8 @@ const MAX_BATCH = 5
 const MAX_ALWAYS_SCOPE = 200
 /** 1 件だけの依頼の題名は、これより長ければ省く（Claude Code の Bash では、題名がコマンドそのもの） */
 const MAX_SINGLE_TITLE = 200
+const MAX_BATCH_TITLE = 100
+const MAX_BATCH_INPUT = 200
 /** 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする */
 const APPROVAL_MARGIN = 50
 /** コネクターの本文の上限の下限。依頼 1 件の題名・答え方・「常に許可」の範囲を省かずに、承認依頼の文面に収めるため */
@@ -291,11 +293,23 @@ export class Relay {
       this.log.error("実行承認を送れる人がいないため、拒否しました", { tool: req.title })
       return Promise.resolve("deny")
     }
+    const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
+    const normalized = { ...req, always }
+    if (req.requireFullDisplay && approvalText([{ req: normalized, id: ID_PLACEHOLDER }], ID_PLACEHOLDER).length > MIN_TEXT - APPROVAL_MARGIN) {
+      this.log.error("操作と対象をすべて表示できないため、実行を拒否しました", { tool: req.title })
+      return Promise.resolve("deny")
+    }
     return new Promise<Verdict>((resolve) => {
       // 同時に届いた依頼は、1 通の束にまとめて送る（ADR 0014）
+      const pending = { req: normalized, resolve }
+      if (req.requireFullDisplay && (req.title.length > MAX_BATCH_TITLE || req.input.length > MAX_BATCH_INPUT)) {
+        // 束にすると全文が収まらない依頼は 1 件で送る。収集中の束はそのまま待つ。
+        const b = this.newBatch()
+        b.items.push({ id: this.newPermissionId(), ...pending })
+        this.sendBatch(b)
+        return
+      }
       let b = this.collecting ?? this.openBatch()
-      const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
-      const pending = { req: { ...req, always }, resolve }
       // 足すと文面が上限を超えるなら、今の束を先に送る。コネクターが文面を切ると、依頼や「常に許可」の範囲が見えないまま、束全体に答えられてしまう（ADR 0015）
       if (b.items.length > 0 && approvalText([...b.items, { id: ID_PLACEHOLDER, ...pending }], ID_PLACEHOLDER).length > this.approvalMax()) {
         clearTimeout(b.flush)
@@ -310,10 +324,13 @@ export class Relay {
     })
   }
 
-  private openBatch(): Batch {
+  private newBatch(): Batch {
     const b: Batch = { id: "", items: [], opened: Date.now(), timeout: setTimeout(() => this.expire(b), PERMISSION_TIMEOUT_MS) }
-    this.collecting = b
     return b
+  }
+
+  private openBatch(): Batch {
+    return this.collecting = this.newBatch()
   }
 
   private sendBatch(b: Batch): void {
@@ -705,18 +722,18 @@ function describeAttachment(a: Attachment): string {
 const ID_PLACEHOLDER = "xxxxx"
 
 /** 承認依頼の束の文面。依頼が 1 つなら、その依頼だけを書き、入力を省いて max に収める */
-function approvalText(pending: PendingRequest[], id: string, max = Infinity): string {
+function approvalText(pending: Pick<PendingRequest, "id" | "req">[], id: string, max = Infinity): string {
   if (pending.length === 1) {
     const { req } = pending[0]!
-    const head = `🔐 実行の承認：${truncate(req.title, MAX_SINGLE_TITLE)}`
+    const head = `🔐 実行の承認：${req.requireFullDisplay ? req.title : truncate(req.title, MAX_SINGLE_TITLE)}`
     const answers = [`許可：yes ${id}`, ...(req.always ? [`常に許可：always ${id}（${req.always}）`] : []), `拒否：no ${id}`].join("\n")
     const room = Math.min(1500, max - head.length - answers.length - 4)
-    return [head, "", truncate(req.input, room), "", answers].join("\n")
+    return [head, "", req.requireFullDisplay ? req.input : truncate(req.input, room), "", answers].join("\n")
   }
   const items = pending.map((i, n) =>
     [
-      `${n + 1}. ${truncate(i.req.title, 100)}`,
-      truncate(i.req.input, 200),
+      `${n + 1}. ${truncate(i.req.title, MAX_BATCH_TITLE)}`,
+      truncate(i.req.input, MAX_BATCH_INPUT),
       ...(i.req.always ? [`常に許可の範囲：${i.req.always}`] : []),
       `（この依頼だけ：yes ${i.id}・${i.req.always ? `always ${i.id}・` : ""}no ${i.id}）`,
     ].join("\n"),

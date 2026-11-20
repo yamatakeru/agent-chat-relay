@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "bun:test"
 import { randomBytes } from "node:crypto"
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { delimiter, dirname, join, resolve } from "node:path"
 import type { Log, PermissionRequest, Verdict } from "../src/core/relay.ts"
 
 const repo = join(import.meta.dir, "..")
@@ -259,6 +259,7 @@ test("同梱 pi が新規・再開で reply し、組み込みツールに ACP �
           message: `${name === "bash" ? "コマンド" : "対象パス"}: ${JSON.stringify(operations[name].target)}`,
         })
         assert.equal(req.always, undefined)
+        assert.equal(req.requireFullDisplay, true)
         checkState(name, false)
         op.answer.resolve(verdict)
         await op.prompt
@@ -362,9 +363,10 @@ test("同梱 pi が新規・再開で reply し、組み込みツールに ACP �
     await stop()
 
     // 公開 CLI の再開経路も通す。LINE はローカルの Webhook を待つだけで、外には接続しない。
-    const cli = Bun.spawn([...BUN_ISOLATED, join(src, "main.ts"), "serve", "pi", "--workspace", cwd, "--session-id", sessionId], {
+    const cli = Bun.spawn([join(src, "..", "bin", "agent-chat-relay"), "serve", "pi", "--workspace", cwd, "--session-id", sessionId], {
       cwd,
-      env: { PATH: "/usr/bin:/bin", HOME: home, RELAY_HOME: relayHome, RELAY_HTTP_PORT: "0", RELAY_MCP_PORT: "0",
+      env: { PATH: [dirname(BUN_ISOLATED[0]!), "/usr/bin", "/bin"].join(delimiter),
+        HOME: home, RELAY_HOME: relayHome, RELAY_HTTP_PORT: "0", RELAY_MCP_PORT: "0",
         RELAY_LINE_CHANNEL_SECRET: "dummy-secret", RELAY_LINE_CHANNEL_TOKEN: "dummy-token", RELAY_LINE_API_BASE: server.url.origin },
       stdout: "pipe", stderr: "pipe",
     })

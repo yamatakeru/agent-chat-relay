@@ -695,6 +695,23 @@ describe("relay", () => {
     expect(await later).toBe("deny")
   })
 
+  test("全文が必要な実行承認は、束で省略されるなら個別に送り、個別でも収まらなければ拒否する", async () => {
+    const { relay, conn } = setup()
+    const bundled = relay.requestPermission({ title: "edit", input: "short", requireFullDisplay: true })
+    const long = "a".repeat(300) + " END"
+    const single = relay.requestPermission({ title: "bash", input: long, requireFullDisplay: true })
+    expect(await relay.requestPermission({ title: "bash", input: "a".repeat(1200), requireFullDisplay: true })).toBe("deny")
+    expect(conn.approvals).toHaveLength(1)
+    expect(conn.approvals[0]!.text).toContain(long)
+    expect(relay.answer(ALICE, conn.approvals[0]!.id, "allow")).toBe(true)
+    expect(await single).toBe("allow")
+    await Bun.sleep(5)
+    expect(conn.approvals).toHaveLength(2)
+    expect(conn.approvals[1]!.text).toContain("short")
+    expect(relay.answer(ALICE, conn.approvals[1]!.id, "deny")).toBe(true)
+    expect(await bundled).toBe("deny")
+  })
+
   test("束に入れる依頼は 5 つまで。最初の依頼から maxMs たてば、続いていても送る", async () => {
     access.save({ allowFrom: [ALICE], rooms: {}, pending: {} })
     const relay = new Relay(access, quiet, undefined, { quietMs: 10_000, maxMs: 50 })

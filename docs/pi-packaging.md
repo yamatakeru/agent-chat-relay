@@ -36,7 +36,7 @@ mise exec node@24.22.3 -- node scripts/build-pi-adapter.mjs --check
 
 ## 配布物を Bun だけで確かめる
 
-まず `bun install --frozen-lockfile`、`bun run check`、`bun --no-env-file --config=/dev/null test test/pi-bundled.test.ts test/cli.test.ts` を実行します。次に `npm pack` の実物を、開発ツリー側の依存ではなく、別のインストール先から試します。以下の例は、リポジトリ直下で、Bun 1.4.4 の実体が `command -v bun` で見つかる環境から実行します。
+まず `bun install --frozen-lockfile`、`bun run check`、`bun --no-env-file --config=/dev/null test test/pi-bundled.test.ts test/cli.test.ts` を実行します。次に `npm pack` の実物を、開発ツリー側の依存ではなく、別のインストール先から試します。以下の例は、リポジトリ直下で、Bun 1.4.4 が PATH にある macOS から実行します。インストール後のテストは `sandbox-exec` で実行し、作業ツリーや祖先ディレクトリの開発用 `node_modules` を読めなくします。
 
 ```sh
 root=$PWD
@@ -45,6 +45,17 @@ work=$(mktemp -d "$root/.local/pi-package.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/pkg" "$work/consumer" "$work/home" "$work/tmp"
 bun_dir=$(dirname "$(command -v bun)")
+profile="$work/isolated.sb"
+{
+  printf '(version 1)\n(allow default)\n'
+  parent=$(cd "$work" && pwd -P)
+  while :; do
+    escaped=$(printf '%s' "${parent%/}/node_modules" | perl -pe 's/(["\\])/\\$1/g')
+    printf '(deny file-read* (subpath "%s"))\n' "$escaped"
+    [ "$parent" != / ] || break
+    parent=$(dirname "$parent")
+  done
+} > "$profile"
 mise exec node@24.22.3 -- npm pack --ignore-scripts --pack-destination "$work/pkg"
 tar -tzf "$work"/pkg/*.tgz
 (
@@ -55,9 +66,9 @@ tar -tzf "$work"/pkg/*.tgz
       ! command -v node && ! command -v npm && ! command -v pi || exit 1
       bun --no-env-file --config=/dev/null add --ignore-scripts "$1"
       RELAY_TEST_PI_PACKAGE="$PWD/node_modules/agent-chat-relay" \
-        bun --no-env-file --config=/dev/null test "$2"
-    ' sh "$work"/pkg/*.tgz "$root/test/pi-bundled.test.ts"
+        sandbox-exec -f "$3" bun --no-env-file --config=/dev/null test "$2"
+    ' sh "$work"/pkg/*.tgz "$root/test/pi-bundled.test.ts" "$profile"
 )
 ```
 
-テストは偽モデルと偽チャットコネクターを使い、ACP で新規・再開し、実際の pi から HTTP MCP の `reply` を通します。新規・再開の両方で、作業ディレクトリ外の読み取り・書き込み・編集・シェルへの実行承認を拒否し、同じ操作を今回だけ許可します。macOS では作業ディレクトリ内の通常のテキストを承認なしで読めること、作業ディレクトリ外を指すリンクは承認なしで読めないことも確かめます。承認待ちで切断した後の許可が効かないことや、他のセッションの再開と古い MCP トークンでの準備完了を拒むことも確かめます。実サービスへの接続やログインは行いません。配布物をインストールすると推移依存は再解決されるため、リポジトリでの `bun.lock` 固定検証とは別です。
+テストは偽モデルと偽チャットコネクターを使い、ACP で新規・再開し、実際の pi から HTTP MCP の `reply` を通します。新規・再開の両方で、作業ディレクトリ外の読み取り・書き込み・編集・シェルへの実行承認を拒否し、同じ操作を今回だけ許可します。macOS では作業ディレクトリ内の通常のテキストを承認なしで読めること、作業ディレクトリ外を指すリンクは承認なしで読めないことも確かめます。承認待ちで切断した後の許可が効かないことや、他のセッションの再開と古い MCP トークンでの準備完了を拒むことも確かめます。インストールした `bin/agent-chat-relay` からの再開も確認します。実サービスへの接続やログインは行いません。配布物をインストールすると推移依存は再解決されるため、リポジトリでの `bun.lock` 固定検証とは別です。

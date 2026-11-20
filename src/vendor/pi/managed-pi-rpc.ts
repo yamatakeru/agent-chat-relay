@@ -70,7 +70,8 @@ async function start(): Promise<void> {
       resourceLoaderOptions: {
         ...(!source ? {
           noContextFiles: true, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-          systemPrompt: relayPrompt, appendSystemPrompt: [],
+          // 空文字で探索を止める。固定文を systemPrompt に渡すと、SDK はパスとしても解釈する。
+          systemPrompt: "", systemPromptOverride: () => relayPrompt, appendSystemPrompt: [],
         } : { appendSystemPromptOverride: entries => [...entries, relayPrompt] }),
         disabledBuiltinExtensions: ["mcp"],
         extensionFactories: [{ name: managedExtensionName, factory: managedChat(mcp, workspace, stateDir) }],

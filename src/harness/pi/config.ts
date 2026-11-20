@@ -23,6 +23,7 @@ export function preparePiLaunch({ home, options, cwd, sessionId, stderrPath }: P
       command: [...BUN_ISOLATED, ADAPTER],
       cwd: state.workspace, mcp, sessionId, stderrPath,
       inheritEnv: false,
+      requireFullPermissionDisplay: true,
       env: {
         HOME: state.childHome,
         PATH: "/usr/bin:/bin",

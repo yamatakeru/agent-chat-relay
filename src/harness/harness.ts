@@ -11,6 +11,8 @@ export type HarnessConfig = {
   env?: Record<string, string>
   /** false のときは env で明示した変数だけを子に渡す。 */
   inheritEnv?: false
+  /** 操作と対象を省略した承認を受け付けないハーネスに指定する。 */
+  requireFullPermissionDisplay?: true
   /** 中継の環境変数のうち、ハーネスに渡さないもの（RELAY_*・DOTENV_* のほかに） */
   withheld?: string[]
   /** セッションの作業ディレクトリ（絶対パス） */
@@ -90,7 +92,7 @@ export async function startHarness(
       const title = tc.title ?? tc.kind ?? "ツールの実行"
       const input = tc.rawInput === undefined ? "" : JSON.stringify(tc.rawInput, null, 2)
       const always = alwaysOption(tc.kind, params.options)
-      const verdict = await onPermission({ title, input, always: always?.name })
+      const verdict = await onPermission({ title, input, always: always?.name, ...(cfg.requireFullPermissionDisplay ? { requireFullDisplay: true } : {}) })
       const option = verdict === "always" && always ? always : params.options.find((o) => o.kind === (verdict === "deny" ? "reject_once" : "allow_once"))
       log.info(`実行承認：${verdict}`, { tool: title })
       if (!option) return { outcome: { outcome: "cancelled" } }
