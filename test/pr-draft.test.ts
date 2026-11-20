@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { draft, type Mutation, parseMutation, type Results, testCounts } from "../scripts/pre-pr.ts"
+import { draft, type Mutation, parseMutation, type Results, testCounts } from "../scripts/pr-draft.ts"
 
 const op = { operator: "negate-condition", change: { from: "<condition>", to: "true" } }
 const base: Results = { base: "main", head: "abc1234", tests: { pass: 144, fail: 0 }, check: true, mutation: undefined, e2e: [] }
