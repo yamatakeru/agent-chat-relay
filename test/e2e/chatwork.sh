@@ -3,7 +3,7 @@
 # e2e の中核の外（ADR 0023）。--full を付けると、モデルの能力に頼る手順（画像の説明、停止中に届いた依頼を調べる）も走らせる。
 # 各手順を判定し、1 つでも失敗すれば 0 以外で終わる。
 # 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
-# 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
+# Claude Code の会話ログ（~/.claude/projects/）は、終わるときに test/e2e/lib.sh が消す。
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -30,8 +30,6 @@ MOCK=$!
 sleep 1
 scripts/relay.sh serve "$H" >"$RLOG" 2>&1 &
 RELAY=$!
-cleanup() { kill "$RELAY" "$MOCK" 2>/dev/null; }
-trap cleanup EXIT
 for _ in $(seq 60); do
   grep -q "セッションを開始しました" "$RLOG" && break
   sleep 2

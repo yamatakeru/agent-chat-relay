@@ -13,7 +13,6 @@ LINE・LINE WORKS・Chatwork・Discord のルームを、任意のハーネス�
 - 実行時のデータ、調査用のソース、一時ファイルは `.local/`（git の無視対象）に置く。ホーム、`~/Library/Caches`、`/tmp` には作らない。設定ファイルの複製のような、不要な中間物も作らない。
 - 中継の本体は、`RELAY_HOME` がなければ `~/.agent-chat-relay/` を使う（インストールした CLI の既定。ADR 0019）。開発と確認では `scripts/relay.sh`（`.local/relay` を使う）で動かすか、`RELAY_HOME` を `.local/` の中に向ける。
 - 調査用のソース（ACP のアダプターなど）は `.local/src/` に、使っているバージョンのタグを clone して読む。
-- テストで Claude Code を起動すると、`~/.claude/projects/` に会話ログができる。終わったら片付ける。
 
 ## 秘密情報（リポジトリは public）
 

@@ -4,7 +4,7 @@
 # 合言葉を覚えているか、返事と実行承認が働くかを確認する。e2e の中核の 1 つ（ADR 0023）。
 # 各手順を判定し、1 つでも失敗すれば 0 以外で終わる。
 # 実際のハーネスを動かすので、契約の利用枠を少し使う。記録と作業ディレクトリは .local/e2e/ に作る。
-# 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
+# Claude Code の会話ログ（~/.claude/projects/）は、終わるときに test/e2e/lib.sh が消す。
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -23,9 +23,6 @@ A=Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 mise exec -- bun --no-env-file --config=/dev/null test/e2e/mock-line.ts "$LOG" >"$E/mock-resume-$H.log" 2>&1 &
 MOCK=$!
-RELAY=""
-cleanup() { kill "$RELAY" "$MOCK" 2>/dev/null; }
-trap cleanup EXIT
 
 # 中継を起動し、ログに $2 が出るまで待つ
 start() {

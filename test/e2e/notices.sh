@@ -7,7 +7,7 @@
 # 時間のたった知らせは、LINE ではグループに送らないので、1 対 1 のトーク（承認者の DM）で確かめる。
 # 実際のハーネスを動かすので、契約の利用枠を少し使う。モデルは Haiku で足りる（ANTHROPIC_MODEL=haiku）。
 # 記録と作業ディレクトリは .local/e2e/ に作る。
-# 終わったら、ハーネスの会話ログ（Claude Code なら ~/.claude/projects/ の .local-e2e を含むもの）を消す。
+# Claude Code の会話ログ（~/.claude/projects/）は、終わるときに test/e2e/lib.sh が消す。
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -28,9 +28,6 @@ FAILED_NOTICE=今は不調で返事ができません
 MOCK_LINE_HOLD="$FAILED_NOTICE" MOCK_LINE_HOLD_MS=20000 \
   mise exec -- bun --no-env-file --config=/dev/null test/e2e/mock-line.ts "$LOG" >"$E/mock-notices-$H.log" 2>&1 &
 MOCK=$!
-RELAY=""
-cleanup() { kill "$RELAY" "$MOCK" 2>/dev/null; }
-trap cleanup EXIT
 
 # 中継を起動し、新しいセッションができるまで待つ。start <ログ>（環境変数は呼ぶ側で渡す）
 start() {
@@ -95,7 +92,9 @@ check "承認依頼が届く" wait_approval "$n"
 harness="$(proc claude-agent-acp)"
 echo "harness pid: ${harness:-none}"
 check "ハーネスのプロセスが見つかる" test -n "$harness"
-[ -n "$harness" ] && kill -9 "$harness"
+# アダプターだけを落とすと、子の claude が孤児として残り、しばらく会話ログを書き続けるので、子も止める
+kids="$(descendants "${harness:-0}")"
+[ -n "$harness" ] && kill -9 "$harness" $kids
 check "失敗の知らせが届く" dm_notice "$FAILED_NOTICE" 20
 check "異常終了をログに書く" grep -q "ハーネスが異常終了したため" "$RLOG-1.log"
 # 知らせの送信は詰まっているので、中継は待っている
