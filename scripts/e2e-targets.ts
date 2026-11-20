@@ -1,4 +1,4 @@
-// 変更から、走らせる e2e を挙げる（ADR 0023）。bun run mutation が、変異の前に表示する。
+// 変更から、走らせる e2e を挙げる（ADR 0023）。bun run mutation が変異の前に表示し、bun run pre-pr が PR 本文の下書きに入れる。
 // e2e は、ハーネスとの結合（実際の Claude Code が承認を求めて答えに従うこと、MCP、再開）を確かめるので、
 // その結合に関わるパスと依存を変えたときだけ挙げる。コネクターと src/core/relay.ts は、単体テストで守る
 //
@@ -51,11 +51,15 @@ function git(...args: string[]): string {
   return r.stdout.toString()
 }
 
-if (import.meta.main) {
-  // コミットしていない変更と、追跡していないファイルも含める
-  const from = git("merge-base", process.argv[2] ?? "main", "HEAD").trim()
+/** base との差分（コミットしていない変更と、追跡していないファイルも含める）から、走らせる e2e を返す */
+export function targetsSince(base: string): Target[] {
+  const from = git("merge-base", base, "HEAD").trim()
   const files = [...git("diff", "--name-only", from).split("\n"), ...git("ls-files", "--others", "--exclude-standard").split("\n")].filter(Boolean)
-  const targets = e2eTargets(files, git("diff", from, "--", "package.json", "bun.lock"))
+  return e2eTargets(files, git("diff", from, "--", "package.json", "bun.lock"))
+}
+
+if (import.meta.main) {
+  const targets = targetsSince(process.argv[2] ?? "main")
   if (!targets.length) console.log("e2e: 走らせる必要はありません（ハーネスとの結合に関わる変更がない。ADR 0023）")
   else {
     console.log("e2e: 次を走らせ、結果を PR に書いてください（ADR 0023）")

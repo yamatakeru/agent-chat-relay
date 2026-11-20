@@ -110,7 +110,7 @@ if (import.meta.main) {
   // 検査そのもののテスト（test/check.test.ts）は、避ける語と起動の例を含む
   const self = /^(scripts\/check\.ts|test\/check\.test\.ts)$/
   const errors: string[] = []
-  for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", "README.md", "AGENTS.md", "GLOSSARY.md", ".github/**/*.yml", "bin/*"], /^docs\/adr\//))
+  for (const f of files(["{src,test,scripts,docs}/**/*.{ts,sh,md}", ".agents/**/*.md", "README.md", "AGENTS.md", "CLAUDE.md", "GLOSSARY.md", ".github/**/*.yml", "bin/*"], /^docs\/adr\//))
     if (!self.test(f)) errors.push(...wordingErrors(f, read(f)))
   for (const f of files(["**/*.sh", "bin/*", "package.json", ".github/**/*.yml"], /^(node_modules|\.local)\//)) errors.push(...shellLaunchErrors(f, read(f)))
   const today = new Date().toISOString().slice(0, 10)
