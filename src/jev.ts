@@ -9,8 +9,8 @@ const ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 const MODEL = "jev-1.14.0"
 const TIMEOUT_MS = 2000
 const DEFAULT_MIN_PROBABILITY = 0.8
-/** Jev に渡す長さ。題名・入力・エージェントの文・発言の本文と、発言の数 */
-const LIMITS = { title: 500, input: 2000, agentText: 2000, text: 1000, messages: 30 }
+/** Jev に渡す長さ。題名・入力・エージェントの文・発言の本文・名前（表示名とルーム名）と、発言の数 */
+const LIMITS = { title: 500, input: 2000, agentText: 2000, text: 1000, name: 100, messages: 30 }
 /** 「どの人でもない」の選択肢。人の選択肢は p1, p2, … なので重ならない */
 const NONE = "none"
 
@@ -72,14 +72,15 @@ function request(q: AttributionQuery): { body: unknown; people: Map<string, stri
   const labels = new Map<string, string>()
   const criteria: Record<string, string> = {}
   const messages = q.messages.slice(-LIMITS.messages).map((m) => {
+    const name = m.name.slice(0, LIMITS.name)
     let label = labels.get(m.sender)
     if (!label) {
       label = `p${labels.size + 1}`
       labels.set(m.sender, label)
       people.set(label, m.sender)
-      criteria[label] = `The person ${label} (shown as "${m.name}")`
+      criteria[label] = name ? `The person ${label} (shown as "${name}")` : `The person ${label} (no display name)`
     }
-    return { person: label, name: m.name, room: m.room, mentioned: m.mentioned, text: m.text.slice(0, LIMITS.text) }
+    return { person: label, name, room: m.room.slice(0, LIMITS.name), mentioned: m.mentioned, text: m.text.slice(0, LIMITS.text) }
   })
   criteria[NONE] = "None of these people, or it cannot be told from the state"
   return {

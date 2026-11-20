@@ -117,7 +117,10 @@ export interface Session {
  */
 export type PermissionRequest = { title: string; input: string; always?: string; agentText?: string }
 
-/** 送り先を推すときに渡す、そのターンの発言。sender は ID、name は表示名、room はルームの名前（なければ ID） */
+/**
+ * 送り先を推すときに渡す、そのターンの発言。sender は ID（推した結果を戻すのにだけ使い、外へは送らない）。
+ * name は表示名、room はルームの名前（DM なら「DM」）で、なければ空。ID では補わない
+ */
 export type AttributionMessage = { sender: string; name: string; room: string; mentioned: boolean; text: string }
 export type AttributionQuery = { title: string; input: string; agentText: string; messages: AttributionMessage[] }
 /** 推した依頼者と、その確率。下限に届かないなど、推せなければ undefined */
@@ -316,14 +319,12 @@ export class Relay {
       return Promise.resolve("deny")
     }
     // 依頼が届いた時点の発言で決める。依頼のあとに届いた発言は、その依頼のきっかけになりえない
-    const messages = this.turnMessages.map((m) => ({
-      sender: m.sender,
-      name: m.senderName ?? m.sender,
-      room: m.isDM ? "DM" : (this.roomNames.get(m.room) ?? m.room),
-      mentioned: m.mentioned,
-      text: m.text,
-    }))
-    const senders = turnSenders(messages)
+    const roomName = (m: Incoming) => (m.isDM ? "DM" : (this.roomNames.get(m.room) ?? ""))
+    const messages = this.turnMessages.map((m) => ({ sender: m.sender, name: m.senderName ?? "", room: roomName(m), mentioned: m.mentioned, text: m.text }))
+    // 承認者に見せる一覧では、名前がなければ ID を書く
+    const senders = turnSenders(
+      this.turnMessages.map((m) => ({ sender: m.sender, name: m.senderName ?? m.sender, room: roomName(m) || m.room, mentioned: m.mentioned })),
+    )
     const users = new Set(messages.map((m) => m.sender))
     const candidates = [...users].filter((u) => approvers.includes(u))
     // 送り手が 1 人なら、その人が承認者のときだけ絞る（そうでなければ to はなく、全員に送る）

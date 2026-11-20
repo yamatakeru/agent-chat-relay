@@ -808,12 +808,19 @@ describe("relay", () => {
 
       const queries: AttributionQuery[] = []
       const guessed = routing(async (q) => (queries.push(q), undefined))
+      guessed.conn.roomName = async () => undefined
       guessed.relay.receive(msg())
       guessed.relay.receive(msg({ sender: CAROL, mentioned: false }))
       await Bun.sleep(5)
       void guessed.relay.requestPermission({ title: "Bash", input: "ls" })
       await Bun.sleep(5)
       expect(queries.map((q) => q.agentText)).toEqual([""])
+      // 表示名やルーム名がなくても、ID では補わない（外へは送らない）。承認者への一覧には ID を書く
+      expect(queries[0]!.messages.map((m) => [m.name, m.room])).toEqual([
+        ["", ""],
+        ["", ""],
+      ])
+      expect(guessed.conn.approvals[0]!.text).toContain(`依頼者\n・${ROOM}：${ALICE}\nそのほかの発言\n・${ROOM}：${CAROL}`)
     })
 
     test("送り手の一覧は、改行も含めてちょうど 300 字なら省かず、1 字でも超えれば省く", async () => {
@@ -2801,9 +2808,28 @@ describe("Jev で承認依頼の依頼者を推す（ADR 0026）", () => {
     expect(Object.keys(r!.body.questions.requester.criteria)).toEqual(["p1", "p2", "none"])
     expect(r!.body.state.chat_messages.map((m: { person: string }) => m.person)).toEqual(["p1", "p2", "p1"])
     expect(r!.body.state.permission_request.input).toHaveLength(2000)
+    expect(r!.body.state.chat_messages[0]).toMatchObject({ name: "アリス", room: "開発", mentioned: true, text: "ログを見て" })
     expect(r!.body.state.agent_text).toHaveLength(2000)
     expect(JSON.stringify(r!.body)).not.toContain(ALICE)
     expect(JSON.stringify(r!.body)).not.toContain("secret-key")
+  })
+
+  test("名前とルーム名も長さを切り、表示名がなければそう書く", async () => {
+    const { f, requests } = fakeFetch(() => choice("none", { p1: 0, none: 1 }))
+    await jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k" }, quiet, f)!({
+      ...QUERY,
+      messages: [
+        { sender: ALICE, name: "n".repeat(150), room: "r".repeat(150), mentioned: true, text: "" },
+        { sender: BOB, name: "", room: "", mentioned: false, text: "" },
+      ],
+    })
+    const body = requests[0]!.body
+    expect(body.state.chat_messages.map((m: { name: string; room: string }) => [m.name.length, m.room.length])).toEqual([
+      [100, 100],
+      [0, 0],
+    ])
+    expect(body.questions.requester.criteria.p1).toBe(`The person p1 (shown as "${"n".repeat(100)}")`)
+    expect(body.questions.requester.criteria.p2).toBe("The person p2 (no display name)")
   })
 
   test("下限に届かない、どの人でもない、エラー、通信の失敗、答えの形が違う、のどれでも推さない", async () => {
