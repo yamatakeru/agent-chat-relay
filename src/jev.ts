@@ -38,20 +38,25 @@ export function jevFromEnv(env: Record<string, string | undefined>, log: Log, fe
       return undefined
     }
     const parsed = RESPONSE.safeParse(await res.json().catch(() => undefined))
-    const answer = parsed.data?.answers.requester
-    const probability = answer?.probabilities[answer.choice]
-    if (!answer || probability === undefined) {
+    if (!parsed.success) {
       log.error("Jev の答えの形が想定外です")
       return undefined
     }
-    const sender = people.get(answer.choice)
+    const { choice, probabilities } = parsed.data.answers.requester
+    const probability = probabilities[choice]!
+    const sender = people.get(choice)
     log.info("Jev で承認依頼の依頼者を推しました", { sender, probability, min })
     if (!sender || probability < min) return undefined
     return { sender, probability }
   }
 }
 
-const RESPONSE = z.object({ answers: z.object({ requester: z.object({ choice: z.string(), probabilities: z.record(z.string(), z.number()) }) }) })
+/** Jev の答え。選んだ選択肢の確率があるものだけを受け付ける */
+const RESPONSE = z.object({
+  answers: z.object({
+    requester: z.object({ choice: z.string(), probabilities: z.record(z.string(), z.number()) }).refine((a) => a.choice in a.probabilities),
+  }),
+})
 
 /** 下限。0 より大きく 1 以下の数。空なら既定 */
 function minProbability(v: string | undefined): number {

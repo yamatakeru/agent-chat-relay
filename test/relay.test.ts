@@ -761,6 +761,89 @@ describe("relay", () => {
       await Bun.sleep(5)
       expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
       expect(conn.approvals[0]!.text).toBe(["🔐 実行の承認：Bash", "", "ls", "", `許可：yes ${conn.approvals[0]!.id}`, `拒否：no ${conn.approvals[0]!.id}`].join("\n"))
+      conn.approvals = []
+      void relay.requestPermission({ title: "a", input: "x" })
+      void relay.requestPermission({ title: "b", input: "y" })
+      await Bun.sleep(5)
+      const [a] = conn.approvals
+      const ids = [...a!.text.matchAll(/この依頼だけ：yes ([a-km-z]{5})/g)].map((m) => m[1]!)
+      expect(a!.text).toBe(
+        [
+          "🔐 実行の承認（2 件）",
+          "",
+          `すべて許可：yes ${a!.id}`,
+          `すべて拒否：no ${a!.id}`,
+          "",
+          "1. a",
+          "x",
+          `（この依頼だけ：yes ${ids[0]}・no ${ids[0]}）`,
+          "",
+          "2. b",
+          "y",
+          `（この依頼だけ：yes ${ids[1]}・no ${ids[1]}）`,
+        ].join("\n"),
+      )
+    })
+
+    test("1 人に送る文面では、題名のあとに空行を挟んで、その人だけに送ったことを書く", async () => {
+      const { relay, conn } = routing()
+      relay.receive(msg())
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      const [a] = conn.approvals
+      expect(a!.text).toBe(
+        ["🔐 実行の承認：Bash", "", "あなたの発言による依頼として、あなただけに送っています。", "", "ls", "", `許可：yes ${a!.id}`, `拒否：no ${a!.id}`].join("\n"),
+      )
+    })
+
+    test("送り手に承認者が 1 人いても、ほかに送り手がいれば、その人には絞らない。推せれば推し、エージェントの文がなければ空で渡す", async () => {
+      const plain = routing()
+      plain.relay.receive(msg())
+      plain.relay.receive(msg({ sender: CAROL, mentioned: false }))
+      await Bun.sleep(5)
+      void plain.relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(plain.conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+
+      const queries: AttributionQuery[] = []
+      const guessed = routing(async (q) => (queries.push(q), undefined))
+      guessed.relay.receive(msg())
+      guessed.relay.receive(msg({ sender: CAROL, mentioned: false }))
+      await Bun.sleep(5)
+      void guessed.relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(queries.map((q) => q.agentText)).toEqual([""])
+    })
+
+    test("送り手の一覧は、ちょうど 300 字なら省かない", async () => {
+      const { relay, conn } = routing()
+      const head = ["この作業中の発言（どの発言による依頼かは分かりません）", "依頼者", "・開発："].join("\n")
+      // 40 字の名前を「、」でつなぎ、最後の名前でちょうど 300 字にする
+      const names: string[] = []
+      while (head.length + names.join("、").length + 41 < 300) names.push(String(names.length).padEnd(40, "x"))
+      names.push("z".repeat(300 - head.length - names.join("、").length - 1))
+      names.forEach((n, i) => relay.receive(msg({ sender: `line:U${i}`, senderName: n })))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      const text = conn.approvals[0]!.text
+      const list = head + names.join("、")
+      expect(list).toHaveLength(300)
+      expect(text).toContain(`${list}\n\nls`)
+    })
+
+    test("束を組むときは、送り手の一覧も含めた長さで、上限の手前で分ける", async () => {
+      const { relay, conn } = routing()
+      conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
+      for (let i = 0; i < 12; i++) relay.receive(msg({ sender: `line:U${i}`, senderName: `名前${i}`.padEnd(30, "x") }))
+      await Bun.sleep(5)
+      for (let i = 0; i < 5; i++) void relay.requestPermission({ title: `t${i}`, input: "i".repeat(330), always: "s".repeat(80) })
+      await Bun.sleep(5)
+      const toAlice = conn.approvals.filter((a) => a.user === ALICE)
+      // 一覧を除けば 5 件が 1 通に収まるが、一覧を含めると収まらない
+      expect(toAlice.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（4 件）", "🔐 実行の承認：t4"])
+      for (const a of toAlice) expect(a.text.length).toBeLessThanOrEqual(2000)
     })
 
     test("送り手が複数いるときは依頼者を推し、推せた人が承認者ならその人だけに、推せなければ全員に送る。送り手が 1 人なら推さない", async () => {

@@ -93,18 +93,23 @@ describe("secrets コマンド", () => {
     expect(mode(f)).toBe(0o600)
   })
 
+  test("Jev の API キーも保存できる（ADR 0026）", () => {
+    expect(run(["secrets", "typesafe"], "key\n").exitCode).toBe(0)
+    expect(parseSecrets(readFileSync(join(dir, "home", ".env"), "utf8"))).toEqual({ RELAY_TYPESAFE_API_KEY: "key" })
+  })
+
   test("知らないサービスと空の入力は拒否する", () => {
-    expect(run(["secrets", "slack"], "x\n").stderr.toString()).toContain("line・chatwork・discord")
+    expect(run(["secrets", "slack"], "x\n").stderr.toString()).toContain("line・chatwork・discord・typesafe")
     expect(run(["secrets", "discord"], "\n").exitCode).toBe(1)
     expect(existsSync(join(dir, "home", ".env"))).toBe(false)
   })
 })
 
 describe("serve コマンド", () => {
-  const serve = (envFile: string, workspace: string) =>
+  const serve = (envFile: string, workspace: string, env: Record<string, string> = {}) =>
     Bun.spawnSync([...BUN_ISOLATED, join(repo, "src/main.ts"), "serve"], {
       cwd: dir,
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, RELAY_HOME: join(dir, "home"), RELAY_ENV_FILE: envFile, RELAY_WORKSPACE: workspace },
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, RELAY_HOME: join(dir, "home"), RELAY_ENV_FILE: envFile, RELAY_WORKSPACE: workspace, ...env },
       stderr: "pipe",
       stdout: "pipe",
     })
@@ -123,6 +128,15 @@ describe("serve コマンド", () => {
     const other = join(dir, "other")
     mkdirSync(other)
     expect(serve(join(dir, "secrets", ".env"), other).stderr.toString()).toContain("チャットサービスの秘密情報がありません")
+  })
+
+  test("Jev の下限の指定が不正なら、何も起動しないうちに拒否する（ADR 0026）", () => {
+    const ws = join(dir, "ws")
+    mkdirSync(ws)
+    const r = serve(join(dir, ".env"), ws, { RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_MIN_PROBABILITY: "2" })
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr.toString()).toContain("RELAY_JEV_MIN_PROBABILITY")
+    expect(existsSync(join(ws, ".relay"))).toBe(false)
   })
 })
 

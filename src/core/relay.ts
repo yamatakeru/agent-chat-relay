@@ -327,12 +327,10 @@ export class Relay {
     const users = new Set(messages.map((m) => m.sender))
     const candidates = [...users].filter((u) => approvers.includes(u))
     if (users.size === 1 && candidates.length === 1) return this.enqueue(req, { to: candidates[0], senders })
-    if (candidates.length > 0 && this.attribute) {
-      return this.attributeRoute(this.attribute, { title: req.title, input: req.input, agentText: req.agentText ?? "", messages }).then((guess) =>
-        this.enqueue(req, { to: guess?.sender, probability: guess?.probability, senders }),
-      )
-    }
-    return this.enqueue(req, { senders })
+    if (candidates.length === 0 || !this.attribute) return this.enqueue(req, { senders })
+    return this.attributeRoute(this.attribute, { title: req.title, input: req.input, agentText: req.agentText ?? "", messages }).then((guess) =>
+      this.enqueue(req, { to: guess?.sender, probability: guess?.probability, senders }),
+    )
   }
 
   /**
@@ -775,7 +773,7 @@ function describeAttachment(a: Attachment): string {
 function canAnswer(b: Batch, user: string, approvers: string[]): boolean {
   if (!approvers.includes(user)) return false
   const to = b.items[0]!.route.to
-  return to === undefined || to === user || !approvers.includes(to)
+  return to === user || !approvers.some((a) => a === to)
 }
 
 /** ターンに発言を渡した人を、ルームごとに、渡した順に並べる。そのルームで 1 度でもメンションした人は、依頼者にする */
@@ -798,24 +796,25 @@ const MAX_SENDERS_TEXT = 300
  * 束の送り先の決め方を、受け取った人に示す欄（ADR 0026）。その人だけに送ったならそう書き、全員に送ったなら、ターンに発言を渡した人を並べる。
  * ターンの外で届いた依頼には書かない
  */
-function routeText(pending: PendingRequest[], narrowed: boolean): string {
+function routeLines(pending: PendingRequest[], narrowed: boolean): string[] {
   if (narrowed) {
     // Jev で決めた依頼があれば、そのうちいちばん低い確率を書く
     const p = pending.flatMap((i) => i.route.probability ?? [])
-    const by = p.length > 0 ? `Jev の判定（確率 ${Math.min(...p).toFixed(2)}）で、` : ""
-    return `${by}あなたの発言による依頼として、あなただけに送っています。`
+    const by = p.length === 0 ? "" : `Jev の判定（確率 ${Math.min(...p).toFixed(2)}）で、`
+    return [`${by}あなたの発言による依頼として、あなただけに送っています。`]
   }
   // 束の依頼ごとの、届いた時点の送り手を合わせる。依頼者を先にし、一覧に収まらない人は、後ろから「ほか N 人」にまとめる
   const senders = turnSenders(pending.flatMap((i) => i.route.senders.map((s) => ({ ...s, sender: s.user }))))
-  if (senders.length === 0) return ""
+  if (senders.length === 0) return []
   const ordered = [...senders.filter((s) => s.mentioned), ...senders.filter((s) => !s.mentioned)]
+  // だれも並べなければ必ず収まる
   for (let shown = ordered.length; ; shown--) {
-    const text = sendersText(ordered.slice(0, shown), ordered.length - shown)
-    if (text.length <= MAX_SENDERS_TEXT || shown === 0) return text
+    const lines = sendersLines(ordered.slice(0, shown), ordered.length - shown)
+    if (lines.join("\n").length <= MAX_SENDERS_TEXT) return lines
   }
 }
 
-function sendersText(shown: TurnSender[], omitted: number): string {
+function sendersLines(shown: TurnSender[], omitted: number): string[] {
   const lines = ["この作業中の発言（どの発言による依頼かは分かりません）"]
   for (const [label, mentioned] of [
     ["依頼者", true],
@@ -825,10 +824,11 @@ function sendersText(shown: TurnSender[], omitted: number): string {
       shown.filter((s) => s.mentioned === mentioned),
       (s) => safeName(s.room),
     )
-    if (rooms.size > 0) lines.push(label, ...[...rooms].map(([room, list]) => `・${room}：${list.map((s) => safeName(s.name)).join("、")}`))
+    if (rooms.size === 0) continue
+    lines.push(label, ...[...rooms].map(([room, list]) => `・${room}：${list.map((s) => safeName(s.name)).join("、")}`))
   }
-  if (omitted > 0) lines.push(`・ほか ${omitted} 人`)
-  return lines.join("\n")
+  if (omitted !== 0) lines.push(`・ほか ${omitted} 人`)
+  return lines
 }
 
 /** 送った人やルームの持ち主が決める名前を、文面に入れられる形にする。改行で偽の答え方を紛れ込ませない */
@@ -849,10 +849,10 @@ function approvalLength(pending: PendingRequest[]): number {
  * narrowed は、受け取る人が束の送り先の 1 人か
  */
 function approvalText(pending: PendingRequest[], id: string, max: number, narrowed: boolean): string {
-  const route = routeText(pending, narrowed)
+  const route = routeLines(pending, narrowed)
   if (pending.length === 1) {
     const { req } = pending[0]!
-    const head = [`🔐 実行の承認：${truncate(req.title, MAX_SINGLE_TITLE)}`, ...(route ? ["", route] : [])].join("\n")
+    const head = [`🔐 実行の承認：${truncate(req.title, MAX_SINGLE_TITLE)}`, ...(route.length === 0 ? [] : ["", ...route])].join("\n")
     const answers = [`許可：yes ${id}`, ...(req.always ? [`常に許可：always ${id}（${req.always}）`] : []), `拒否：no ${id}`].join("\n")
     const room = Math.min(1500, max - head.length - answers.length - 4)
     return [head, "", truncate(req.input, room), "", answers].join("\n")
@@ -869,7 +869,7 @@ function approvalText(pending: PendingRequest[], id: string, max: number, narrow
   return [
     `🔐 実行の承認（${pending.length} 件）`,
     "",
-    ...(route ? [route, ""] : []),
+    ...(route.length === 0 ? [] : [...route, ""]),
     `すべて許可：yes ${id}`,
     ...always,
     `すべて拒否：no ${id}`,
