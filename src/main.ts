@@ -6,6 +6,8 @@
 //                  ほかのフラグは、環境変数 RELAY_WORKSPACE・RELAY_HARNESS_SETTINGS・RELAY_HARNESS_MEMORY の別名（ADR 0017）
 //   pair <code>    ペアリングのコードを承認する（ルームの登録、DM の相手の許可）
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
+//   access mode <番号か ID> <mention|exceptOthers|all>
+//                  登録したルームの受信モードを変える。番号は access の一覧のもの（ADR 0028）
 //   secrets <line|chatwork|discord|typesafe>
 //                  秘密情報を、画面に表示せずに入力してもらい、<home>/.env に保存する（typesafe は、承認依頼の送り先を推す Jev の API キー。ADR 0026）
 //   line-tunnel    LINE の Webhook を Cloudflare Quick Tunnel で公開する（PATH 上の cloudflared を使う）
@@ -15,7 +17,7 @@
 
 import { randomBytes } from "node:crypto"
 import { dirname, join, resolve } from "node:path"
-import { AccessStore, localId, serviceOf } from "./core/access.ts"
+import { AccessStore, isReceiveMode, localId, RECEIVE_MODES, serviceOf } from "./core/access.ts"
 import { chatworkFromEnv } from "./connectors/chatwork.ts"
 import { discordFromEnv } from "./connectors/discord.ts"
 import { lineFromEnv } from "./connectors/line.ts"
@@ -185,6 +187,29 @@ function mask(id: string): string {
   return `${serviceOf(id)}:${localId(id).slice(0, 1)}…`
 }
 
+/**
+ * access：登録したルームと許可した人の一覧。ルームには番号を付ける（ID は伏せるため）。
+ * access mode <番号か ID> <受信モード>：登録したルームの受信モードを変える（ADR 0028）
+ */
+function accessCommand(access: AccessStore, args: string[]): void {
+  const a = access.load()
+  const rooms = Object.entries(a.rooms)
+  if (args[0] === "mode") {
+    const [target, mode] = args.slice(1)
+    if (!target || !isReceiveMode(mode)) throw new Error(`usage: agent-chat-relay access mode <ルームの番号か ID> <${Object.keys(RECEIVE_MODES).join("|")}>`)
+    const room = /^[1-9][0-9]*$/.test(target) ? rooms[Number(target) - 1]?.[0] : target
+    if (!room) throw new Error(`${target} 番のルームはありません。access で番号を確かめてください`)
+    access.setReceive(room, mode)
+    console.log(`受信モードを変えました: ${mask(room)}（${RECEIVE_MODES[mode]}）`)
+    return
+  }
+  console.log("ルーム:")
+  for (const [i, [room, p]] of rooms.entries()) console.log(`  ${i + 1}. ${mask(room)}  ${RECEIVE_MODES[p.receive]}${p.allowFrom.length ? `  許可 ${p.allowFrom.length} 人` : ""}`)
+  console.log("DM と実行承認を許可した人:")
+  for (const u of a.allowFrom) console.log(`  ${mask(u)}`)
+  console.log(`ペアリング待ち: ${Object.keys(a.pending).length} 件`)
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2)
   const arg = rest[0]
@@ -208,18 +233,11 @@ async function main(): Promise<void> {
       console.log(p.kind === "room" ? `ルームを登録しました: ${mask(p.target)}（受信モード：メンション時）` : `DM の相手を許可しました: ${mask(p.target)}（実行承認の依頼も届きます）`)
       return
     }
-    case "access": {
-      const a = access.load()
-      console.log("ルーム:")
-      for (const [room, p] of Object.entries(a.rooms)) console.log(`  ${mask(room)}  ${p.requireMention ? "メンション時" : "すべて"}${p.allowFrom.length ? `  許可 ${p.allowFrom.length} 人` : ""}`)
-      console.log("DM と実行承認を許可した人:")
-      for (const u of a.allowFrom) console.log(`  ${mask(u)}`)
-      console.log(`ペアリング待ち: ${Object.keys(a.pending).length} 件`)
-      return
-    }
+    case "access":
+      return accessCommand(access, rest)
     default:
       throw new Error(
-        "usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota",
+        "usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access [mode <番号か ID> <mention|exceptOthers|all>] | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota",
       )
   }
 }

@@ -82,7 +82,7 @@ test("ハーネスとの結合に関わるパスを変えたら、e2e の中核�
   }
   expect(CORE).toEqual(["test/e2e/line.sh claude", "test/e2e/resume.sh claude"])
   // パスは、先頭から末尾まで一致したものだけ
-  const near = ["docs/src/harness/a.md", "x/src/core/mcp.ts", "src/core/mcp.tsx", "x/src/prompt.ts", "src/prompt.ts.orig", "x/src/main.ts", "src/main.tsx", "x/bin/a", "x/test/e2e/line.sh", "x/test/e2e/chatwork.sh", "x/test/e2e/notices.sh"]
+  const near = ["docs/src/harness/a.md", "x/src/core/mcp.ts", "src/core/mcp.tsx", "x/src/prompt.ts", "src/prompt.ts.orig", "x/src/main.ts", "src/main.tsx", "x/bin/a", "x/test/e2e/line.sh", "x/test/e2e/chatwork.sh", "x/test/e2e/notices.sh", "x/test/e2e/addressing.sh"]
   expect(e2eTargets(near, "")).toEqual([])
   for (const f of ["test/e2e/chatwork.sh.orig", "test/e2e/mock-chatwork.ts.orig", "test/e2e/notices.sh.orig"]) expect(e2eTargets([f], "").map((t) => t.script)).toEqual(CORE)
 })
@@ -92,9 +92,16 @@ test("コネクター・src/core/relay.ts・文書だけの変更では、e2e �
   expect(e2eTargets(["test/e2e/chatwork.sh"], "")).toEqual([{ script: "test/e2e/chatwork.sh claude", reasons: ["test/e2e/chatwork.sh"] }])
   expect(e2eTargets(["test/e2e/mock-chatwork.ts"], "").map((t) => t.script)).toEqual(["test/e2e/chatwork.sh claude"])
   expect(e2eTargets(["test/e2e/notices.sh"], "")).toEqual([{ script: "test/e2e/notices.sh claude", reasons: ["test/e2e/notices.sh"] }])
-  expect(e2eTargets(["test/e2e/mock-line.ts"], "").map((t) => t.script)).toEqual([...CORE, "test/e2e/notices.sh claude"])
+  expect(e2eTargets(["test/e2e/mock-line.ts"], "").map((t) => t.script)).toEqual([...CORE, "test/e2e/notices.sh claude", "test/e2e/addressing.sh"])
   expect(e2eTargets(["test/e2e/lib.sh"], "").map((t) => t.script)).toEqual([...CORE, "test/e2e/chatwork.sh claude", "test/e2e/notices.sh claude"])
   expect(e2eTargets(["src/shutdown.ts"], "")).toEqual([])
+})
+
+test("案内の文面か、メンションのない発言の評価を変えたら、その評価だけを挙げる（#107）", () => {
+  for (const f of ["src/core/instructions.ts", "test/e2e/addressing.sh", "test/e2e/addressing.ts"]) {
+    expect(e2eTargets([f], "")).toEqual([{ script: "test/e2e/addressing.sh", reasons: [f] }])
+  }
+  expect(e2eTargets(["x/src/core/instructions.ts", "src/core/instructions.tsx", "test/e2e/addressing.sh.orig"], "").map((t) => t.script)).toEqual(CORE)
 })
 
 test("ハーネスのアダプターと ACP・MCP の SDK のバージョンを変えたら、e2e の中核を挙げる。ほかの依存では挙げない", () => {

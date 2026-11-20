@@ -7,9 +7,19 @@ import { randomBytes } from "node:crypto"
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
+/**
+ * 受信モード（ADR 0028）。mention：メンション（Bot の発言への返信を含む）のある発言だけを渡す。
+ * exceptOthers：他人宛ての印があり、メンションのない発言を除いて渡す。all：すべて渡す
+ */
+export const RECEIVE_MODES = { mention: "メンション時", exceptOthers: "他人宛てを除く", all: "すべて" } as const
+export type ReceiveMode = keyof typeof RECEIVE_MODES
+
+export function isReceiveMode(v: unknown): v is ReceiveMode {
+  return (Object.keys(RECEIVE_MODES) as unknown[]).includes(v)
+}
+
 export type RoomPolicy = {
-  /** true：メンション（Bot の発言への返信を含む）のある発言だけを渡す。false：すべて渡す */
-  requireMention: boolean
+  receive: ReceiveMode
   /** 空なら、ルームの誰の発言でも渡す。空でなければ、この人たちの発言だけを渡す */
   allowFrom: string[]
 }
@@ -36,12 +46,17 @@ export type Inbound = {
   sender: string
   isDM: boolean
   mentioned: boolean
+  /**
+   * 送信者以外の人への宛て（メンション、その人の発言への返信・引用）がある。全員宛ては含まない。
+   * Bot への宛ても含んでよい。Bot への宛てはメンションになり、メンションを優先するので、他人宛ての印として働くのは Bot 以外への宛てだけ
+   */
+  toOthers?: boolean
 }
 
 export type GateResult =
   | { action: "deliver" }
-  /** 登録したルームの、渡さない発言。履歴には残す */
-  | { action: "record" }
+  /** 登録したルームの、渡さない発言。履歴には残す。toOthers は、他人宛てとして外したとき */
+  | { action: "record"; toOthers?: true }
   | { action: "drop" }
   | { action: "pair"; code: string; isResend: boolean }
 
@@ -53,6 +68,9 @@ function emptyAccess(): Access {
 }
 
 export class AccessStore {
+  /** 知らない受信モードを書いたルームと、その値。同じものは続けてログに書かない */
+  private readonly warned = new Map<string, unknown>()
+
   constructor(
     private readonly path: string,
     private readonly now: () => number = Date.now,
@@ -69,7 +87,7 @@ export class AccessStore {
     }
     try {
       const a = JSON.parse(raw) as Partial<Access>
-      return { allowFrom: a.allowFrom ?? [], rooms: a.rooms ?? {}, pending: a.pending ?? {} }
+      return { allowFrom: a.allowFrom ?? [], rooms: this.normalizeRooms(a.rooms ?? {}), pending: a.pending ?? {} }
     } catch {
       // 壊れたファイルは退避して、空の状態から始める。誰の発言も渡さない状態で動く（フェイルクローズ）
       renameSync(this.path, `${this.path}.corrupt-${this.now()}`)
@@ -99,8 +117,10 @@ export class AccessStore {
       if (!policy) {
         // 未登録のルームでは、Bot に話しかけられたときだけコードを返す。スレッドなら、親を登録するコードになる
         result = m.mentioned ? this.pair(a, "room", key) : { action: "drop" }
-      } else if ((policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) || (policy.requireMention && !m.mentioned)) {
+      } else if ((policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) || (policy.receive === "mention" && !m.mentioned)) {
         result = { action: "record" }
+      } else if (policy.receive === "exceptOthers" && !m.mentioned && m.toOthers) {
+        result = { action: "record", toOthers: true }
       } else {
         result = { action: "deliver" }
       }
@@ -131,11 +151,40 @@ export class AccessStore {
     if (p.kind === "user") {
       if (!a.allowFrom.includes(p.target)) a.allowFrom.push(p.target)
     } else {
-      a.rooms[p.target] ??= { requireMention: true, allowFrom: [] }
+      a.rooms[p.target] ??= { receive: "mention", allowFrom: [] }
     }
     delete a.pending[key]
     this.save(a)
     return p
+  }
+
+  /** 登録したルームの受信モードを変える */
+  setReceive(room: string, mode: ReceiveMode): void {
+    const a = this.load()
+    const policy = a.rooms[room]
+    if (!policy) throw new Error("登録していないルームです。access の一覧の番号で指定できます")
+    policy.receive = mode
+    this.save(a)
+  }
+
+  /**
+   * 受信モードを読む。古い形（requireMention）は読み替える。知らない値は「メンション時」として扱い、ログに書く。
+   * 保存するときは receive だけを書く
+   */
+  private normalizeRooms(rooms: Record<string, Partial<RoomPolicy> & { requireMention?: boolean }>): Record<string, RoomPolicy> {
+    const out: Record<string, RoomPolicy> = {}
+    for (const [room, { receive, requireMention, allowFrom }] of Object.entries(rooms)) {
+      let mode: ReceiveMode
+      if (isReceiveMode(receive)) mode = receive
+      else if (receive === undefined) mode = requireMention === false ? "all" : "mention"
+      else {
+        mode = "mention"
+        if (this.warned.get(room) !== receive) console.error(`relay: access.json の受信モード ${JSON.stringify(receive)} は使えません。メンション時として扱います`)
+        this.warned.set(room, receive)
+      }
+      out[room] = { receive: mode, allowFrom: allowFrom ?? [] }
+    }
+    return out
   }
 
   private pair(a: Access, kind: Pending["kind"], target: string): GateResult {

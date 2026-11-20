@@ -99,7 +99,7 @@ test("同梱 pi が新規・再開で reply し、組み込みツールに ACP �
   const logs: { msg: string; fields: Record<string, unknown> }[] = []
   const log: Log = { info: (msg, fields = {}) => logs.push({ msg, fields }), error: (msg, fields = {}) => logs.push({ msg, fields }) }
   const access = new AccessStore(join(dir, "access.json"))
-  access.save({ allowFrom: [], rooms: { [room]: { requireMention: false, allowFrom: [] } }, pending: {} })
+  access.save({ allowFrom: [], rooms: { [room]: { receive: "all", allowFrom: [] } }, pending: {} })
   const relay = new Relay(access, log, cwd)
   const sent: { to: string; text: string }[] = []
   relay.addConnector({
