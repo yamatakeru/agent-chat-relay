@@ -29,6 +29,13 @@ export function testCounts(out: string): { pass: number; fail: number } | undefi
   return pass && fail ? { pass: Number(pass[1]), fail: Number(fail[1]) } : undefined
 }
 
+/** 捕まえていない変異をまとめる単位。生き残りは 1 つずつ、それ以外はファイルと区分ごと */
+function groupOf(x: Mutant): string {
+  if (x.status === "survived") return `\`${x.file}:${x.line}\`（${STATUS.survived}。${x.operator} \`${x.change.from}\` → \`${x.change.to}\`）`
+  const kind = x.test_reach ? `区分 ${x.test_reach.reach}` : x.prune_reason ? `理由 ${x.prune_reason}` : "区分なし"
+  return `\`${x.file}\`（${STATUS[x.status] ?? x.status}。${kind}）`
+}
+
 function mutationLines(m: Mutation): string[] {
   const total = m.summary.counts.total
   if (!total) return ["- `bun run mutation`：変異 0 個（変えた行に、変異させる箇所がない）"]
@@ -37,15 +44,8 @@ function mutationLines(m: Mutation): string[] {
   const rest = m.mutants.filter((x) => !CAUGHT.has(x.status))
   if (!rest.length) return lines
   lines.push("  - 捕まえていない変異。テストで捕まえるか、捕まえない理由を書く：")
-  // 生き残りは 1 つずつ、それ以外はファイルと区分ごとにまとめる
   const groups = new Map<string, number>()
-  for (const x of rest) {
-    const key =
-      x.status === "survived"
-        ? `\`${x.file}:${x.line}\`（${STATUS.survived}。${x.operator} \`${x.change.from}\` → \`${x.change.to}\`）`
-        : `\`${x.file}\`（${STATUS[x.status] ?? x.status}。${x.test_reach ? `区分 ${x.test_reach.reach}` : x.prune_reason ? `理由 ${x.prune_reason}` : "区分なし"}）`
-    groups.set(key, (groups.get(key) ?? 0) + 1)
-  }
+  for (const key of rest.map(groupOf)) groups.set(key, (groups.get(key) ?? 0) + 1)
   for (const [key, n] of groups) lines.push(`    - ${key} ${n} 個：（理由）`)
   return lines
 }
@@ -74,8 +74,9 @@ export function draft(r: Results): string {
 /** bun run mutation --format json の標準出力から、結果を読む。読めなければ undefined（fallow のエラーも JSON で返る） */
 export function parseMutation(stdout: string): Mutation | undefined {
   try {
+    // 形が違えば（null、summary がない、など）、ここで投げて undefined を返す
     const parsed = JSON.parse(stdout)
-    return parsed?.summary?.counts && Array.isArray(parsed.mutants) ? parsed : undefined
+    return parsed.summary.counts && Array.isArray(parsed.mutants) ? parsed : undefined
   } catch {
     return undefined
   }
