@@ -5,6 +5,7 @@
 
 import { readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { adrIndex, BEGIN, currentIndex, END } from "./adr-index.ts"
 
 const root = resolve(process.argv[2] ?? join(import.meta.dir, ".."))
@@ -82,6 +83,29 @@ export function tsLaunchErrors(file: string, text: string, today: string): strin
   })
 }
 
+// fallow は、入口から読まれないファイルの変異を dead code として外し、ミューテーションの報告の数に入れない。
+// 入口は package.json の main（シェルの bin/agent-chat-relay）だけと見るので、子プロセスで動く src/main.ts も外れていた（#92）。
+// 外された変異は、テストが届かないもの（none-file）として報告させる（ADR 0021）
+type MutationPlan = { mutants?: { file: string; prune_reason?: string | null }[] }
+
+/** fallow が dead code として外す変異のファイル */
+export function prunedErrors(plan: MutationPlan): string[] {
+  const counts = new Map<string, number>()
+  for (const m of plan.mutants ?? []) if (m.prune_reason === "dead-code") counts.set(m.file, (counts.get(m.file) ?? 0) + 1)
+  return [...counts].map(
+    ([file, n]) =>
+      `${file}: fallow が変異 ${n} 個を dead code として外し、bun run mutation の報告の数に入れていない。bun や子プロセスで直接動かすファイルなら、.fallowrc.json の entry に足す。使っていないコードなら消す（ADR 0021）`,
+  )
+}
+
+function mutationPlan(): MutationPlan {
+  const fallow = join(import.meta.dir, "../node_modules/fallow/bin/fallow")
+  const r = Bun.spawnSync([...BUN_ISOLATED, fallow, "mutation", "--all", "--plan", "--allow-side-effects", "--format", "json"], { cwd: root })
+  const out = r.stdout.toString()
+  if (r.exitCode !== 0 || !out.includes("{")) throw new Error(`fallow mutation --plan が失敗した：${r.stderr.toString()}`)
+  return JSON.parse(out.slice(out.indexOf("{")))
+}
+
 if (import.meta.main) {
   // 検査そのもののテスト（test/check.test.ts）は、避ける語と起動の例を含む
   const self = /^(scripts\/check\.ts|test\/check\.test\.ts)$/
@@ -96,6 +120,8 @@ if (import.meta.main) {
   const current = currentIndex(read("docs/relay.md"))
   if (current === undefined) errors.push(`docs/relay.md: 「${BEGIN}」と「${END}」の間に ADR の一覧を置く`)
   else if (current !== adrIndex(root)) errors.push("docs/relay.md: ADR の一覧が docs/adr/ と一致しない。bun run docs:adr を実行する")
+
+  errors.push(...prunedErrors(mutationPlan()))
 
   if (errors.length > 0) {
     for (const e of errors) console.error(e)

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { adrIndex, BEGIN, currentIndex, END, replaceIndex } from "../scripts/adr-index.ts"
-import { shellLaunchErrors, tsLaunchErrors, wordingErrors } from "../scripts/check.ts"
+import { prunedErrors, shellLaunchErrors, tsLaunchErrors, wordingErrors } from "../scripts/check.ts"
 import { CORE, e2eTargets } from "../scripts/e2e-targets.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 
@@ -12,6 +12,15 @@ const TODAY = "2026-11-19"
 test("取り除いた言い回しは、活用した形も見つけ、代わりの語を示す", () => {
   expect(wordingErrors("a.md", "x\n中身が要らないなら")).toEqual(["a.md:2: 「要ら」ではなく「必要（必要だ、必要ない、など）」を使う（scripts/check.ts の WORDING）"])
   expect(wordingErrors("a.md", "必要ない。重要だ")).toEqual([])
+})
+
+test("fallow が dead code として外した変異を、ファイルごとに数えて挙げる。ほかの理由で外したものと、外していないものは挙げない", () => {
+  // #92（a7205558）では、src/main.ts の変更した行の変異が、こうして外れていた
+  const main = { file: "src/main.ts", prune_reason: "dead-code" }
+  const plan = { mutants: [main, main, { file: "src/prompt.ts", prune_reason: "dead-code" }, { file: "src/core/relay.ts", prune_reason: null }, { file: "src/x.ts", prune_reason: "equivalent" }] }
+  expect(prunedErrors(plan).map((e) => e.split(":")[0] + e.match(/変異 \d+ 個/)![0])).toEqual(["src/main.ts変異 2 個", "src/prompt.ts変異 1 個"])
+  expect(prunedErrors(plan)[0]).toContain(".fallowrc.json の entry に足す")
+  expect(prunedErrors({ mutants: [] })).toEqual([])
 })
 
 test("シェルからの Bun の起動は、bun run の形でも、フラグが片方だけでも見つける", () => {
