@@ -816,21 +816,24 @@ describe("relay", () => {
       expect(queries.map((q) => q.agentText)).toEqual([""])
     })
 
-    test("送り手の一覧は、ちょうど 300 字なら省かない", async () => {
-      const { relay, conn } = routing()
+    test("送り手の一覧は、改行も含めてちょうど 300 字なら省かず、1 字でも超えれば省く", async () => {
       const head = ["この作業中の発言（どの発言による依頼かは分かりません）", "依頼者", "・開発："].join("\n")
-      // 40 字の名前を「、」でつなぎ、最後の名前でちょうど 300 字にする
-      const names: string[] = []
-      while (head.length + names.join("、").length + 41 < 300) names.push(String(names.length).padEnd(40, "x"))
-      names.push("z".repeat(300 - head.length - names.join("、").length - 1))
-      names.forEach((n, i) => relay.receive(msg({ sender: `line:U${i}`, senderName: n })))
-      await Bun.sleep(5)
-      void relay.requestPermission({ title: "Bash", input: "ls" })
-      await Bun.sleep(5)
-      const text = conn.approvals[0]!.text
-      const list = head + names.join("、")
-      expect(list).toHaveLength(300)
-      expect(text).toContain(`${list}\n\nls`)
+      for (const length of [300, 301]) {
+        const { relay, conn } = routing()
+        // 40 字の名前を「、」でつなぎ、最後の名前でちょうど length 字にする
+        const names: string[] = []
+        while (head.length + names.join("、").length + 41 < length) names.push(String(names.length).padEnd(40, "x"))
+        names.push("z".repeat(length - head.length - names.join("、").length - 1))
+        names.forEach((n, i) => relay.receive(msg({ sender: `line:U${i}`, senderName: n })))
+        await Bun.sleep(5)
+        void relay.requestPermission({ title: "Bash", input: "ls" })
+        await Bun.sleep(5)
+        const text = conn.approvals[0]!.text
+        const list = head + names.join("、")
+        expect(list).toHaveLength(length)
+        if (length === 300) expect(text).toContain(`${list}\n\nls`)
+        else expect(text).toContain(`${head}${names.slice(0, -1).join("、")}\n・ほか 1 人\n\nls`)
+      }
     })
 
     test("束を組むときは、送り手の一覧も含めた長さで、上限の手前で分ける", async () => {
