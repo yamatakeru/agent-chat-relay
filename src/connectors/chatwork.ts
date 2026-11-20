@@ -155,7 +155,7 @@ export class ChatworkConnector implements Connector {
       attachments: parsed.attachments,
       isDM,
       mentioned: isDM || parsed.mentioned,
-      toOthers: addressesOthers(m.body, this.me.id, author),
+      toOthers: addressesOthers(m.body, author),
       stale: m.send_time < this.startedAt,
     })
   }
@@ -256,13 +256,9 @@ function selfMention(id: number, name: string): RegExp {
   return new RegExp(`\\[(?:To:${id}|rp aid=${id} to=\\d+-\\d+)\\][ \\t]*(?:${escapeRegExp(name)}(?:さん)?)?`, "g")
 }
 
-/** Bot でも送信者でもない人への To か、その人の発言への返信があるか。全員宛て（[toall]）は含まない（ADR 0028） */
-export function addressesOthers(body: string, me: number, author: number): boolean {
-  for (const [, to, rp] of body.matchAll(/\[(?:To:(\d+)|rp aid=(\d+) to=\d+-\d+)\]/g)) {
-    const id = Number(to ?? rp)
-    if (id !== me && id !== author) return true
-  }
-  return false
+/** 送信者以外の人への To か、その人の発言への返信があるか（Bot を含む。Inbound.toOthers）。全員宛て（[toall]）は含まない（ADR 0028） */
+export function addressesOthers(body: string, author: number): boolean {
+  return [...body.matchAll(/\[(?:To:(\d+)|rp aid=(\d+) to=\d+-\d+)\]/g)].some(([, to, rp]) => Number(to ?? rp) !== author)
 }
 
 /** 本文から、Bot へのメンションと返信の記法を取り除き、添付を取り出す。ほかの記法はそのまま渡す */

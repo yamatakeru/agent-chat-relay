@@ -168,7 +168,7 @@ describe("access", () => {
   })
 
   test("古い形（requireMention）は読み替え、知らない受信モードはメンション時として扱い、1 回だけログに書く", () => {
-    const rooms = { a: { requireMention: false }, b: { requireMention: true }, c: {}, d: { receive: "others", allowFrom: [ALICE] } }
+    const rooms = { a: { requireMention: false }, b: { requireMention: true }, c: {}, d: { receive: "others", allowFrom: [ALICE] }, e: { receive: "exceptOthers", requireMention: false } }
     writeFileSync(join(dir, "access.json"), JSON.stringify({ allowFrom: [], rooms, pending: {} }))
     const errors = jest.spyOn(console, "error").mockImplementation(() => {})
     try {
@@ -177,13 +177,22 @@ describe("access", () => {
         b: { receive: "mention", allowFrom: [] },
         c: { receive: "mention", allowFrom: [] },
         d: { receive: "mention", allowFrom: [ALICE] },
+        e: { receive: "exceptOthers", allowFrom: [] },
       })
+      access.load()
       access.load()
       expect(errors).toHaveBeenCalledTimes(1)
       expect(String(errors.mock.calls[0]![0])).toContain('受信モード "others" は使えません')
     } finally {
       errors.mockRestore()
     }
+  })
+
+  test("受信モードを変えられるのは、登録したルームだけ", () => {
+    access.save({ allowFrom: [], rooms: { [ROOM]: { receive: "mention", allowFrom: [ALICE] } }, pending: {} })
+    access.setReceive(ROOM, "all")
+    expect(access.load().rooms[ROOM]).toEqual({ receive: "all", allowFrom: [ALICE] })
+    expect(() => access.setReceive("line:Cb", "all")).toThrow("登録していないルームです")
   })
 
   test("ルームの allowFrom があれば、その人の発言だけを渡す", () => {
@@ -677,6 +686,10 @@ describe("relay", () => {
     const { relay } = setup()
     const text = await relay.render([msg({ text: "a" }), msg({ text: "b", mentioned: false })])
     expect(text.match(/<message chat_id="line:[^>]*>/g)!.map((t) => t.includes('mentioned="true"'))).toEqual([true, false])
+    // 案内に、mentioned と受信モードの読み方を書く（段落は空行で分ける）
+    expect(relay.instructions()).toContain('画面への出力はチャットに届きません。\n\nmentioned="true" のある発言は、あなたに向けたものです')
+    expect(relay.instructions()).toContain("返事が必要なときだけ返事してください。\n\nルームによっては、一部の発言だけが届きます（list_rooms の receive。")
+    expect(relay.instructions()).toContain("fetch_messages で読んでください。\n\n返事は、ふつう")
     expect(await relay.listRooms()).toEqual([
       { chat_id: ROOM, name: undefined, kind: "room", receive: "mention" },
       { chat_id: ALICE, kind: "dm" },
@@ -695,6 +708,9 @@ describe("relay", () => {
     expect(prompts.join("\n")).not.toContain("ボブへ")
     expect(prompts.join("\n")).toContain("雑談")
     expect((await relay.fetchMessages(ROOM)).map((m) => m.text)).toEqual(["ボブへ", "雑談"])
+    // ほかの理由で渡さない発言は、ログに書かない
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { receive: "mention", allowFrom: [] } }, pending: {} })
+    expect(relay.receive(msg({ text: "雑談 2", mentioned: false, toOthers: true }))).toEqual({ action: "record" })
     expect(infos).toEqual([{ m: "他人宛ての発言を、エージェントに渡さずに記録しました", extra: { room: ROOM, reason: "structure" } }])
   })
 
@@ -2328,11 +2344,13 @@ describe("line で受け取る種類", () => {
       await say(ALICE, { type: "text", text: "@AI @ボブ 両方へ", mention: { mentionees: [{ index: 0, length: 3, type: "user", isSelf: true }, { index: 4, length: 3, type: "user", userId: BOB.slice(5) }] } })
       await say(ALICE, { type: "text", text: "@All 全員へ", mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } })
       await say(BOB, { type: "text", text: "自分への補足", quotedMessageId: bob })
+      await say(BOB, { type: "text", text: "@ボブ 自分へのメモ", mention: { mentionees: [{ index: 0, length: 3, type: "user", userId: BOB.slice(5) }] } })
+      await say(BOB, { type: "sticker" })
       await say(ALICE, { type: "text", text: "知らない引用", quotedMessageId: "1" })
       await say(ALICE, { type: "text", text: "Bot への返信", quotedMessageId: "900" })
       await Bun.sleep(10)
       const all = delivered.join("\n")
-      for (const t of ["ボブの発言", "両方へ", "全員へ", "自分への補足", "知らない引用", "Bot への返信"]) expect(all).toContain(t)
+      for (const t of ["ボブの発言", "両方へ", "全員へ", "自分への補足", "自分へのメモ", "（スタンプ）", "知らない引用", "Bot への返信"]) expect(all).toContain(t)
       for (const t of ["確認お願い", "名前だけ", "そうだね", "いいね"]) expect(all).not.toContain(t)
     } finally {
       void api.stop()
@@ -2430,14 +2448,15 @@ describe("chatwork", () => {
     expect(parseBody("見て[info][title][dtext:file_uploaded][/title][download:8]a.pdf (1 MB)[/download][/info]", ME).attachments).toEqual([{ name: "a.pdf", type: "file" }])
   })
 
-  test("他人宛ての印は、Bot でも送信者でもない人への To と返信。全員宛ては含まない（ADR 0028）", () => {
-    expect(addressesOthers("[To:200]ボブさん\n確認して", 100, 1)).toBe(true)
-    expect(addressesOthers("[rp aid=200 to=7000-55]ボブさん\nどうも", 100, 1)).toBe(true)
-    expect(addressesOthers("[To:100]AI係さん [To:200]ボブさん", 100, 1)).toBe(true) // メンションと両方あるときは、gate がメンションを優先する
-    expect(addressesOthers("[To:100]AI係さん\n調べて", 100, 1)).toBe(false)
-    expect(addressesOthers("[rp aid=1 to=7000-55]自分への補足", 100, 1)).toBe(false)
-    expect(addressesOthers("[toall]お知らせ", 100, 1)).toBe(false)
-    expect(addressesOthers("[qt][qtmeta aid=200 time=1]引用[/qt]見て", 100, 1)).toBe(false)
+  test("他人宛ての印は、送信者以外の人への To と返信。全員宛てと引用は含まない（ADR 0028）", () => {
+    expect(addressesOthers("[To:200]ボブさん\n確認して", 1)).toBe(true)
+    expect(addressesOthers("[rp aid=200 to=7000-55]ボブさん\nどうも", 1)).toBe(true)
+    expect(addressesOthers("[To:1]自分 [To:200]ボブさん", 1)).toBe(true)
+    // Bot への To も印になるが、メンションでもあるので、gate がメンションを優先する
+    expect(addressesOthers("[To:100]AI係さん\n調べて", 1)).toBe(true)
+    expect(addressesOthers("[rp aid=1 to=7000-55]自分への補足", 1)).toBe(false)
+    expect(addressesOthers("[toall]お知らせ", 1)).toBe(false)
+    expect(addressesOthers("[qt][qtmeta aid=200 time=1]引用[/qt]見て", 1)).toBe(false)
   })
 
   async function setup() {

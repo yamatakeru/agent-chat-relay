@@ -95,7 +95,7 @@ export class LineConnector implements Connector {
   private readonly tokens = new Map<string, { token: string; at: number }[]>()
   private readonly quoteTokens = new Map<string, string>()
   private readonly sentIds = new Set<string>()
-  /** 受けた発言の送信者。引用元が他人の発言かを確かめる（ADR 0028） */
+  /** 受けた発言の送信者。引用元が送信者以外の発言かを確かめる（ADR 0028） */
   private readonly senders = new Map<string, string>()
   private readonly seenEvents = new Set<string>()
   private readonly names = new Map<string, string>()
@@ -252,9 +252,9 @@ export class LineConnector implements Connector {
     return msg.quotedMessageId !== undefined && this.sentIds.has(msg.quotedMessageId)
   }
 
-  /** 他人（Bot でも送信者でもない人）の発言への返信か。引用元を受けていなければ、分からないので false（再起動の前の発言など） */
+  /** 送信者以外の人の発言への返信か。引用元を受けていなければ、分からないので false（再起動の前の発言など） */
   private quotesOthers(msg: LineMessage, sender: string): boolean {
-    const quoted = msg.quotedMessageId === undefined ? undefined : this.senders.get(msg.quotedMessageId)
+    const quoted = this.senders.get(msg.quotedMessageId ?? "")
     return quoted !== undefined && quoted !== sender
   }
 
@@ -407,9 +407,9 @@ function roomOf(s: Source): string | undefined {
   return id ? `${SERVICE}:${id}` : undefined
 }
 
-/** Bot でも送信者でもない人へのメンションがあるか。全員へのメンション（type が all）は含まない */
+/** 送信者以外の人へのメンションがあるか（Bot を含む。Inbound.toOthers）。全員へのメンション（type が all）は含まない */
 function mentionsOthers(mentionees: Mentionee[], sender: string): boolean {
-  return mentionees.some((m) => m.type === "user" && !m.isSelf && (m.userId === undefined || `${SERVICE}:${m.userId}` !== sender))
+  return mentionees.some((m) => m.type === "user" && m.userId !== localId(sender))
 }
 
 /** 本文から Bot へのメンションを取り除く。LINE の index と length は UTF-16 の単位 */

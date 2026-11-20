@@ -26,7 +26,7 @@ export type ChatMessage = {
 export type Incoming = ChatMessage & {
   isDM: boolean
   mentioned: boolean
-  /** 他人宛ての印がある（Inbound.toOthers。ADR 0028） */
+  /** 送信者以外の人への宛てがある（Inbound.toOthers。ADR 0028） */
   toOthers?: boolean
   /** 中継が止まっている間に届いた発言。登録したルームと許可した人の DM のものは記録だけして、エージェントには渡さない */
   stale?: boolean

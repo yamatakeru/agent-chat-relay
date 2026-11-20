@@ -15,7 +15,7 @@ export const RECEIVE_MODES = { mention: "メンション時", exceptOthers: "他
 export type ReceiveMode = keyof typeof RECEIVE_MODES
 
 export function isReceiveMode(v: unknown): v is ReceiveMode {
-  return typeof v === "string" && Object.hasOwn(RECEIVE_MODES, v)
+  return (Object.keys(RECEIVE_MODES) as unknown[]).includes(v)
 }
 
 export type RoomPolicy = {
@@ -46,7 +46,10 @@ export type Inbound = {
   sender: string
   isDM: boolean
   mentioned: boolean
-  /** 他人宛ての印（Bot でも送り手でもない人へのメンション、その人の発言への返信・引用）がある */
+  /**
+   * 送信者以外の人への宛て（メンション、その人の発言への返信・引用）がある。全員宛ては含まない。
+   * Bot への宛ても含んでよい。Bot への宛てはメンションになり、メンションを優先するので、他人宛ての印として働くのは Bot 以外への宛てだけ
+   */
   toOthers?: boolean
 }
 
