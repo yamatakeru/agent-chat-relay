@@ -1096,6 +1096,24 @@ describe("relay", () => {
     expect(conn.approvals.every((a) => a.always)).toBe(true)
   })
 
+  test("束の文面がちょうど上限なら分けずに 1 通で送り、1 字でも超えれば分ける", async () => {
+    const send = async (max: number) => {
+      const { relay, conn } = setup()
+      conn.capabilities = { ...conn.capabilities, text: { max, parts: 10 } }
+      // コネクターの上限の下限（1000 字）を超えるよう、題名と「常に許可」の範囲で文面を伸ばす
+      for (const t of ["a", "b"]) void relay.requestPermission({ title: t.repeat(100), input: t.repeat(300), always: t.repeat(200) })
+      await Bun.sleep(5)
+      return conn.approvals.map((a) => a.text)
+    }
+    // 上限が十分なときの束の文面の長さ。上限からは、送り直しなどの余白として 50 字を差し引く
+    const [whole] = await send(5000)
+    expect(whole!.length + 49).toBeGreaterThanOrEqual(1000)
+    const fits = await send(whole!.length + 50)
+    expect(fits.map((t) => t.length)).toEqual([whole!.length])
+    const split = await send(whole!.length + 49)
+    expect(split.map((t) => t.split("\n")[0])).toEqual([`🔐 実行の承認：${"a".repeat(100)}`, `🔐 実行の承認：${"b".repeat(100)}`])
+  })
+
   test("依頼が 1 件でも、題名と入力が長ければ省いて上限に収め、答え方と「常に許可」の範囲は残す", async () => {
     const { relay, conn } = setup()
     conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
