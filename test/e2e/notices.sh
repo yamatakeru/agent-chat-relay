@@ -93,8 +93,7 @@ harness="$(proc claude-agent-acp)"
 echo "harness pid: ${harness:-none}"
 check "ハーネスのプロセスが見つかる" test -n "$harness"
 # アダプターだけを落とすと、子の claude が孤児として残り、しばらく会話ログを書き続けるので、子も止める
-kids="$(descendants "${harness:-0}")"
-[ -n "$harness" ] && kill -9 "$harness" $kids
+[ -n "$harness" ] && kill -9 "$harness" $(descendants "$harness")
 check "失敗の知らせが届く" dm_notice "$FAILED_NOTICE" 20
 check "異常終了をログに書く" grep -q "ハーネスが異常終了したため" "$RLOG-1.log"
 # 知らせの送信は詰まっているので、中継は待っている
