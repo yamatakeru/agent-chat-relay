@@ -27,7 +27,7 @@ agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました�
 | [0023](adr/0023-e2e-core-by-changed-paths-and-release.md) | e2e は中核だけを既定にし、変更したパスとリリースを契機に走らせる。判定はスクリプトにさせる |
 | [0024](adr/0024-notify-rooms-when-turn-stalls.md) | ターンが止まったり、返事のないまま終わったりしたら、ルームに固定の知らせを出す |
 | [0025](adr/0025-pre-pr-command-and-skill.md) | PR を出す前の手順は、入口のコマンドと、プロジェクトの skill に置く |
-| [0026](adr/0026-harness-approval-and-settings.md) | pi と OpenCode では、既定で中継の実行承認を使い、明示したときだけ端末の設定を引き継ぐ |
+| [0027](adr/0027-harness-approval-and-settings.md) | pi と OpenCode では、既定で中継の実行承認を使い、明示したときだけ端末の設定を引き継ぐ |
 
 <!-- ADR の一覧ここまで -->
 

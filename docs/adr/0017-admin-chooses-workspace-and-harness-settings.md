@@ -8,7 +8,7 @@ status: accepted
 
 > 秘密情報のファイルがシンボリックリンクなら、その実体のあるディレクトリも、作業ディレクトリに含めてはいけない場所にしました（#52）。`RELAY_ENV_FILE` のディレクトリだけを比べると、実体が作業ディレクトリの中にあっても起動していました。判断は変わりません。
 
-> pi と OpenCode の初回対応での設定継承、自動メモリ、再開の範囲、OpenCode の生成設定の配置は、[ADR 0026](0026-harness-approval-and-settings.md) で決めました。Claude Code の扱いは変えません。
+> pi と OpenCode の初回対応での設定継承、自動メモリ、再開の範囲、OpenCode の生成設定の配置は、[ADR 0026](0027-harness-approval-and-settings.md) で決めました。Claude Code の扱いは変えません。
 
 # 管理者は、作業ディレクトリとハーネスの設定の読み込みを、自分の責任で環境に合わせられる
 
