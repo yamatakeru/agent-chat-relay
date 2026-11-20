@@ -197,10 +197,10 @@ const INSTRUCTIONS = [
 ].join("\n")
 
 /**
- * 承認依頼の送り先（ADR 0026）。to があれば、その承認者だけに送る。by はその決め方で、jev なら probability がある。
+ * 承認依頼の送り先（ADR 0026）。to があれば、その承認者だけに送る。Jev で決めたときは、その確率（probability）がある。
  * to がなければ全員に送り、文面に、依頼が届いた時点でターンに渡していた発言の送り手（senders）を並べる
  */
-type Route = { to?: string; by?: "sender" | "jev"; probability?: number; senders: TurnSender[] }
+type Route = { to?: string; probability?: number; senders: TurnSender[] }
 /** ターンに発言を渡した人。ルームごと。mentioned は、そのルームでメンションしたか */
 type TurnSender = { room: string; user: string; name: string; mentioned: boolean }
 
@@ -229,7 +229,7 @@ export class Relay {
   /** 作業中のターンに渡した発言。承認依頼の送り先を決めるのに使う（ADR 0026） */
   private turnMessages: Incoming[] = []
   /** 発言を渡すときに調べたルームの名前。承認依頼の文面に使う */
-  private readonly roomNames = new Map<string, string>()
+  private readonly roomNames = new Map<string, string | undefined>()
   /** 送っている途中の知らせ。中継が止まる前に待つ */
   private readonly sending = new Set<Promise<void>>()
   /** run() が動いていれば、その Promise */
@@ -316,36 +316,34 @@ export class Relay {
       return Promise.resolve("deny")
     }
     // 依頼が届いた時点の発言で決める。依頼のあとに届いた発言は、その依頼のきっかけになりえない
-    const messages = [...this.turnMessages]
-    const senders = turnSenders(messages, this.roomNames)
+    const messages = this.turnMessages.map((m) => ({
+      sender: m.sender,
+      name: m.senderName ?? m.sender,
+      room: m.isDM ? "DM" : (this.roomNames.get(m.room) ?? m.room),
+      mentioned: m.mentioned,
+      text: m.text,
+    }))
+    const senders = turnSenders(messages)
     const users = new Set(messages.map((m) => m.sender))
-    if (users.size === 1 && approvers.includes(messages[0]!.sender)) return this.enqueue(req, { to: messages[0]!.sender, by: "sender", senders })
-    if (users.size > 1 && this.attribute && [...users].some((u) => approvers.includes(u))) {
-      return this.attributeRoute(this.attribute, req, messages, senders).then((route) => this.enqueue(req, route))
+    const candidates = [...users].filter((u) => approvers.includes(u))
+    if (users.size === 1 && candidates.length === 1) return this.enqueue(req, { to: candidates[0], senders })
+    if (candidates.length > 0 && this.attribute) {
+      return this.attributeRoute(this.attribute, { title: req.title, input: req.input, agentText: req.agentText ?? "", messages }).then((guess) =>
+        this.enqueue(req, { to: guess?.sender, probability: guess?.probability, senders }),
+      )
     }
     return this.enqueue(req, { senders })
   }
 
-  /** 送り手が複数いるとき、依頼者を推す。推せた人が承認者なら、その人だけに送る。それ以外は全員に送る */
-  private async attributeRoute(attribute: Attributor, req: PermissionRequest, messages: Incoming[], senders: TurnSender[]): Promise<Route> {
-    const guess = await attribute({
-      title: req.title,
-      input: req.input,
-      agentText: req.agentText ?? "",
-      messages: messages.map((m) => ({
-        sender: m.sender,
-        name: m.senderName ?? m.sender,
-        room: m.isDM ? "DM" : (this.roomNames.get(m.room) ?? m.room),
-        mentioned: m.mentioned,
-        text: m.text,
-      })),
-    }).catch((err) => {
+  /**
+   * 送り手が複数いるとき、依頼者を推す。推せなければ undefined で、全員に送る。
+   * 推した人が承認者でなければ、その束には全員が答えられる（canAnswer）
+   */
+  private attributeRoute(attribute: Attributor, q: AttributionQuery): Promise<{ sender: string; probability: number } | undefined> {
+    return attribute(q).catch((err) => {
       this.log.error("承認依頼の依頼者を推せませんでした", { error: String(err) })
       return undefined
     })
-    // 判定のあいだに、許可リストから外れたかもしれない
-    if (!guess || !this.access.load().allowFrom.includes(guess.sender)) return { senders }
-    return { to: guess.sender, by: "jev", probability: guess.probability, senders }
   }
 
   private enqueue(req: PermissionRequest, route: Route): Promise<Verdict> {
@@ -357,7 +355,7 @@ export class Relay {
       // 送り先が違えば、今の束を先に送る（ADR 0026）。
       // 足すと文面が上限を超えるときも同じ。コネクターが文面を切ると、依頼や「常に許可」の範囲が見えないまま、束全体に答えられてしまう（ADR 0015）
       const head = b.items[0]?.route
-      if (head && (head.to !== route.to || head.by !== route.by || approvalLength([...b.items, { id: ID_PLACEHOLDER, ...pending }]) > this.approvalMax())) {
+      if (head && (head.to !== route.to || approvalLength([...b.items, { id: ID_PLACEHOLDER, ...pending }]) > this.approvalMax())) {
         clearTimeout(b.flush)
         this.sendBatch(b)
         b = this.openBatch()
@@ -390,7 +388,7 @@ export class Relay {
     const c = this.connector(user)
     if (!c) return
     const max = c.capabilities.text.max - APPROVAL_MARGIN
-    const narrowed = b.items[0]?.route.to === user
+    const narrowed = b.items[0]!.route.to === user
     const text = approvalText(b.items, b.id, max, narrowed)
     // 束を組んだあとに、上限の短いサービスの承認者が足されると、束が収まらない。束全体への答えは出さず、依頼ごとの ID で 1 件ずつ送る
     const parts =
@@ -591,7 +589,7 @@ export class Relay {
       this.introduced = true
     }
     const names = new Map(await Promise.all([...new Set(batch.map((m) => m.room))].map(async (r) => [r, await this.roomName(r)] as const)))
-    for (const [room, name] of names) if (name) this.roomNames.set(room, name)
+    for (const [room, name] of names) this.roomNames.set(room, name)
     for (const m of batch) {
       const name = names.get(m.room)
       const attrs: Record<string, string> = {
@@ -776,16 +774,16 @@ function describeAttachment(a: Attachment): string {
  */
 function canAnswer(b: Batch, user: string, approvers: string[]): boolean {
   if (!approvers.includes(user)) return false
-  const to = b.items[0]?.route.to
+  const to = b.items[0]!.route.to
   return to === undefined || to === user || !approvers.includes(to)
 }
 
-/** ターンに発言を渡した人を、ルームごとに、渡した順に並べる */
-function turnSenders(messages: Incoming[], roomNames: Map<string, string>): TurnSender[] {
+/** ターンに発言を渡した人を、ルームごとに、渡した順に並べる。そのルームで 1 度でもメンションした人は、依頼者にする */
+function turnSenders(messages: { room: string; sender: string; name: string; mentioned: boolean }[]): TurnSender[] {
   const senders = new Map<string, TurnSender>()
   for (const m of messages) {
     const key = JSON.stringify([m.room, m.sender])
-    const s = senders.get(key) ?? { room: m.isDM ? "DM" : (roomNames.get(m.room) ?? m.room), user: m.sender, name: m.senderName ?? m.sender, mentioned: false }
+    const s = senders.get(key) ?? { room: m.room, user: m.sender, name: m.name, mentioned: false }
     s.mentioned ||= m.mentioned
     senders.set(key, s)
   }
@@ -801,44 +799,33 @@ const MAX_SENDERS_TEXT = 300
  * ターンの外で届いた依頼には書かない
  */
 function routeText(pending: PendingRequest[], narrowed: boolean): string {
-  const route = pending[0]!.route
   if (narrowed) {
-    if (route.by !== "jev") return "あなたの発言による依頼として、あなただけに送っています。"
-    // 束の中でいちばん低い確率を書く
-    const p = Math.min(...pending.map((i) => i.route.probability ?? 0))
-    return `Jev の判定（確率 ${p.toFixed(2)}）で、あなたの発言による依頼として、あなただけに送っています。`
+    // Jev で決めた依頼があれば、そのうちいちばん低い確率を書く
+    const p = pending.flatMap((i) => i.route.probability ?? [])
+    const by = p.length > 0 ? `Jev の判定（確率 ${Math.min(...p).toFixed(2)}）で、` : ""
+    return `${by}あなたの発言による依頼として、あなただけに送っています。`
   }
-  // 束の依頼ごとの、届いた時点の送り手を合わせる
-  const senders = new Map<string, TurnSender>()
-  for (const s of pending.flatMap((i) => i.route.senders)) {
-    const key = JSON.stringify([s.room, s.user])
-    senders.set(key, { ...s, mentioned: s.mentioned || (senders.get(key)?.mentioned ?? false) })
+  // 束の依頼ごとの、届いた時点の送り手を合わせる。依頼者を先にし、一覧に収まらない人は、後ろから「ほか N 人」にまとめる
+  const senders = turnSenders(pending.flatMap((i) => i.route.senders.map((s) => ({ ...s, sender: s.user }))))
+  if (senders.length === 0) return ""
+  const ordered = [...senders.filter((s) => s.mentioned), ...senders.filter((s) => !s.mentioned)]
+  for (let shown = ordered.length; ; shown--) {
+    const text = sendersText(ordered.slice(0, shown), ordered.length - shown)
+    if (text.length <= MAX_SENDERS_TEXT || shown === 0) return text
   }
-  if (senders.size === 0) return ""
-  const groups = [
-    { label: "依頼者", list: [...senders.values()].filter((s) => s.mentioned) },
-    { label: "そのほかの発言", list: [...senders.values()].filter((s) => !s.mentioned) },
-  ]
+}
+
+function sendersText(shown: TurnSender[], omitted: number): string {
   const lines = ["この作業中の発言（どの発言による依頼かは分かりません）"]
-  let length = lines[0]!.length
-  let omitted = 0
-  for (const { label, list } of groups) {
-    const rooms = new Map<string, string[]>()
-    for (const s of list) {
-      const room = safeName(s.room)
-      const name = safeName(s.name)
-      const names = rooms.get(room) ?? []
-      // ルームの行と、「ほか N 人」の行を書けるだけ残す
-      const added = (names.length === 0 ? room.length + 3 : 1) + name.length + (names.length === 0 && rooms.size === 0 ? label.length + 1 : 0)
-      if (length + added > MAX_SENDERS_TEXT - 20) {
-        omitted++
-        continue
-      }
-      length += added
-      rooms.set(room, [...names, name])
-    }
-    if (rooms.size === 0) continue
-    lines.push(label, ...[...rooms].map(([room, names]) => `・${room}：${names.join("、")}`))
+  for (const [label, mentioned] of [
+    ["依頼者", true],
+    ["そのほかの発言", false],
+  ] as const) {
+    const rooms = Map.groupBy(
+      shown.filter((s) => s.mentioned === mentioned),
+      (s) => safeName(s.room),
+    )
+    if (rooms.size > 0) lines.push(label, ...[...rooms].map(([room, list]) => `・${room}：${list.map((s) => safeName(s.name)).join("、")}`))
   }
   if (omitted > 0) lines.push(`・ほか ${omitted} 人`)
   return lines.join("\n")
@@ -854,14 +841,14 @@ const ID_PLACEHOLDER = "xxxxx"
 
 /** 束を組むときの文面の長さ。送り先の 1 人への文面と、ほかの人への文面の、長いほう */
 function approvalLength(pending: PendingRequest[]): number {
-  return Math.max(approvalText(pending, ID_PLACEHOLDER).length, approvalText(pending, ID_PLACEHOLDER, Infinity, true).length)
+  return Math.max(approvalText(pending, ID_PLACEHOLDER, Infinity, false).length, approvalText(pending, ID_PLACEHOLDER, Infinity, true).length)
 }
 
 /**
  * 承認依頼の束の文面。依頼が 1 つなら、その依頼だけを書き、入力を省いて max に収める。
  * narrowed は、受け取る人が束の送り先の 1 人か
  */
-function approvalText(pending: PendingRequest[], id: string, max = Infinity, narrowed = false): string {
+function approvalText(pending: PendingRequest[], id: string, max: number, narrowed: boolean): string {
   const route = routeText(pending, narrowed)
   if (pending.length === 1) {
     const { req } = pending[0]!

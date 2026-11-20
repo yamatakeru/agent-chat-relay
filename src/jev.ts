@@ -1,6 +1,7 @@
 // 承認依頼の依頼者を、Jev（TypeSafe AI の System One モデル）で推す（ADR 0026）。
 // 送り手が複数いるターンでだけ使う。推せなければ undefined を返し、中核は全員に送る。
 
+import { z } from "zod"
 import type { AttributionQuery, Attributor, Log } from "./core/relay.ts"
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone"
@@ -36,27 +37,27 @@ export function jevFromEnv(env: Record<string, string | undefined>, log: Log, fe
       log.error("Jev がエラーを返しました", { status: res.status })
       return undefined
     }
-    const answer = ((await res.json().catch(() => undefined)) as JevResponse | undefined)?.answers?.requester
-    const choice = answer?.choice
-    const probability = typeof choice === "string" ? answer?.probabilities?.[choice] : undefined
-    if (typeof choice !== "string" || typeof probability !== "number") {
+    const parsed = RESPONSE.safeParse(await res.json().catch(() => undefined))
+    const answer = parsed.data?.answers.requester
+    const probability = answer?.probabilities[answer.choice]
+    if (!answer || probability === undefined) {
       log.error("Jev の答えの形が想定外です")
       return undefined
     }
-    const sender = people.get(choice)
-    log.info("Jev で承認依頼の依頼者を推しました", { sender: sender ?? choice, probability, min })
+    const sender = people.get(answer.choice)
+    log.info("Jev で承認依頼の依頼者を推しました", { sender, probability, min })
     if (!sender || probability < min) return undefined
     return { sender, probability }
   }
 }
 
-type JevResponse = { answers?: { requester?: { choice?: unknown; probabilities?: Record<string, unknown> } } }
+const RESPONSE = z.object({ answers: z.object({ requester: z.object({ choice: z.string(), probabilities: z.record(z.string(), z.number()) }) }) })
 
-/** 下限。0 より大きく 1 以下の小数。空なら既定 */
+/** 下限。0 より大きく 1 以下の数。空なら既定 */
 function minProbability(v: string | undefined): number {
   if (!v) return DEFAULT_MIN_PROBABILITY
   const n = Number(v)
-  if (!/^\d+(\.\d+)?$/.test(v) || !(n > 0 && n <= 1)) throw new Error(`RELAY_JEV_MIN_PROBABILITY に指定できるのは、0 より大きく 1 以下の数です（今は ${JSON.stringify(v)}）`)
+  if (!(n > 0 && n <= 1)) throw new Error(`RELAY_JEV_MIN_PROBABILITY に指定できるのは、0 より大きく 1 以下の数です（今は ${JSON.stringify(v)}）`)
   return n
 }
 
