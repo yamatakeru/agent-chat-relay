@@ -8,10 +8,16 @@ cd "$(dirname "$0")/../.."
 E=.local/e2e
 mkdir -p "$E"
 run() { mise exec -- bun --no-env-file --config=/dev/null test/e2e/addressing.ts run "$@"; }
+# 前回の結果を読まないよう、先に消す。どちらかの実行が失敗したら、結果を読まずに失敗にする
+rm -f "$E/addressing-main.json" "$E/addressing-holdout.json"
 run main --set main --port 18210 >"$E/addressing-main.out" 2>&1 &
+main=$!
 run holdout --set holdout --port 18220 >"$E/addressing-holdout.out" 2>&1 &
-wait
+holdout=$!
 status=0
+wait "$main" || { echo "NG: main の実行が失敗しました（$E/addressing-main.out）"; status=1; }
+wait "$holdout" || { echo "NG: holdout の実行が失敗しました（$E/addressing-holdout.out）"; status=1; }
+[ "$status" = 0 ] || exit 1
 for set in main holdout; do
   mise exec -- bun --no-env-file --config=/dev/null test/e2e/addressing.ts report --check "$E/addressing-$set.json" || status=1
 done

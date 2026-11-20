@@ -687,7 +687,7 @@ describe("relay", () => {
   test("案内は、空行で分けた、空でない段落からなる。送れるものの説明は、その前の段落に続ける", () => {
     // 文面の中身は、実際のモデルに流す評価 test/e2e/addressing.sh で守る（#107）
     const paragraphs = INSTRUCTIONS.split("\n\n")
-    for (const p of paragraphs) expect(p.trim() === "" || (p.includes("\n") && !p.endsWith("\n{sending}"))).toBe(false)
+    for (const p of paragraphs) expect(p).toMatch(/^[^\n]*\S[^\n]*(\n\{sending\})?$/)
     expect(paragraphs.filter((p) => p.includes("{sending}"))).toHaveLength(1)
   })
 
