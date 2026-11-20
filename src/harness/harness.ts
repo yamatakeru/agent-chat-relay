@@ -92,7 +92,8 @@ export async function startHarness(
       const title = tc.title ?? tc.kind ?? "ツールの実行"
       const input = tc.rawInput === undefined ? "" : JSON.stringify(tc.rawInput, null, 2)
       const always = alwaysOption(tc.kind, params.options)
-      const verdict = await onPermission({ title, input, always: always?.name, ...(cfg.requireFullPermissionDisplay ? { requireFullDisplay: true } : {}) })
+      // そのターンでエージェントが書いた文も渡す。承認依頼の送り先を推すのに使う（ADR 0026）
+      const verdict = await onPermission({ title, input, always: always?.name, agentText: turnText, ...(cfg.requireFullPermissionDisplay ? { requireFullDisplay: true } : {}) })
       const option = verdict === "always" && always ? always : params.options.find((o) => o.kind === (verdict === "deny" ? "reject_once" : "allow_once"))
       log.info(`実行承認：${verdict}`, { tool: title })
       if (!option) return { outcome: { outcome: "cancelled" } }

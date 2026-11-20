@@ -6,8 +6,8 @@
 //                  ほかのフラグは、環境変数 RELAY_WORKSPACE・RELAY_HARNESS_SETTINGS・RELAY_HARNESS_MEMORY の別名（ADR 0017）
 //   pair <code>    ペアリングのコードを承認する（ルームの登録、DM の相手の許可）
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
-//   secrets <line|chatwork|discord>
-//                  秘密情報を、画面に表示せずに入力してもらい、<home>/.env に保存する
+//   secrets <line|chatwork|discord|typesafe>
+//                  秘密情報を、画面に表示せずに入力してもらい、<home>/.env に保存する（typesafe は、承認依頼の送り先を推す Jev の API キー。ADR 0026）
 //   line-tunnel    LINE の Webhook を Cloudflare Quick Tunnel で公開する（PATH 上の cloudflared を使う）
 //   line-quota     LINE の今月の送信数
 //
@@ -28,6 +28,7 @@ import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, noticeTimingFromEnv, Relay, type Routes } from "./core/relay.ts"
 import { stopper, untilHarnessExits } from "./shutdown.ts"
 import { relayDir, resolveWorkspace } from "./workspace.ts"
+import { jevFromEnv } from "./jev.ts"
 import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
 
@@ -54,6 +55,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 不正な指定は、何も起動しないうちに拒否する
   const harnessOptions = harnessOptionsFromEnv(env)
   const noticeTiming = noticeTimingFromEnv(env)
+  const attribute = jevFromEnv(env, log)
   // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）。
   // 秘密情報のファイル自体も渡すのは、ファイルがシンボリックリンクのとき、実体の場所も含めないため
   const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile), envFile])
@@ -74,7 +76,8 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 受け取った添付は 7 日で消す（ADR 0005）
   schedulePrune(inbox, "受け取った添付", log)
 
-  const relay = new Relay(access, log, workspace, undefined, noticeTiming)
+  const relay = new Relay(access, log, workspace, undefined, noticeTiming, attribute)
+  if (attribute) log.info("送り手が複数いるターンの承認依頼は、Jev で依頼者を推して送り先を絞ります（ADR 0026）")
   const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
   if (connectors.length === 0) {
     throw new Error("チャットサービスの秘密情報がありません。agent-chat-relay secrets line・secrets chatwork・secrets discord のどれかを実行してください（開発時は scripts/relay.sh secrets）")
@@ -146,6 +149,10 @@ const SECRETS: Record<string, { intro: string; items: [key: string, label: strin
     intro: "Discord Developer Portal の Bot のトークンを入力します。入力内容は画面に表示されません。",
     items: [["RELAY_DISCORD_BOT_TOKEN", "Bot のトークン: "]],
   },
+  typesafe: {
+    intro: "TypeSafe AI の API キー（Jev。承認依頼の送り先を推すのに使う）を入力します。入力内容は画面に表示されません。",
+    items: [["RELAY_TYPESAFE_API_KEY", "API キー: "]],
+  },
 }
 
 function secrets(service: string | undefined): void {
@@ -212,7 +219,7 @@ async function main(): Promise<void> {
     }
     default:
       throw new Error(
-        "usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access | secrets <line|chatwork|discord> | line-tunnel | line-quota",
+        "usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota",
       )
   }
 }

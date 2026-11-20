@@ -44,13 +44,14 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 
 - Claude Code を使う場合は、`claude` をインストールし、ログインしておきます。中継は、PATH 上の `claude` を `claude-agent-acp` 経由で起動します。pi を使う場合は、次の節の設定を用意してください。
 - 秘密情報を保存します。LINE は `agent-chat-relay secrets line`、Chatwork は `agent-chat-relay secrets chatwork`、Discord は `agent-chat-relay secrets discord` で入力します。どれか 1 つだけでも動きます。環境変数で渡すこともできます（[README.md](../README.md#秘密情報の管理)）。
+- 承認者が 2 人以上いて、送り手が複数いるターンの承認依頼も依頼者に絞りたい場合は、TypeSafe AI の API キーを `agent-chat-relay secrets typesafe` で保存します（任意。ADR 0026）。そのターンの発言とツールの入力を TypeSafe AI に送ることになるので、送ってよいかを確かめてから使ってください（[docs/relay.md](relay.md#実行承認)）。
 - 作業ディレクトリを独立した git リポジトリにできない場合（git がインストールされていない場合、作業ディレクトリの `.git` が壊れている場合、`GIT_DIR` などの git の環境変数でリポジトリの場所を変えている場合など）、中継は起動しません。エラーの文に、直し方（`.git` を確かめるか退避する、環境変数を外す、など）を表示します（[docs/relay.md](relay.md#構成)）。
 
 中継が使うファイルは次のとおりです。置き場は `~/.agent-chat-relay/` で、`RELAY_HOME` で変えられます（ADR 0019）。
 
 | 場所 | 内容 |
 |---|---|
-| `~/.agent-chat-relay/.env` | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`・`RELAY_DISCORD_BOT_TOKEN`（平文。権限は 0600） |
+| `~/.agent-chat-relay/.env` | `RELAY_LINE_CHANNEL_SECRET`・`RELAY_LINE_CHANNEL_TOKEN`・`RELAY_CHATWORK_API_TOKEN`・`RELAY_DISCORD_BOT_TOKEN`・`RELAY_TYPESAFE_API_KEY`（平文。権限は 0600） |
 | `~/.agent-chat-relay/access.json` | ルームの登録、許可リスト、ペアリング待ちのコード |
 | `~/.agent-chat-relay/workspace/` | セッションの作業ディレクトリ。受け取った添付ファイルは `.relay/inbox/` に保存し、7 日で削除します |
 | `~/.agent-chat-relay/media/` | LINE に返信した画像（推測できない名前で公開し、7 日で削除します） |
@@ -127,6 +128,7 @@ agent-chat-relay serve
 | `RELAY_PUBLIC_URL` | LINE に返す画像を公開する URL を固定する（省略すると、届いた Webhook のホスト名から決める） |
 | `RELAY_APPROVAL_NOTICE_MIN` | 承認依頼に答えが出ないとき、ルームに「承認待ち」を知らせるまでの時間（分。既定は 10、1〜29。ADR 0024） |
 | `RELAY_SLOW_NOTICE_MIN` | 返事もターンの終わりもないとき、ルームに「時間がかかっている」と知らせるまでの時間（分。既定は 20、1〜1440。ADR 0024） |
+| `RELAY_JEV_MIN_PROBABILITY` | Jev で推した依頼者だけに承認依頼を送る、確率の下限（既定は 0.8、0 より大きく 1 以下。`RELAY_TYPESAFE_API_KEY` があるときだけ効く。ADR 0026） |
 
 ### 普段の環境で動かす
 
