@@ -1,0 +1,7 @@
+{
+  "name": "pi-acp",
+  "version": "0.0.34",
+  "type": "module",
+  "license": "MIT",
+  "private": true
+}

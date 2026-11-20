@@ -2,7 +2,7 @@
 // 不正な引数は、コネクターやハーネスを起動する前に拒否する。
 // --workspace・--harness-settings・--harness-memory は、それぞれ RELAY_WORKSPACE・RELAY_HARNESS_SETTINGS・RELAY_HARNESS_MEMORY の別名で、環境変数より優先する（ADR 0017・0019）
 
-export const HARNESSES = ["claude", "opencode"] as const
+export const HARNESSES = ["claude", "pi", "opencode"] as const
 export type HarnessName = (typeof HARNESSES)[number]
 
 /** env は、フラグで指定した環境変数の値。環境変数に重ねて使う */

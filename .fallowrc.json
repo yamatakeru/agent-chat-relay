@@ -1,3 +1,4 @@
 {
-  "entry": ["src/main.ts", "scripts/*.ts"]
+  "entry": ["src/main.ts", "src/harness/pi/config.ts", "src/vendor/pi/managed-pi-rpc.ts", "scripts/*.ts", "scripts/build-pi-adapter.mjs"],
+  "ignorePatterns": ["src/vendor/pi/adapter.js"]
 }

@@ -101,8 +101,8 @@ describe("secrets コマンド", () => {
 })
 
 describe("serve コマンド", () => {
-  const serve = (envFile: string, workspace: string) =>
-    Bun.spawnSync([...BUN_ISOLATED, join(repo, "src/main.ts"), "serve"], {
+  const serve = (envFile: string, workspace: string, args: string[] = []) =>
+    Bun.spawnSync([...BUN_ISOLATED, join(repo, "src/main.ts"), "serve", ...args], {
       cwd: dir,
       env: { PATH: process.env.PATH, HOME: process.env.HOME, RELAY_HOME: join(dir, "home"), RELAY_ENV_FILE: envFile, RELAY_WORKSPACE: workspace },
       stderr: "pipe",
@@ -123,6 +123,19 @@ describe("serve コマンド", () => {
     const other = join(dir, "other")
     mkdirSync(other)
     expect(serve(join(dir, "secrets", ".env"), other).stderr.toString()).toContain("チャットサービスの秘密情報がありません")
+  })
+
+  test("serve pi はモデルの設定と自動メモリの指定を起動前に確認する", () => {
+    const ws = join(dir, "ws")
+    mkdirSync(ws)
+    const file = join(dir, "missing.env")
+    const memory = serve(file, ws, ["pi", "--harness-memory"])
+    expect(memory.exitCode).toBe(1)
+    expect(memory.stderr.toString()).toContain("pi では自動メモリを指定できません")
+    const missing = serve(file, ws, ["pi"])
+    expect(missing.exitCode).toBe(1)
+    expect(missing.stderr.toString()).toContain(join(dir, "home", "pi", "agent", "settings.json"))
+    expect(existsSync(join(ws, ".relay"))).toBe(false)
   })
 })
 
@@ -176,6 +189,16 @@ test("配布するパッケージには、入り口と本体だけを入れる�
   const files = [...r.stdout.toString().matchAll(/^packed \S+ (.+)$/gm)].map((m) => m[1]!)
   expect(files).toContain("bin/agent-chat-relay")
   expect(files).toContain("src/main.ts")
+  expect(files).toContain("src/harness/pi/config.ts")
+  expect(files.filter((f) => f.startsWith("src/vendor/pi/")).sort()).toEqual([
+    "src/vendor/pi/adapter.js",
+    "src/vendor/pi/managed-extension.ts",
+    "src/vendor/pi/managed-pi-rpc.ts",
+    "src/vendor/pi/managed-read.ts",
+    "src/vendor/pi/package.json",
+    "src/vendor/pi/pi-LICENSE",
+    "src/vendor/pi/pi-acp-LICENSE",
+  ].sort())
   const allowed = (f: string) => /^(bin|src)\//.test(f) || ["package.json", "LICENSE", "README.md"].includes(f)
   expect(files.filter((f) => !allowed(f))).toEqual([])
 })
