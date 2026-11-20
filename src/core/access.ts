@@ -162,7 +162,7 @@ export class AccessStore {
   setReceive(room: string, mode: ReceiveMode): void {
     const a = this.load()
     const policy = a.rooms[room]
-    if (!policy) throw new Error("登録していないルームです。access で登録したルームの ID を確かめてください")
+    if (!policy) throw new Error("登録していないルームです。access の一覧の番号で指定できます")
     policy.receive = mode
     this.save(a)
   }

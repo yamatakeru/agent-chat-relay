@@ -129,6 +129,7 @@ describe("access", () => {
     const r = access.gate({ room: ROOM, sender: ALICE, isDM: false, mentioned: true })
     if (r.action !== "pair") throw new Error("pair expected")
     expect(access.approve(r.code)).toMatchObject({ kind: "room", target: ROOM })
+    expect(JSON.parse(readFileSync(join(dir, "access.json"), "utf8")).rooms[ROOM]).toEqual({ receive: "mention", allowFrom: [] })
     expect(access.gate({ room: ROOM, sender: ALICE, isDM: false, mentioned: true }).action).toBe("deliver")
     expect(access.gate({ room: ROOM, sender: ALICE, isDM: false, mentioned: false }).action).toBe("record")
   })
