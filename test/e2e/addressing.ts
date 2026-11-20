@@ -114,7 +114,7 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
   const home = join(dir, "home")
   const sent = join(dir, "sent.jsonl")
   writeFileSync(sent, "")
-  const relayLog: string[] = []
+  let relayLog = ""
   const env = {
     ...process.env,
     RELAY_HOME: home,
@@ -135,12 +135,12 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
   for (const stream of [relay.stdout, relay.stderr]) {
     void (async () => {
       for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
-        relayLog.push(chunk)
+        relayLog += chunk
         appendFileSync(join(dir, "relay.log"), chunk)
       }
     })()
   }
-  const log = () => relayLog.join("")
+  const log = () => relayLog
   const sentLines = () => readFileSync(sent, "utf8").split("\n").filter(Boolean)
   /** ルームへの返事の本文（中継の知らせを除く） */
   const repliesSince = (n: number) =>
@@ -151,8 +151,9 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
       .flatMap((m) => (m.messages ?? []).map((x) => x.text ?? "（文字なし）"))
       .filter((t) => !NOTICES.includes(t))
   let seq = 0
+  const nextId = () => `${Date.now()}${String(++seq).padStart(3, "0")}`
   const webhook = async (event: Record<string, unknown>) => {
-    const id = `${Date.now()}${String(++seq).padStart(3, "0")}`
+    const id = nextId()
     const body = JSON.stringify({
       destination: "Ubot",
       events: [{ webhookEventId: `ev-${id}`, timestamp: Date.now(), replyToken: `rt-${id}`, deliveryContext: { isRedelivery: false }, ...event }],
@@ -168,7 +169,7 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
       type: "message",
       source: { type: "group", groupId: ROOM, userId: USERS[l.user] },
       message: {
-        id: `m${Date.now()}${String(++seq).padStart(3, "0")}`,
+        id: `m${nextId()}`,
         type: "text",
         text: l.mention ? `@bot ${l.text}` : l.text,
         ...(l.mention ? { mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] } } : {}),
@@ -208,8 +209,9 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
       if (l.burst === undefined) {
         await say(l)
         await settle(20_000)
-        run.steps.push({ index: i, want: l.want, replies: repliesSince(n) })
-        console.error(`[${label}] ${i} ${l.want} ${repliesSince(n).length}  ${NAMES[l.user]}：${l.text}`)
+        const replies = repliesSince(n)
+        run.steps.push({ index: i, want: l.want, replies })
+        console.error(`[${label}] ${i} ${l.want} ${replies.length}  ${NAMES[l.user]}：${l.text}`)
         i++
         continue
       }
@@ -226,8 +228,9 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
         quiet = turnsEnded() === before
       }
       const answers = group.filter((g) => conversation[g]!.want === "answer").length
-      run.bursts.push({ indexes: group, answers, replies: repliesSince(n) })
-      console.error(`[${label}] burst ${group.join(",")} answers=${answers} replies=${repliesSince(n).length}`)
+      const replies = repliesSince(n)
+      run.bursts.push({ indexes: group, answers, replies })
+      console.error(`[${label}] burst ${group.join(",")} answers=${answers} replies=${replies.length}`)
     }
     return run
   } finally {
