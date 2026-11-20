@@ -4,7 +4,7 @@ npm のパッケージ `agent-chat-relay` の新しいバージョンを公開�
 
 ## 流れ
 
-1. **e2e の中核を走らせる**：`test/e2e/line.sh claude` と `test/e2e/resume.sh claude` が、0 で終わることを確かめます（ADR 0023）。Claude Code は固定していないので、中継を変えていなくても、ハーネスとの結合が壊れていることがあります。モデルは Haiku で足ります（`ANTHROPIC_MODEL=haiku`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` のうち `local-e2e` を含むもの）を削除します。
+1. **e2e の中核を走らせる**：`test/e2e/line.sh claude` と `test/e2e/resume.sh claude` が、0 で終わることを確かめます（ADR 0023）。Claude Code は固定していないので、中継を変えていなくても、ハーネスとの結合が壊れていることがあります。モデルは Haiku で足ります（`ANTHROPIC_MODEL=haiku`）。Claude Code の会話ログは、終わるときにスクリプトが削除します。
 2. **バージョンを上げる PR を出す**：`package.json` の `version` を上げます。`bun.lock` にはパッケージ自身のバージョンがないので、変えません。マージは、ほかの PR と同じく merge commit で行います。
 3. **タグを打ち、リリースを公開する**：マージでできた `main` のコミットにタグを打ち、push してから、そのタグでリリースを公開します。リリースノートは、0.1.0 と同じく、前のバージョンからの変更を利用者に向けて書きます。
 

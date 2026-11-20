@@ -187,6 +187,6 @@ e2e のスクリプトは、チャットサービスごとに `test/e2e/<サー�
 
 各スクリプトは、手順ごとに成否を判定し（`ok:` か `NG:`）、1 つでも失敗すれば 0 以外で終わります。`--full` で加わる手順は、モデルの能力に頼るので、失敗しても中継の退行とは限りません（出力にもそう示します）。どの e2e を走らせるかは、`bun run mutation` が、`main` との差分から表示します（`scripts/e2e-targets.ts`。ADR 0023）。リリースの前には、中核を走らせます（`docs/releasing.md`）。
 
-いずれも実際のハーネスを動かすので、契約の利用枠を少し消費します。ログと作業ディレクトリは、サービス名を付けて `.local/e2e/` に残ります（例：`relay-line-claude/`）。終わったら、Claude Code の会話ログ（`~/.claude/projects/` のうち `local-e2e` を含むもの）を削除してください。
+いずれも実際のハーネスを動かすので、契約の利用枠を少し消費します。ログと作業ディレクトリは、サービス名を付けて `.local/e2e/` に残ります（例：`relay-line-claude/`）。Claude Code の会話ログ（`~/.claude/projects/` のうち `local-e2e` を含むもの）は、終わるときにスクリプトが削除します。
 
 開発中に Webhook を 1 件ずつ送りたい場合は、`scripts/relay.sh line-webhook text <ルーム> <ユーザー> <本文> [--mention]` などを使います（`scripts/line-webhook.ts`）。

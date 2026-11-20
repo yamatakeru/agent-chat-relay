@@ -13,6 +13,19 @@ for a in "$@"; do
 done
 FAILED=()
 
+# 終わるとき（失敗や中断を含む）に、中継とモックを止め、ハーネスの会話ログを消す。各スクリプトは RELAY と MOCK に pid を入れ、trap は張らない。
+# Claude Code は、作業ディレクトリのパスの英数字以外を - にした名前で、~/.claude/projects/ に会話ログを作る。
+# e2e の作業ディレクトリは .local/e2e/ の中なので、その名前で始まるものを消す
+RELAY=""
+MOCK=""
+e2e_exit() {
+  kill $RELAY $MOCK 2>/dev/null
+  # 止まるのを待つ（待たないと、bash が「Terminated」を出す。中継が子のハーネスを止め終わる前に、会話ログを消すことにもなる）
+  wait $RELAY $MOCK 2>/dev/null
+  rm -rf -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf %s "$PWD/.local/e2e" | sed 's/[^a-zA-Z0-9]/-/g')"-*
+}
+trap e2e_exit EXIT
+
 lines() { wc -l <"$LOG" | tr -d ' '; }
 # 送信の記録が n 行を超えるまで待つ
 waitfor() {
