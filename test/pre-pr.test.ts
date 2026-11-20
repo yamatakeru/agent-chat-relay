@@ -11,8 +11,9 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
     expect(testCounts("error: 3 passed")).toBeUndefined()
     // テストの名前の中の「3 pass」や、「3 passes」は読まない。数は行の頭（空白のあと）から読む
     expect(testCounts("(pass) x 3 pass\n(fail) y 4 fail\n 5 pass\n 6 fail")).toEqual({ pass: 5, fail: 6 })
-    expect(testCounts(" 5 passes\n 6 fails")).toBeUndefined()
-    expect(testCounts("5 pass\n6 fail")).toEqual({ pass: 5, fail: 6 })
+    expect(testCounts(" 5 passes\n 6 fail")).toBeUndefined()
+    expect(testCounts(" 5 pass\n 6 fails")).toBeUndefined()
+    expect(testCounts("15 pass\n16 fail")).toEqual({ pass: 15, fail: 16 })
   })
 
   test("下書きの全文", () => {
