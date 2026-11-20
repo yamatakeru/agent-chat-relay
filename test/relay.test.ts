@@ -13,7 +13,22 @@ import { BOT, chatworkApi } from "./fixtures/chatwork-api.ts"
 import { BOT_ID, BOT_ROLE, fakeDiscord } from "./fixtures/discord-fake.ts"
 import { png } from "./fixtures/png.ts"
 import type { PermissionOption } from "@agentclientprotocol/sdk"
-import { type Capabilities, type ChatMessage, type Connector, type Incoming, type Log, type PermissionRequest, noticeTimingFromEnv, Relay, type Session, sendablePaths, TURN_NOTICES, type Verdict } from "../src/core/relay.ts"
+import {
+  type AttributionQuery,
+  type Capabilities,
+  type ChatMessage,
+  type Connector,
+  type Incoming,
+  type Log,
+  type PermissionRequest,
+  noticeTimingFromEnv,
+  Relay,
+  type Session,
+  sendablePaths,
+  TURN_NOTICES,
+  type Verdict,
+} from "../src/core/relay.ts"
+import { jevFromEnv } from "../src/jev.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
@@ -96,7 +111,7 @@ class FakeConnector implements Connector {
   async download() {
     return []
   }
-  async roomName() {
+  async roomName(_room: string): Promise<string | undefined> {
     return undefined
   }
 }
@@ -645,6 +660,343 @@ describe("relay", () => {
     expect(await verdict).toBe("allow")
   })
 
+  describe("承認依頼の送り先（ADR 0026）", () => {
+    const CAROL = "line:U0000000000000000000000000000000c"
+    /** ALICE と BOB が承認者。ルームは受信モード「すべて」で、名前は「開発」。ターンは終わらず、作業中の発言は差し込む */
+    function routing(attribute?: ConstructorParameters<typeof Relay>[5], batching = NO_WAIT, log: Log = quiet) {
+      access.save({ allowFrom: [ALICE, BOB], rooms: { [ROOM]: { requireMention: false, allowFrom: [] } }, pending: {} })
+      const relay = new Relay(access, log, undefined, batching, undefined, attribute)
+      const conn = new FakeConnector()
+      conn.roomName = async (room: string) => (room === ROOM ? "開発" : undefined)
+      relay.addConnector(conn)
+      relay.attach(workingSession([]))
+      const to = (user: string) => conn.approvals.filter((a) => a.user === user)
+      return { relay, conn, to }
+    }
+
+    test("そのターンの送り手が 1 人で承認者なら、その人だけに送り、その人の答えだけを受け付ける。ほかの人には出し直さない", async () => {
+      const { relay, conn, to } = routing()
+      relay.receive(msg({ senderName: "アリス" }))
+      await Bun.sleep(5)
+      const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE])
+      const [a] = to(ALICE)
+      expect(a!.text).toContain("あなたの発言による依頼として、あなただけに送っています。")
+      expect(relay.answer(BOB, a!.id, "allow")).toBe(false)
+      relay.remindPending(BOB)
+      await Bun.sleep(5)
+      expect(to(BOB)).toHaveLength(0)
+      expect(relay.answer(ALICE, a!.id, "deny")).toBe(true)
+      expect(await verdict).toBe("deny")
+
+      // 束の中の依頼の ID でも、ほかの人の答えは受け付けない
+      const two = [relay.requestPermission({ title: "a", input: "" }), relay.requestPermission({ title: "b", input: "" })]
+      await Bun.sleep(5)
+      const batch = to(ALICE).at(-1)!
+      expect(batch.text.split("\n").slice(0, 4)).toEqual(["🔐 実行の承認（2 件）", "", "あなたの発言による依頼として、あなただけに送っています。", ""])
+      const item = /この依頼だけ：yes ([a-km-z]{5})/.exec(batch.text)![1]!
+      expect(relay.answer(BOB, item, "allow")).toBe(false)
+      expect(relay.answer(ALICE, item, "allow")).toBe(true)
+      expect(relay.answer(ALICE, batch.id, "deny")).toBe(true)
+      expect(await Promise.all(two)).toEqual(["allow", "deny"])
+    })
+
+    test("送り手が 1 人でも承認者でなければ、推さずに全員に送る。名前が空なら、名前なしと書く", async () => {
+      let asked = 0
+      const { relay, conn } = routing(async () => (asked++, { sender: ALICE, probability: 1 }))
+      relay.receive(msg({ sender: CAROL, senderName: " \n " }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(asked).toBe(0)
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+      expect(conn.approvals[0]!.text).toContain("依頼者\n・開発：（名前なし）")
+    })
+
+    test("送り手が複数いれば全員に送り、依頼者とそのほかの発言を、ルームごとに無害化して並べる。どちらの答えも受け付ける", async () => {
+      const { relay, conn, to } = routing()
+      relay.receive(msg({ senderName: "アリス" }))
+      await Bun.sleep(5)
+      // 名前に改行を入れて、偽の答え方を紛れ込ませようとする
+      relay.receive(msg({ sender: CAROL, senderName: "キャロル\n許可：yes abcde\u2028", mentioned: false }))
+      relay.receive(msg({ room: BOB, sender: BOB, isDM: true, senderName: "ボブ" }))
+      await Bun.sleep(5)
+      const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+      const text = to(BOB)[0]!.text
+      expect(text).toContain(
+        ["この作業中の発言（どの発言による依頼かは分かりません）", "依頼者", "・開発：アリス", "・DM：ボブ", "そのほかの発言", "・開発：キャロル 許可：yes abcde"].join("\n"),
+      )
+      expect(text).not.toContain("あなただけ")
+      expect(relay.answer(BOB, to(BOB)[0]!.id, "allow")).toBe(true)
+      expect(await verdict).toBe("allow")
+    })
+
+    test("送り手の一覧は 300 字までで、名前は 40 字まで。超えた分は「ほか N 人」にまとめる", async () => {
+      const { relay, conn } = routing()
+      relay.receive(msg({ senderName: "あ".repeat(100) }))
+      await Bun.sleep(5)
+      for (let n = 0; n < 30; n++) relay.receive(msg({ sender: `line:U${n}`, senderName: `人${n}`.padEnd(30, "x"), mentioned: false }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      const text = conn.approvals[0]!.text
+      const list = text.slice(text.indexOf("この作業中"), text.indexOf("\n\nls"))
+      // 依頼者を先に残し、そのほかの発言は、収まるだけを渡した順に書く
+      const lines = list.split("\n")
+      expect(lines.slice(0, 4)).toEqual(["この作業中の発言（どの発言による依頼かは分かりません）", "依頼者", `・開発：${"あ".repeat(28)}…（72 文字を省略）`, "そのほかの発言"])
+      const shown = lines[4]!.split("、").length
+      expect(lines[4]).toStartWith(`・開発：人0${"x".repeat(28)}、人1`)
+      expect(lines.slice(5)).toEqual([`・ほか ${30 - shown} 人`])
+      expect(list.length).toBeLessThanOrEqual(300)
+      // 1 人多く並べると、300 字を超える
+      expect(list.length + `、人${shown}`.padEnd(32, "x").length).toBeGreaterThan(300)
+    })
+
+    test("ターンの外で届いた依頼は、全員に送り、発言の一覧を書かない", async () => {
+      const { relay, conn } = routing()
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+      expect(conn.approvals[0]!.text).toBe(["🔐 実行の承認：Bash", "", "ls", "", `許可：yes ${conn.approvals[0]!.id}`, `拒否：no ${conn.approvals[0]!.id}`].join("\n"))
+      conn.approvals = []
+      void relay.requestPermission({ title: "a", input: "x" })
+      void relay.requestPermission({ title: "b", input: "y" })
+      await Bun.sleep(5)
+      const [a] = conn.approvals
+      const ids = [...a!.text.matchAll(/この依頼だけ：yes ([a-km-z]{5})/g)].map((m) => m[1]!)
+      expect(a!.text).toBe(
+        [
+          "🔐 実行の承認（2 件）",
+          "",
+          `すべて許可：yes ${a!.id}`,
+          `すべて拒否：no ${a!.id}`,
+          "",
+          "1. a",
+          "x",
+          `（この依頼だけ：yes ${ids[0]}・no ${ids[0]}）`,
+          "",
+          "2. b",
+          "y",
+          `（この依頼だけ：yes ${ids[1]}・no ${ids[1]}）`,
+        ].join("\n"),
+      )
+    })
+
+    test("1 人に送る文面では、題名のあとに空行を挟んで、その人だけに送ったことを書く", async () => {
+      const { relay, conn } = routing()
+      relay.receive(msg())
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      const [a] = conn.approvals
+      expect(a!.text).toBe(
+        ["🔐 実行の承認：Bash", "", "あなたの発言による依頼として、あなただけに送っています。", "", "ls", "", `許可：yes ${a!.id}`, `拒否：no ${a!.id}`].join("\n"),
+      )
+    })
+
+    test("送り手に承認者が 1 人いても、ほかに送り手がいれば、その人には絞らない。推せれば推し、エージェントの文がなければ空で渡す", async () => {
+      const plain = routing()
+      plain.relay.receive(msg())
+      plain.relay.receive(msg({ sender: CAROL, mentioned: false }))
+      await Bun.sleep(5)
+      void plain.relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(plain.conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+
+      const queries: AttributionQuery[] = []
+      const guessed = routing(async (q) => (queries.push(q), undefined))
+      guessed.conn.roomName = async () => undefined
+      guessed.relay.receive(msg())
+      guessed.relay.receive(msg({ sender: CAROL, mentioned: false }))
+      await Bun.sleep(5)
+      void guessed.relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(queries.map((q) => q.agentText)).toEqual([""])
+      // 表示名やルーム名がなくても、ID では補わない（外へは送らない）。承認者への一覧には ID を書く
+      expect(queries[0]!.messages.map((m) => [m.name, m.room])).toEqual([
+        ["", ""],
+        ["", ""],
+      ])
+      expect(guessed.conn.approvals[0]!.text).toContain(`依頼者\n・${ROOM}：${ALICE}\nそのほかの発言\n・${ROOM}：${CAROL}`)
+    })
+
+    test("送り手の一覧は、改行も含めてちょうど 300 字なら省かず、1 字でも超えれば省く", async () => {
+      const head = ["この作業中の発言（どの発言による依頼かは分かりません）", "依頼者", "・開発："].join("\n")
+      for (const length of [300, 301]) {
+        const { relay, conn } = routing()
+        // 40 字の名前を「、」でつなぎ、最後の名前でちょうど length 字にする
+        const names: string[] = []
+        while (head.length + names.join("、").length + 41 < length) names.push(String(names.length).padEnd(40, "x"))
+        names.push("z".repeat(length - head.length - names.join("、").length - 1))
+        names.forEach((n, i) => relay.receive(msg({ sender: `line:U${i}`, senderName: n })))
+        await Bun.sleep(5)
+        void relay.requestPermission({ title: "Bash", input: "ls" })
+        await Bun.sleep(5)
+        const text = conn.approvals[0]!.text
+        const list = head + names.join("、")
+        expect(list).toHaveLength(length)
+        if (length === 300) expect(text).toContain(`${list}\n\nls`)
+        else expect(text).toContain(`${head}${names.slice(0, -1).join("、")}\n・ほか 1 人\n\nls`)
+      }
+    })
+
+    test("束を組むときは、送り手の一覧も含めた長さで、上限の手前で分ける", async () => {
+      const { relay, conn } = routing()
+      conn.capabilities = { ...conn.capabilities, text: { max: 2000, parts: 10 } }
+      for (let i = 0; i < 12; i++) relay.receive(msg({ sender: `line:U${i}`, senderName: `名前${i}`.padEnd(30, "x") }))
+      await Bun.sleep(5)
+      for (let i = 0; i < 5; i++) void relay.requestPermission({ title: `t${i}`, input: "i".repeat(330), always: "s".repeat(80) })
+      await Bun.sleep(5)
+      const toAlice = conn.approvals.filter((a) => a.user === ALICE)
+      // 一覧を除けば 5 件が 1 通に収まるが、一覧を含めると収まらない
+      expect(toAlice.map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認（4 件）", "🔐 実行の承認：t4"])
+      for (const a of toAlice) expect(a.text.length).toBeLessThanOrEqual(2000)
+    })
+
+    test("送り手が複数いるときは依頼者を推し、推せた人が承認者ならその人だけに、推せなければ全員に送る。送り手が 1 人なら推さない", async () => {
+      const queries: AttributionQuery[] = []
+      let guess: () => Promise<{ sender: string; probability: number } | undefined> = async () => ({ sender: BOB, probability: 0.93 })
+      const { relay, conn, to } = routing((q) => (queries.push(q), guess()))
+      relay.receive(msg({ text: "ログを見て", senderName: "アリス" }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(queries).toHaveLength(0)
+
+      relay.receive(msg({ room: BOB, sender: BOB, isDM: true, text: "続きを頑張って", senderName: "ボブ" }))
+      await Bun.sleep(5)
+      const verdict = relay.requestPermission({ title: "Read", input: "a.txt", agentText: "ボブさんの件を調べます" })
+      await Bun.sleep(5)
+      expect(queries).toEqual([
+        {
+          title: "Read",
+          input: "a.txt",
+          agentText: "ボブさんの件を調べます",
+          messages: [
+            { sender: ALICE, name: "アリス", room: "開発", mentioned: true, text: "ログを見て" },
+            { sender: BOB, name: "ボブ", room: "DM", mentioned: true, text: "続きを頑張って" },
+          ],
+        },
+      ])
+      const [b] = to(BOB)
+      expect(b!.text).toContain("Jev の判定（確率 0.93）で、あなたの発言による依頼として、あなただけに送っています。")
+      expect(to(ALICE)).toHaveLength(1)
+      expect(relay.answer(ALICE, b!.id, "allow")).toBe(false)
+      expect(relay.answer(BOB, b!.id, "allow")).toBe(true)
+      expect(await verdict).toBe("allow")
+
+      // 推せない、失敗した、推した人が承認者でない、のどれでも全員に送る
+      for (const g of [async () => undefined, async () => Promise.reject(new Error("down")), async () => ({ sender: CAROL, probability: 1 })]) {
+        guess = g
+        conn.approvals = []
+        void relay.requestPermission({ title: "Read", input: "b.txt" })
+        await Bun.sleep(5)
+        expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+        expect(conn.approvals[0]!.text).toContain("この作業中の発言")
+        expect(relay.answer(ALICE, conn.approvals[0]!.id, "deny")).toBe(true)
+      }
+    })
+
+    test("推すのに失敗したら、ログに書いて全員に送る。送り手で決めた依頼と Jev で決めた依頼は、送り先が同じなら 1 つの束にし、低いほうの確率を書く", async () => {
+      const errors: string[] = []
+      let fail = true
+      const attribute = async () => {
+        if (fail) throw new Error("down")
+        return { sender: ALICE, probability: 0.9 }
+      }
+      const { relay, conn, to } = routing(attribute, { quietMs: 30, maxMs: 200 }, { info: () => {}, error: (m, e) => errors.push(`${m} ${JSON.stringify(e)}`) })
+      relay.receive(msg())
+      relay.receive(msg({ sender: BOB, mentioned: false }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(80)
+      expect(errors).toEqual(['承認依頼の依頼者を推せませんでした {"error":"Error: down"}'])
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+
+      // ALICE だけのターンの依頼と、BOB が加わってから Jev が ALICE と推した依頼
+      fail = false
+      conn.approvals = []
+      const relay2 = routing(attribute, { quietMs: 30, maxMs: 200 })
+      relay2.relay.receive(msg())
+      await Bun.sleep(5)
+      void relay2.relay.requestPermission({ title: "first", input: "" })
+      relay2.relay.receive(msg({ sender: BOB, mentioned: false }))
+      await Bun.sleep(5)
+      void relay2.relay.requestPermission({ title: "second", input: "" })
+      await Bun.sleep(80)
+      expect(relay2.conn.approvals.map((a) => [a.user, a.text.split("\n").slice(0, 3)])).toEqual([
+        [ALICE, ["🔐 実行の承認（2 件）", "", "Jev の判定（確率 0.90）で、あなたの発言による依頼として、あなただけに送っています。"]],
+      ])
+      expect(to(ALICE)).toHaveLength(0)
+    })
+
+    test("全員に送る束には、依頼ごとの送り手を合わせて並べる。あとの依頼でメンションした人は依頼者にする", async () => {
+      const { relay, conn } = routing(undefined, { quietMs: 30, maxMs: 200 })
+      relay.receive(msg({ senderName: "アリス" }))
+      relay.receive(msg({ sender: BOB, senderName: "ボブ", mentioned: false }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "a", input: "" })
+      relay.receive(msg({ sender: BOB, senderName: "ボブ" }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "b", input: "" })
+      await Bun.sleep(80)
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+      expect(conn.approvals[0]!.text.split("\n").slice(0, 7)).toEqual([
+        "🔐 実行の承認（2 件）",
+        "",
+        "この作業中の発言（どの発言による依頼かは分かりません）",
+        "依頼者",
+        "・開発：アリス、ボブ",
+        "",
+        `すべて許可：yes ${conn.approvals[0]!.id}`,
+      ])
+    })
+
+    test("送り手に承認者がいなければ、推さずに全員に送る", async () => {
+      const queries: AttributionQuery[] = []
+      const { relay, conn } = routing(async (q) => (queries.push(q), { sender: ALICE, probability: 1 }))
+      relay.receive(msg({ sender: CAROL }))
+      relay.receive(msg({ sender: "line:U0000000000000000000000000000000d" }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      expect(queries).toHaveLength(0)
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE, BOB])
+    })
+
+    test("送り先の違う依頼は同じ束に入れず、依頼が届いたあとの発言は、その依頼の送り先を変えない", async () => {
+      const { relay, to } = routing(undefined, { quietMs: 30, maxMs: 200 })
+      relay.receive(msg())
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "first", input: "" })
+      relay.receive(msg({ sender: BOB, mentioned: false }))
+      await Bun.sleep(5)
+      void relay.requestPermission({ title: "second", input: "" })
+      await Bun.sleep(80)
+      expect(to(ALICE).map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認：first", "🔐 実行の承認：second"])
+      expect(to(BOB).map((a) => a.text.split("\n")[0])).toEqual(["🔐 実行の承認：second"])
+    })
+
+    test("送り先の人が許可リストから外れたら、その束にはほかの承認者が答えられ、出し直しも届く", async () => {
+      const { relay, to } = routing()
+      relay.receive(msg())
+      await Bun.sleep(5)
+      const verdict = relay.requestPermission({ title: "Bash", input: "ls" })
+      await Bun.sleep(5)
+      const id = to(ALICE)[0]!.id
+      access.save({ ...access.load(), allowFrom: [BOB] })
+      relay.remindPending(BOB)
+      await Bun.sleep(5)
+      expect(to(BOB)[0]!.text).toContain("答えていない依頼が残っています（残り 1 件）")
+      expect(relay.answer(ALICE, id, "allow")).toBe(false)
+      expect(relay.answer(BOB, id, "deny")).toBe(true)
+      expect(await verdict).toBe("deny")
+    })
+  })
+
   test("受け取りの合図は、エージェントに渡すメンションだけに出す（承認の返事・停止中の発言には出さない）", async () => {
     const { relay, conn } = setup()
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { requireMention: false, allowFrom: [] } }, pending: {} })
@@ -742,6 +1094,24 @@ describe("relay", () => {
     for (const a of conn.approvals) expect(a.text.length).toBeLessThanOrEqual(2000)
     for (const s of scopes) expect(conn.approvals.filter((a) => a.text.includes(s))).toHaveLength(1)
     expect(conn.approvals.every((a) => a.always)).toBe(true)
+  })
+
+  test("束の文面がちょうど上限なら分けずに 1 通で送り、1 字でも超えれば分ける", async () => {
+    const send = async (max: number) => {
+      const { relay, conn } = setup()
+      conn.capabilities = { ...conn.capabilities, text: { max, parts: 10 } }
+      // コネクターの上限の下限（1000 字）を超えるよう、題名と「常に許可」の範囲で文面を伸ばす
+      for (const t of ["a", "b"]) void relay.requestPermission({ title: t.repeat(100), input: t.repeat(300), always: t.repeat(200) })
+      await Bun.sleep(5)
+      return conn.approvals.map((a) => a.text)
+    }
+    // 上限が十分なときの束の文面の長さ。上限からは、送り直しなどの余白として 50 字を差し引く
+    const [whole] = await send(5000)
+    expect(whole!.length + 49).toBeGreaterThanOrEqual(1000)
+    const fits = await send(whole!.length + 50)
+    expect(fits.map((t) => t.length)).toEqual([whole!.length])
+    const split = await send(whole!.length + 49)
+    expect(split.map((t) => t.split("\n")[0])).toEqual([`🔐 実行の承認：${"a".repeat(100)}`, `🔐 実行の承認：${"b".repeat(100)}`])
   })
 
   test("依頼が 1 件でも、題名と入力が長ければ省いて上限に収め、答え方と「常に許可」の範囲は残す", async () => {
@@ -1333,7 +1703,7 @@ describe("ハーネスの起動と再開", () => {
   test("承認の答え（許可・拒否・常に許可）を、ハーネスに返す ACP の選択肢に対応させる（#79）", async () => {
     const asked: PermissionRequest[] = []
     const answer = (verdict: Verdict) => async (req: PermissionRequest) => (asked.push(req), verdict)
-    const fake = { permission: { kind: "execute" as const, options: PERMISSION_OPTIONS } }
+    const fake = { permission: { kind: "execute" as const, options: PERMISSION_OPTIONS, agentText: "アリスさんの依頼で調べます" } }
     const results = {
       allow: await approve(fake, answer("allow")),
       deny: await approve(fake, answer("deny")),
@@ -1343,8 +1713,10 @@ describe("ハーネスの起動と再開", () => {
     expect(results.allow.permissions).toEqual(selected("once"))
     expect(results.deny.permissions).toEqual(selected("reject"))
     expect(results.always.permissions).toEqual(selected("always"))
-    // 承認者には、ツールの名前と入力と、「常に許可」の選択肢の名前を示す
-    expect(asked).toEqual(Array(3).fill({ title: "Bash", input: JSON.stringify({ command: "ls" }, null, 2), always: "Always allow Bash" }))
+    // 承認者には、ツールの名前と入力と、「常に許可」の選択肢の名前を示す。送り先を推すために、そのターンでエージェントが書いた文も渡す（ADR 0026）
+    expect(asked).toEqual(
+      Array(3).fill({ title: "Bash", input: JSON.stringify({ command: "ls" }, null, 2), always: "Always allow Bash", agentText: "アリスさんの依頼で調べます" }),
+    )
   })
 
   test("「常に許可」を示さないツールでは、「常に許可」の答えも 1 回だけの許可にする", async () => {
@@ -2396,4 +2768,112 @@ test("ハーネスのログは、上限を超えそうになったら .1 に移�
   f.close()
   expect(readFileSync(`${p}.1`, "utf8")).toBe("1234567890")
   expect(readFileSync(p, "utf8")).toBe("abc")
+})
+
+describe("Jev で承認依頼の依頼者を推す（ADR 0026）", () => {
+  const QUERY: AttributionQuery = {
+    title: "Bash",
+    input: "x".repeat(3000),
+    agentText: "y".repeat(3000),
+    messages: [
+      { sender: ALICE, name: "アリス", room: "開発", mentioned: true, text: "ログを見て" },
+      { sender: BOB, name: "ボブ", room: "DM", mentioned: false, text: "続き" },
+      { sender: ALICE, name: "アリス", room: "開発", mentioned: true, text: "急ぎで" },
+    ],
+  }
+  /** 呼ばれた要求を requests に残し、answer を返す偽の fetch */
+  function fakeFetch(answer: () => Response | Promise<Response>) {
+    const requests: { url: string; init: RequestInit; body: any }[] = []
+    const f = (async (url: string, init: RequestInit) => {
+      requests.push({ url, init, body: JSON.parse(init.body as string) })
+      return answer()
+    }) as unknown as typeof fetch
+    return { f, requests }
+  }
+  const choice = (choice: string, probabilities: Record<string, number>) => Response.json({ answers: { requester: { type: "choice", choice, probabilities } } })
+
+  /** ログを文字列で残す */
+  function recording() {
+    const lines: string[] = []
+    const log: Log = { info: (m, e) => lines.push(`info ${m} ${JSON.stringify(e)}`), error: (m, e) => lines.push(`error ${m} ${JSON.stringify(e)}`) }
+    return { log, lines }
+  }
+
+  test("API キーがなければ使わない。下限の指定が不正なら起動しない", () => {
+    expect(jevFromEnv({}, quiet)).toBeUndefined()
+    for (const v of ["0", "1.5", "abc", "-0.5", "0.8x"]) expect(() => jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_MIN_PROBABILITY: v }, quiet)).toThrow("RELAY_JEV_MIN_PROBABILITY")
+    expect(jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_MIN_PROBABILITY: "1" }, quiet)).toBeFunction()
+  })
+
+  test("人には名前を付けて ID を送らず、固定したモデルに、長さを切って問い合わせる。確率が下限以上なら、その人を返す", async () => {
+    const { f, requests } = fakeFetch(() => choice("p2", { p1: 0.1, p2: 0.8, none: 0.1 }))
+    const { log, lines } = recording()
+    const attribute = jevFromEnv({ RELAY_TYPESAFE_API_KEY: "secret-key" }, log, f)!
+    expect(await attribute(QUERY)).toEqual({ sender: BOB, probability: 0.8 })
+    expect(lines).toEqual([`info Jev で承認依頼の依頼者を推しました ${JSON.stringify({ sender: BOB, probability: 0.8, min: 0.8 })}`])
+    const [r] = requests
+    expect(r!.url).toBe("https://api.typesafe.ai/v1/systemone")
+    expect(r!.init.method).toBe("POST")
+    expect(new Headers(r!.init.headers).get("Authorization")).toBe("Bearer secret-key")
+    expect(new Headers(r!.init.headers).get("Content-Type")).toBe("application/json")
+    expect(r!.init.signal).toBeInstanceOf(AbortSignal)
+    expect(r!.body.model).toBe("jev-1.14.0")
+    expect(r!.body.questions.requester).toMatchObject({
+      type: "choice",
+      instructions: expect.stringContaining("Whose request"),
+      criteria: { p1: 'The person p1 (shown as "アリス")', p2: 'The person p2 (shown as "ボブ")', none: expect.stringContaining("None of these people") },
+    })
+    expect(Object.keys(r!.body.questions.requester.criteria)).toEqual(["p1", "p2", "none"])
+    expect(r!.body.state.chat_messages.map((m: { person: string }) => m.person)).toEqual(["p1", "p2", "p1"])
+    expect(r!.body.state.permission_request.input).toHaveLength(2000)
+    expect(r!.body.state.chat_messages[0]).toMatchObject({ name: "アリス", room: "開発", mentioned: true, text: "ログを見て" })
+    expect(r!.body.state.agent_text).toHaveLength(2000)
+    expect(JSON.stringify(r!.body)).not.toContain(ALICE)
+    expect(JSON.stringify(r!.body)).not.toContain("secret-key")
+  })
+
+  test("名前とルーム名も長さを切り、表示名がなければそう書く", async () => {
+    const { f, requests } = fakeFetch(() => choice("none", { p1: 0, none: 1 }))
+    await jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k" }, quiet, f)!({
+      ...QUERY,
+      messages: [
+        { sender: ALICE, name: "n".repeat(150), room: "r".repeat(150), mentioned: true, text: "" },
+        { sender: BOB, name: "", room: "", mentioned: false, text: "" },
+      ],
+    })
+    const body = requests[0]!.body
+    expect(body.state.chat_messages.map((m: { name: string; room: string }) => [m.name.length, m.room.length])).toEqual([
+      [100, 100],
+      [0, 0],
+    ])
+    expect(body.questions.requester.criteria.p1).toBe(`The person p1 (shown as "${"n".repeat(100)}")`)
+    expect(body.questions.requester.criteria.p2).toBe("The person p2 (no display name)")
+  })
+
+  test("下限に届かない、どの人でもない、エラー、通信の失敗、答えの形が違う、のどれでも推さない", async () => {
+    const cases: [() => Response | Promise<Response>, string][] = [
+      [() => choice("p1", { p1: 0.79, p2: 0.21 }), `info Jev で承認依頼の依頼者を推しました ${JSON.stringify({ sender: ALICE, probability: 0.79, min: 0.8 })}`],
+      [() => choice("none", { p1: 0.05, p2: 0.05, none: 0.9 }), `info Jev で承認依頼の依頼者を推しました ${JSON.stringify({ probability: 0.9, min: 0.8 })}`],
+      [() => new Response("rate limited", { status: 429 }), 'error Jev がエラーを返しました {"status":429}'],
+      [() => Promise.reject(new DOMException("timeout", "TimeoutError")), 'error Jev に問い合わせられませんでした {"error":"TimeoutError: timeout"}'],
+      [() => Response.json({ answers: {} }), "error Jev の答えの形が想定外です undefined"],
+      [() => Response.json({}), "error Jev の答えの形が想定外です undefined"],
+      [() => choice("p3", { p1: 1 }), "error Jev の答えの形が想定外です undefined"],
+      [() => new Response("not json"), "error Jev の答えの形が想定外です undefined"],
+    ]
+    for (const [answer, logged] of cases) {
+      const { f } = fakeFetch(answer)
+      const { log, lines } = recording()
+      expect(await jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k" }, log, f)!(QUERY)).toBeUndefined()
+      expect(lines).toEqual([logged])
+    }
+    // 下限は変えられる
+    for (const [min, expected] of [
+      ["0.7", { sender: ALICE, probability: 0.79 }],
+      ["0.9", undefined],
+    ] as const) {
+      const { f } = fakeFetch(() => choice("p1", { p1: 0.79, p2: 0.21 }))
+      expect(await jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_MIN_PROBABILITY: min }, quiet, f)!(QUERY)).toEqual(expected)
+    }
+  })
 })

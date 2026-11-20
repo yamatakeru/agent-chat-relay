@@ -3,7 +3,7 @@
 # データの置き場をリポジトリ内（.local/relay）にして動かす。秘密情報は dotenvx で暗号化したリポジトリ直下の .env に置き、
 # 平文の秘密をコマンド引数や履歴に残さない（AGENTS.md）。
 #
-#   scripts/relay.sh secrets [line|chatwork|discord]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン、Discord は Bot のトークン）
+#   scripts/relay.sh secrets [line|chatwork|discord|typesafe]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン、Discord は Bot のトークン、typesafe は Jev の API キー。ADR 0026）
 #   scripts/relay.sh serve [harness] [--session-id <id>]
 #                                       中継を起動する（harness：claude（既定）か opencode。--session-id で既存のセッションを再開する）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
@@ -67,7 +67,8 @@ cmd_secrets() {
     line) secrets_line ;;
     chatwork) secrets_chatwork ;;
     discord) secrets_discord ;;
-    *) die "secrets の対象は line・chatwork・discord のどれかです" ;;
+    typesafe) secrets_typesafe ;;
+    *) die "secrets の対象は line・chatwork・discord・typesafe のどれかです" ;;
   esac
   echo "保存しました: ${ENV_FILE}"
 }
@@ -84,6 +85,13 @@ secrets_discord() {
   echo "Discord Developer Portal の Bot のトークンを入力します。入力内容は画面に表示されません。"
   read -rsp "Bot のトークン: " token; echo
   store_value RELAY_DISCORD_BOT_TOKEN "$token"
+}
+
+secrets_typesafe() {
+  local key
+  echo "TypeSafe AI の API キー（Jev。承認依頼の送り先を推すのに使う）を入力します。入力内容は画面に表示されません。"
+  read -rsp "API キー: " key; echo
+  store_value RELAY_TYPESAFE_API_KEY "$key"
 }
 
 secrets_line() {
