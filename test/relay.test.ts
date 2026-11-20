@@ -689,7 +689,7 @@ describe("relay", () => {
     expect(text.match(/<message chat_id="line:[^>]*>/g)!.map((t) => t.includes('mentioned="true"'))).toEqual([true, false])
     // 案内に、mentioned と受信モードの読み方を書く（段落は空行で分ける）
     expect(relay.instructions()).toContain('画面への出力はチャットに届きません。\n\nmentioned="true" のある発言は、あなたに向けたものです')
-    expect(relay.instructions()).toContain("返事が必要なときだけ返事してください。\n\nルームによっては、一部の発言だけが届きます（list_rooms の receive。")
+    expect(relay.instructions()).toContain("雑談や相づちには、返事しないでください。\n\nルームによっては、一部の発言だけが届きます（list_rooms の receive。")
     expect(relay.instructions()).toContain("fetch_messages で読んでください。\n\n返事は、ふつう")
     expect(await relay.listRooms()).toEqual([
       { chat_id: ROOM, name: undefined, kind: "room", receive: "mention" },

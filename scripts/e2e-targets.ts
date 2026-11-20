@@ -10,10 +10,14 @@
  * 壊れると安全境界が破れるものだけ。それ以外は、単体テストで守るか、OPTIONAL に置く（#92 で、知らせの e2e を中核に足して外した。ADR 0024）
  */
 export const CORE = ["test/e2e/line.sh claude", "test/e2e/resume.sh claude"]
-/** 中核の外の e2e。そのスクリプトか、それが使うモックと共通の部分を変えたときだけ挙げる（Chatwork は ADR 0023、知らせは ADR 0024） */
+/**
+ * 中核の外の e2e。そのスクリプトか、それが使うモックと共通の部分を変えたときだけ挙げる（Chatwork は ADR 0023、知らせは ADR 0024）。
+ * addressing.sh は、メンションのない発言に答えるか・黙るかの評価で、案内の文面を変えたときにも挙げる（#107）
+ */
 const OPTIONAL = [
   { script: "test/e2e/chatwork.sh claude", paths: [/^test\/e2e\/(chatwork\.sh|mock-chatwork\.ts|lib\.sh)$/] },
   { script: "test/e2e/notices.sh claude", paths: [/^test\/e2e\/(notices\.sh|mock-line\.ts|lib\.sh)$/] },
+  { script: "test/e2e/addressing.sh", paths: [/^src\/core\/instructions\.ts$/, /^test\/e2e\/(addressing\.(sh|ts)|mock-line\.ts)$/] },
 ]
 
 /** ハーネスとの結合に関わるパス */
@@ -23,7 +27,7 @@ const CORE_PATHS = [
   /^src\/prompt\.ts$/,
   /^src\/(main|workspace|home|serve-args)\.ts$/,
   /^bin\//,
-  /^test\/e2e\/(?!chatwork\.sh$|mock-chatwork\.ts$|notices\.sh$)/,
+  /^test\/e2e\/(?!chatwork\.sh$|mock-chatwork\.ts$|notices\.sh$|addressing\.(sh|ts)$)/,
 ]
 /** ハーネス（アダプター）と ACP・MCP の SDK。package.json と bun.lock の差分の行に現れる名前 */
 const CORE_DEPS = /@agentclientprotocol\/|@modelcontextprotocol\/|@anthropic-ai\/claude/
