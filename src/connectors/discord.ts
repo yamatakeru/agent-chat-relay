@@ -123,6 +123,7 @@ export class DiscordConnector implements Connector {
       attachments,
       isDM,
       mentioned: isDM || isMentioned(msg, me, role),
+      toOthers: addressesOthers(msg, me, role),
     })
     // 入力中の表示は、返事を送るか 10 秒たつと消える。リアクションには Add Reactions の権限が必要
     if (result.acknowledge) this.acknowledge(() => Promise.all([msg.react(ACK_EMOJI), "sendTyping" in msg.channel ? msg.channel.sendTyping() : undefined]))
@@ -290,6 +291,16 @@ function roomOf(ch: Message["channel"]): string | undefined {
  */
 function isMentioned(msg: Message, me: string, botRole: string | undefined): boolean {
   return msg.mentions.users.has(me) || (botRole !== undefined && msg.mentions.roles.has(botRole)) || msg.mentions.repliedUser?.id === me
+}
+
+/**
+ * Bot でも送信者でもない人への @、Bot 専用でないロールへの @、その人の発言への返信があるか。
+ * @everyone・@here は含まない（ADR 0028）
+ */
+function addressesOthers(msg: Pick<Message, "author" | "mentions">, me: string, botRole: string | undefined): boolean {
+  const other = (id: string) => id !== me && id !== msg.author.id
+  const reply = msg.mentions.repliedUser
+  return [...msg.mentions.users.keys()].some(other) || [...msg.mentions.roles.keys()].some((id) => id !== botRole) || (!!reply && other(reply.id))
 }
 
 function botRoleId(msg: Message): string | undefined {

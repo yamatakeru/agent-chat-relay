@@ -17,7 +17,8 @@ const MEDIA_TEXT = { image: "（画像）", video: "（動画）", audio: "（�
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/
 
 type Source = { type: "user" | "group" | "room"; userId?: string; groupId?: string; roomId?: string }
-type Mentionee = { index: number; length: number; isSelf?: boolean }
+/** type は user（人）か all（全員）。userId は、その人がプロフィールの取得に同意しているときだけある */
+type Mentionee = { index: number; length: number; type?: string; userId?: string; isSelf?: boolean }
 type LineEvent = {
   type: string
   webhookEventId?: string
@@ -94,6 +95,8 @@ export class LineConnector implements Connector {
   private readonly tokens = new Map<string, { token: string; at: number }[]>()
   private readonly quoteTokens = new Map<string, string>()
   private readonly sentIds = new Set<string>()
+  /** 受けた発言の送信者。引用元が他人の発言かを確かめる（ADR 0028） */
+  private readonly senders = new Map<string, string>()
   private readonly seenEvents = new Set<string>()
   private readonly names = new Map<string, string>()
   /** ファイルの元の名前。取得したファイルの拡張子に使う */
@@ -191,8 +194,9 @@ export class LineConnector implements Connector {
     if (ev.type !== "message" || !msg || !sender) return
     const isDM = ev.source.type === "user"
     if (msg.quoteToken) remember(this.quoteTokens, msg.id, msg.quoteToken)
+    remember(this.senders, msg.id, sender)
 
-    const content = this.content(msg)
+    const content = this.content(msg, sender)
     if (!content) return
     const result = this.relay.receive({
       id: msg.id,
@@ -204,16 +208,22 @@ export class LineConnector implements Connector {
       attachments: content.attachments,
       isDM,
       mentioned: isDM || content.mentioned,
+      toOthers: content.toOthers,
     })
     if (result.acknowledge) this.acknowledge(() => this.acknowledgeMessage(msg.markAsReadToken, isDM ? localId(sender) : undefined))
   }
 
-  /** 発言の本文・添付と、Bot へのメンションか。扱わない種類なら undefined */
-  private content(msg: LineMessage): { text: string; attachments: Attachment[]; mentioned: boolean } | undefined {
+  /** 発言の本文・添付と、Bot へのメンションか、他人宛ての印があるか。扱わない種類なら undefined */
+  private content(msg: LineMessage, sender: string): { text: string; attachments: Attachment[]; mentioned: boolean; toOthers?: boolean } | undefined {
     switch (msg.type) {
       case "text": {
         const mentionees = msg.mention?.mentionees ?? []
-        return { text: stripSelfMentions(msg.text ?? "", mentionees), attachments: [], mentioned: mentionees.some((m) => m.isSelf) || this.quotesMe(msg) }
+        return {
+          text: stripSelfMentions(msg.text ?? "", mentionees),
+          attachments: [],
+          mentioned: mentionees.some((m) => m.isSelf) || this.quotesMe(msg),
+          toOthers: mentionsOthers(mentionees, sender) || this.quotesOthers(msg, sender),
+        }
       }
       case "image":
       case "video":
@@ -230,7 +240,7 @@ export class LineConnector implements Connector {
       case "sticker": {
         // text はメッセージスタンプに入力した文字。キーワードは最大 15 個あるので、先頭だけを書く
         const label = msg.text || (msg.keywords ?? []).slice(0, 5).join("、")
-        return { text: label ? `（スタンプ：${label}）` : "（スタンプ）", attachments: [], mentioned: this.quotesMe(msg) }
+        return { text: label ? `（スタンプ：${label}）` : "（スタンプ）", attachments: [], mentioned: this.quotesMe(msg), toOthers: this.quotesOthers(msg, sender) }
       }
       default:
         return undefined
@@ -240,6 +250,12 @@ export class LineConnector implements Connector {
   /** Bot の発言への返信か（メンションとして扱う） */
   private quotesMe(msg: LineMessage): boolean {
     return msg.quotedMessageId !== undefined && this.sentIds.has(msg.quotedMessageId)
+  }
+
+  /** 他人（Bot でも送信者でもない人）の発言への返信か。引用元を受けていなければ、分からないので false（再起動の前の発言など） */
+  private quotesOthers(msg: LineMessage, sender: string): boolean {
+    const quoted = msg.quotedMessageId === undefined ? undefined : this.senders.get(msg.quotedMessageId)
+    return quoted !== undefined && quoted !== sender
   }
 
   /** 受け取りの合図（ADR 0012）。既読は、OAM の［チャット］がオンでないと API で付けられない */
@@ -389,6 +405,11 @@ export class LineConnector implements Connector {
 function roomOf(s: Source): string | undefined {
   const id = s.type === "group" ? s.groupId : s.type === "room" ? s.roomId : s.userId
   return id ? `${SERVICE}:${id}` : undefined
+}
+
+/** Bot でも送信者でもない人へのメンションがあるか。全員へのメンション（type が all）は含まない */
+function mentionsOthers(mentionees: Mentionee[], sender: string): boolean {
+  return mentionees.some((m) => m.type === "user" && !m.isSelf && (m.userId === undefined || `${SERVICE}:${m.userId}` !== sender))
 }
 
 /** 本文から Bot へのメンションを取り除く。LINE の index と length は UTF-16 の単位 */

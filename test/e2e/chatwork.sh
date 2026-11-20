@@ -23,7 +23,7 @@ export RELAY_ENV_FILE="$E/.env" RELAY_HOME="$PWD/$E/relay-chatwork-$H" RELAY_CHA
 GROUP=7000 DM=7001 SALES=7003 ALICE=1 BOB=2
 # 開発チームは登録済みで始める。起動前に届いていた依頼（モックが用意する）は、記録だけされるはず
 mkdir -p "$RELAY_HOME"
-echo '{"allowFrom":[],"rooms":{"chatwork:r7000":{"requireMention":true,"allowFrom":[]}},"pending":{}}' >"$RELAY_HOME/access.json"
+echo '{"allowFrom":[],"rooms":{"chatwork:r7000":{"receive":"mention","allowFrom":[]}},"pending":{}}' >"$RELAY_HOME/access.json"
 
 mise exec -- bun --no-env-file --config=/dev/null test/e2e/mock-chatwork.ts "$LOG" >"$E/mock-chatwork-$H.log" 2>&1 &
 MOCK=$!

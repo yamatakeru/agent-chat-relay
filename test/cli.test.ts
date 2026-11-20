@@ -105,6 +105,47 @@ describe("secrets コマンド", () => {
   })
 })
 
+describe("access コマンド", () => {
+  const run = (args: string[]) =>
+    Bun.spawnSync([...BUN_ISOLATED, join(repo, "src/main.ts"), "access", ...args], {
+      cwd: dir,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, RELAY_HOME: join(dir, "home") },
+      stderr: "pipe",
+      stdout: "pipe",
+    })
+  const file = () => join(dir, "home", "access.json")
+
+  test("一覧の番号か ID で、受信モードを変える。古い形（requireMention）は読み替えて、receive だけを書く（ADR 0028）", () => {
+    mkdirSync(join(dir, "home"))
+    const rooms = { "line:Ca": { requireMention: true, allowFrom: [] }, "chatwork:r1": { requireMention: false, allowFrom: ["chatwork:u1"] } }
+    writeFileSync(file(), JSON.stringify({ allowFrom: [], rooms, pending: {} }))
+    const list = run([]).stdout.toString()
+    expect(list).toContain("1. line:C…  メンション時")
+    expect(list).toContain("2. chatwork:r…  すべて  許可 1 人")
+
+    const byNumber = run(["mode", "1", "exceptOthers"])
+    expect(byNumber.exitCode).toBe(0)
+    expect(byNumber.stdout.toString()).toContain("line:C…（他人宛てを除く）")
+    expect(run(["mode", "chatwork:r1", "mention"]).exitCode).toBe(0)
+    expect(JSON.parse(readFileSync(file(), "utf8")).rooms).toEqual({
+      "line:Ca": { receive: "exceptOthers", allowFrom: [] },
+      "chatwork:r1": { receive: "mention", allowFrom: ["chatwork:u1"] },
+    })
+  })
+
+  test("知らない受信モード、ない番号、登録していないルームは拒否し、何も変えない", () => {
+    mkdirSync(join(dir, "home"))
+    const before = JSON.stringify({ allowFrom: [], rooms: { "line:Ca": { receive: "mention", allowFrom: [] } }, pending: {} })
+    writeFileSync(file(), before)
+    const bad = run(["mode", "1", "others"])
+    expect(bad.exitCode).toBe(1)
+    expect(bad.stderr.toString()).toContain("mention|exceptOthers|all")
+    expect(run(["mode", "2", "all"]).stderr.toString()).toContain("2 番のルームはありません")
+    expect(run(["mode", "line:Cb", "all"]).stderr.toString()).toContain("登録していないルーム")
+    expect(readFileSync(file(), "utf8")).toBe(before)
+  })
+})
+
 describe("serve コマンド", () => {
   const serve = (envFile: string, workspace: string, { args = [], env = {} }: { args?: string[]; env?: Record<string, string> } = {}) =>
     Bun.spawnSync([...BUN_ISOLATED, join(repo, "src/main.ts"), "serve", ...args], {
