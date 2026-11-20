@@ -52,7 +52,7 @@ LINE・LINE WORKS・Chatwork・Discord のルームを、任意のハーネス�
 | Bun でスクリプトを起動するときは、cwd の `.env` と `bunfig.toml` を読ませない | 構造：中継の本体は `bin/agent-chat-relay` から起動する。検査：それ以外は `bun run check` が、シェルでは `--no-env-file --config=/dev/null`、TypeScript では `BUN_ISOLATED` を求める |
 | `docs/relay.md` の ADR の一覧は、手で書き換えない | 検査：`bun run check` が生成結果との一致を確かめる（生成は `bun run docs:adr`） |
 | 検査の例外は、その行に理由・期限・承認者を書き、人の承認を得てから入れる | 検査：`bun run check` が期限を確かめる。文章：例外の理由と人の承認 |
-| 統括 issue のある作業で作った issue は、その sub-issue にする | 文章 |
+| 統括 issue のある作業で作った issue は、そのまとまりが終わる条件に入るなら、その sub-issue にする。依存も進捗の連動もない issue には、親を付けない | 文章 |
 | 作業の前に、`GLOSSARY.md`（用語）、`docs/adr/`（確定した判断）、その作業の統括 issue（ラベル `tracking`）、関係する未決事項（ラベル `undecided`）を読む | 文章 |
 | 振る舞いを変えたら、PR を出す前に `bun run mutation` を走らせる。生き残った変異と、テストが届かない変異（`direct`、`none-file`）は、テストで捕まえるか、捕まえない理由を PR に書く。挙げられた e2e を走らせ、結果を PR に書く | 構造：`.fallowrc.json` の `entry` で、子プロセスで動くファイルの変異も、テストが届かないものとして出させる。検査：`bun run check` が、dead code として外される変異がないことを確かめる。文章：何を確かめるか（変異と e2e）は `bun run mutation` が出す（ADR 0021、0023） |
 | PR の「確認できなかったこと」には、項目ごとに、確かめる手段、費用の見積もり（時間、実費）、確かめなかった理由を書く。手元で数分、実費なしで確かめられるものは、書かずに確かめる。「確かめられない」と書くのは、手段がないことを示せるときだけ | 文章：`bun run mutation` の出力の最後にも出す |
