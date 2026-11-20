@@ -30,7 +30,7 @@ PR #78 で、修正に足した条件（`if (!done && (await steer(text))) conti
 ## 決めたこと
 
 - 振る舞いを変えたら、PR を出す前に `bun run mutation` を走らせる。中身は `scripts/mutation.sh` で、`main` との差分の行に、`--allow-side-effects` を付けて `fallow mutation` をかける。`HOME` は `.local` の中に向ける。
-- 生き残った変異と、テストが届かない変異（`direct`、`none-file`）は、テストで捕まえるか、捕まえない理由（等価、文言だけ、など）を PR に書く。
+- 生き残った変異と、テストが届かない変異（No coverage に出たものすべて。`test_reach` の区分（`direct`、`none`、`none-file` など。fallow は、区分が増えうるとしている）によらない）は、テストで捕まえるか、捕まえない理由（等価、文言だけ、など）を PR に書く。
 - CI では動かさない。失敗にもしない。生き残りのうち本物の穴の割合が分かっていないためと、等価な変異の扱いを決めていないため。
 - fallow のバージョンは完全に固定する。上げるときは、384f1a7d で `!done` の変異が生き残ることを確かめる。
 - 道具を替えるときは、`scripts/mutation.sh` だけを変える。
