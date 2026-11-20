@@ -1,18 +1,17 @@
 // CLI としての動き（ADR 0019）：データの置き場、秘密情報のファイル、Bun に cwd のファイルを読ませないこと
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { loadSecrets, parseSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "../src/home.ts"
 import { BUN_ISOLATED, harnessConfig } from "../src/harness/config.ts"
+import { tempDir } from "./tmp.ts"
 
 const repo = resolve(import.meta.dir, "..")
 let dir: string
 
 beforeEach(() => {
-  // /tmp は使わない（AGENTS.md）
-  mkdirSync(join(repo, ".local"), { recursive: true })
-  dir = mkdtempSync(join(repo, ".local", "test-cli-"))
+  dir = tempDir("test-cli-")
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 

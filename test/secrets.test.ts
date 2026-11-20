@@ -1,7 +1,8 @@
 // scripts/relay.sh secrets。dotenvx が無ければ成功の側は飛ばす（CI では RELAY_TEST_REQUIRE_DOTENVX=1 で失敗させる）
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { tempDir } from "./tmp.ts"
 
 const repo = resolve(import.meta.dir, "..")
 const KEY = "RELAY_CHATWORK_API_TOKEN"
@@ -12,10 +13,7 @@ let dir: string
 let envFile: string
 
 beforeEach(() => {
-  // /tmp は使わない（AGENTS.md）
-  const base = join(repo, ".local")
-  mkdirSync(base, { recursive: true })
-  dir = mkdtempSync(join(base, "test-secrets-"))
+  dir = tempDir("test-secrets-")
   envFile = join(dir, ".env")
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))

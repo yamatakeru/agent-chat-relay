@@ -1,11 +1,12 @@
 // scripts/check.ts と scripts/adr-index.ts の検査が、ミスを見逃さないこと。e2e を走らせる判定（scripts/e2e-targets.ts と test/e2e/lib.sh）
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { adrIndex, BEGIN, currentIndex, END, replaceIndex } from "../scripts/adr-index.ts"
 import { prunedErrors, shellLaunchErrors, tsLaunchErrors, wordingErrors } from "../scripts/check.ts"
 import { CORE, e2eTargets } from "../scripts/e2e-targets.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
+import { tempDir } from "./tmp.ts"
 
 const TODAY = "2026-11-19"
 
@@ -56,7 +57,7 @@ test("分離の例外は、期限が過ぎたもの、日付でないものを�
 
 let dir: string
 beforeEach(() => {
-  dir = mkdtempSync(join(import.meta.dir, "..", ".local", "test-check-"))
+  dir = tempDir("test-check-")
   mkdirSync(join(dir, "docs/adr"), { recursive: true })
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
