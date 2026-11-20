@@ -26,6 +26,7 @@ agent-chat-relay の仕様です。2026-11-09 にユーザーと決めました�
 | [0022](adr/0022-release-by-staged-trusted-publishing.md) | npm への公開は、GitHub のリリースを契機に、trusted publishing と staged publishing で行う |
 | [0023](adr/0023-e2e-core-by-changed-paths-and-release.md) | e2e は中核だけを既定にし、変更したパスとリリースを契機に走らせる。判定はスクリプトにさせる |
 | [0024](adr/0024-notify-rooms-when-turn-stalls.md) | ターンが止まったり、返事のないまま終わったりしたら、ルームに固定の知らせを出す |
+| [0025](adr/0025-pre-pr-command-and-skill.md) | PR を出す前の手順は、入口のコマンドと、プロジェクトの skill に置く |
 
 <!-- ADR の一覧ここまで -->
 
