@@ -10,7 +10,7 @@ import { type Target, targetsSince } from "./e2e-targets.ts"
 
 type Mutant = { file: string; line: number; status: string; operator: string; change: { from: string; to: string }; test_reach?: { reach: string } | null; prune_reason?: string | null }
 export type Mutation = { summary: { counts: Record<string, number> }; mutants: Mutant[] }
-export type Results = { base: string; tests: { pass: number; fail: number } | undefined; check: boolean; mutation: Mutation | undefined; e2e: Target[] }
+export type Results = { base: string; head: string; tests: { pass: number; fail: number } | undefined; check: boolean; mutation: Mutation | undefined; e2e: Target[] }
 
 /** 状態の名前。ここにない状態も、そのままの名前で挙げる（fallow は状態を増やしうる） */
 const STATUS: Record<string, string> = {
@@ -55,7 +55,7 @@ export function draft(r: Results): string {
   const lines = [
     "## 確認",
     "",
-    `<!-- bun run pre-pr が、${r.base} との差分で書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->`,
+    `<!-- bun run pre-pr が、コミット ${r.head} で、${r.base} との差分から書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->`,
     r.tests ? `- \`bun test\`：${r.tests.pass} 件が通った。失敗 ${r.tests.fail} 件` : "- `bun test`：結果を読めなかった",
     `- \`bun run check\`：${r.check ? "通った" : "失敗した"}`,
     ...(r.mutation ? mutationLines(r.mutation) : ["- `bun run mutation`：結果を読めなかった"]),
@@ -71,10 +71,21 @@ export function draft(r: Results): string {
   return `${lines.join("\n")}\n`
 }
 
-function run(label: string, cmd: string[]): { ok: boolean; out: string } {
+/** bun run mutation --format json の標準出力から、結果を読む。読めなければ undefined（fallow のエラーも JSON で返る） */
+export function parseMutation(stdout: string): Mutation | undefined {
+  try {
+    const parsed = JSON.parse(stdout)
+    return parsed?.summary?.counts && Array.isArray(parsed.mutants) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function run(label: string, cmd: string[]): { ok: boolean; stdout: string; out: string } {
   console.error(`pre-pr: ${label}`)
   const r = Bun.spawnSync(cmd, { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" })
-  return { ok: r.exitCode === 0, out: `${r.stdout.toString()}${r.stderr.toString()}` }
+  const stdout = r.stdout.toString()
+  return { ok: r.exitCode === 0, stdout, out: `${stdout}${r.stderr.toString()}` }
 }
 
 if (import.meta.main) {
@@ -82,16 +93,11 @@ if (import.meta.main) {
   const test = run("bun test", [...BUN_ISOLATED, "test"])
   const check = run("bun run check", [...BUN_ISOLATED, "run", "check"])
   const mut = run("bun run mutation", ["sh", "scripts/mutation.sh", base, "--format", "json"])
-  let mutation: Mutation | undefined
-  try {
-    const parsed = JSON.parse(mut.out.slice(mut.out.indexOf("{"), mut.out.lastIndexOf("}") + 1))
-    if (parsed.summary) mutation = parsed
-  } catch (e) {
-    console.error(`pre-pr: bun run mutation の JSON を読めなかった：${String(e)}`)
-  }
+  const mutation = parseMutation(mut.stdout)
   for (const [name, r] of [["bun test", test], ["bun run check", check]] as const) if (!r.ok) console.error(`\n== ${name} が失敗した ==\n${r.out}`)
   if (!mutation) console.error(`\n== bun run mutation の結果を読めなかった ==\n${mut.out}`)
-  console.log(draft({ base, tests: testCounts(test.out), check: check.ok, mutation, e2e: targetsSince(base) }))
+  const head = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"]).stdout.toString().trim()
+  console.log(draft({ base, head, tests: testCounts(test.out), check: check.ok, mutation, e2e: targetsSince(base) }))
   console.error("pre-pr: この下書きで PR 本文を書く。書き方は skill pre-pr（.agents/skills/pre-pr/SKILL.md）")
   if (!test.ok || !check.ok || !mutation) process.exit(1)
 }

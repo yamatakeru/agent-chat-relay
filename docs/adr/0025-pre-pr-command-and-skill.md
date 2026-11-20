@@ -16,12 +16,14 @@ PR を出す前の規則は、`AGENTS.md` の「ミスの再発防止」の表�
 
 skill は、段としては文章のままです。読まなくても何も失敗しません。skill だけにすると、「規則を忘れる」が「skill を読み忘れる」に移るだけになりえます。
 
-**ハーネスが skill を探す場所**（各ハーネスのドキュメントと、Harness Notes の比較。2026-11-20 に調べた）
+**ハーネスが skill を探す場所**（各ハーネスのドキュメントと、Harness Notes の比較を読んだ。2026-11-20。Claude Code のほかは、動かして確かめていない）
 
 - リポジトリの `.agents/skills/` は、Codex、Cursor、OpenCode、Pi が読みます。Claude Code は `.claude/skills/` だけを読みます。
 - Cursor と OpenCode は両方を読みます。同じファイルにリンクで届く場合、Cursor は 1 つにまとめます。OpenCode は、名前が同じなら後に見つけたものを使います。
 - `.claude/skills` を `../.agents/skills` へのリンクにすると、Claude Code（`claude -p`）が `pre-pr` を挙げることを確かめました。
-- 中継が既定の作業ディレクトリで動かすハーネスには、このリポジトリの skill は届きません。作業ディレクトリを `git init` するので、Claude Code、Codex、Pi が上の階層を探すのは、そこで止まります。e2e も同じです。ただし、OpenCode（2.0.28）は、ファイルシステムの根まで探します。
+- 中継が既定の作業ディレクトリで動かすハーネスには、このリポジトリの skill は届きません。作業ディレクトリを `git init` するので、Claude Code、Codex、Pi が上の階層を探すのは、そこで止まります。e2e と `scripts/relay.sh` の作業ディレクトリは、このリポジトリの `.local/` の下ですが、同じです。ただし、OpenCode（2.0.28）は、ファイルシステムの根まで探します。
+- Claude Code の `CLAUDE.md` は、`git init` で止まらず、上の階層から読まれます。このリポジトリの `CLAUDE.md`（`@AGENTS.md`）も、`.local/` の下の作業ディレクトリに届きえます。中継は `claudeMdExcludes` でこれを除いています（ADR 0017）。
+- 中継と同じ設定（`--setting-sources project,local` と `claudeMdExcludes`）で、`.local/` の下に `git init` したディレクトリから `claude -p` を動かし、`pre-pr` も `CLAUDE.md` の内容も文脈にないことを確かめました。`claudeMdExcludes` を外すと、`CLAUDE.md` の `@AGENTS.md` の行が見えました。
 
 **数の書き写し**
 
@@ -29,11 +31,11 @@ skill は、段としては文章のままです。読まなくても何も失�
 
 ## 決めたこと
 
-- **入口のコマンド。** `bun run pre-pr`（`scripts/pre-pr.ts`）が、テスト、検査、ミューテーションを走らせ、走らせる e2e を挙げます。そのうえで、PR 本文の「確認」と「確認できなかったこと」の下書きを、標準出力に出します。数と区分は実際の値で埋め、捕まえていない変異をファイルと区分ごとに挙げます。人が埋める欄は（）にします。最後に skill の名前を出します。
+- **入口のコマンド。** `bun run pre-pr`（`scripts/pre-pr.ts`）が、テスト、検査、ミューテーションを走らせ、走らせる e2e を挙げます。そのうえで、PR 本文の「確認」と「確認できなかったこと」の下書きを、標準出力に出します。数と区分は実際の値で埋め、捕まえていない変異をファイルと区分ごとに挙げます。人が埋める欄は（）にします。コメントには、走らせたコミットを入れます。最後に skill の名前を出します。
 - **e2e は走らせない。** 挙げて、結果の欄を作るだけにする。走らせ忘れはまだ起きておらず、時間と実費がかかるため。
-- **skill。** 判断の部分は `.agents/skills/pre-pr/SKILL.md` に置きます。手順の順番、下書きの埋め方、「確認できなかったこと」の書き方と過去の失敗の例です。`.claude/skills` は `../.agents/skills` へのリンクにします。
+- **skill。** 判断の部分は `.agents/skills/pre-pr/SKILL.md` に置きます。範囲（振る舞いか構造を変えた PR）、手順の順番、下書きの埋め方、「確認できなかったこと」の書き方と過去の失敗の例です。順番は、`pre-pr` で捕まえていない変異をテストで捕まえ、simplify とレビューをかけ、最後のコミットで `pre-pr` を走らせ直して下書きを得る、とします。テストを足したあとにも simplify とレビューがかかるようにするためです。`.claude/skills` は `../.agents/skills` へのリンクにします。
 - **`AGENTS.md`。** 常に効かせる規則（秘密情報、`.local`、安全境界など）は残します。場面ごとの規則は skill に移し、表の行は skill と仕組みを指すだけにします。同じ規則を 2 か所に書きません。
-- **`bun run mutation`。** 下の道具として残します。e2e の一覧は標準エラーに出し、`--format json` の標準出力を JSON だけにします。規則の文の表示はやめ、`pre-pr` の下書きと skill に移します。
+- **`bun run mutation`。** 下の道具として残します。e2e の一覧は標準エラーに出し、`--format json` の標準出力を JSON だけにします。規則の文の表示はやめ、`pre-pr` の下書きと skill に移します。最後に、`pre-pr` と skill を指す 1 行だけを出します。`bun run mutation` を直接走らせても、skill に辿れるようにするためです。
 
 ## 見直す条件
 

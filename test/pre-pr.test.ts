@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { draft, type Mutation, type Results, testCounts } from "../scripts/pre-pr.ts"
+import { draft, type Mutation, parseMutation, type Results, testCounts } from "../scripts/pre-pr.ts"
 
 const op = { operator: "negate-condition", change: { from: "<condition>", to: "true" } }
-const base: Results = { base: "main", tests: { pass: 144, fail: 0 }, check: true, mutation: undefined, e2e: [] }
+const base: Results = { base: "main", head: "abc1234", tests: { pass: 144, fail: 0 }, check: true, mutation: undefined, e2e: [] }
 
 describe("PR を出す前の下書き（ADR 0025）", () => {
   test("bun test の出力から、通った数と失敗した数を読む。どちらかがなければ読めないとする", () => {
@@ -19,7 +19,7 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
   test("下書きの全文", () => {
     expect(draft(base)).toBe(`## 確認
 
-<!-- bun run pre-pr が、main との差分で書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->
+<!-- bun run pre-pr が、コミット abc1234 で、main との差分から書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->
 - \`bun test\`：144 件が通った。失敗 0 件
 - \`bun run check\`：通った
 - \`bun run mutation\`：結果を読めなかった
@@ -38,11 +38,21 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
     expect(ok).toContain("- `bun test`：144 件が通った。失敗 0 件")
     expect(ok).toContain("- `bun run check`：通った")
     expect(ok).toContain("- `bun run mutation`：結果を読めなかった")
-    expect(ok).toContain("main との差分")
+    expect(ok).toContain("コミット abc1234 で、main との差分")
     const ng = draft({ ...base, base: "a1b2", tests: undefined, check: false })
     expect(ng).toContain("- `bun test`：結果を読めなかった")
     expect(ng).toContain("- `bun run check`：失敗した")
     expect(ng).toContain("a1b2 との差分")
+  })
+
+  test("ミューテーションの結果は、標準出力の JSON から読む。fallow のエラーや、JSON でないものは読めないとする", () => {
+    const ok = { summary: { counts: { total: 1, killed: 1 } }, mutants: [] }
+    expect(parseMutation(JSON.stringify(ok))).toEqual(ok)
+    expect(parseMutation('{"error":true,"message":"the git worktree has 1 uncommitted path","exit_code":2}')).toBeUndefined()
+    expect(parseMutation('{"summary":{"counts":{}}}')).toBeUndefined()
+    expect(parseMutation('{"summary":{},"mutants":[]}')).toBeUndefined()
+    expect(parseMutation(`e2e: 次を走らせ\n${JSON.stringify(ok)}`)).toBeUndefined()
+    expect(parseMutation("")).toBeUndefined()
   })
 
   test("変異は 0 個でない状態だけを数え、捕まえていないものを、生き残りは 1 つずつ、ほかはファイルと区分ごとに挙げる", () => {

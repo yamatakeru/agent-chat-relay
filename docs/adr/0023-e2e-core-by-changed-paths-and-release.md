@@ -29,7 +29,7 @@ e2e（`test/e2e/*.sh`）は、実際のハーネスを動かすので、1 回が
 
 - **中核。** `test/e2e/line.sh claude`（ペアリング、返信、承認の許可・常に許可・拒否）と `test/e2e/resume.sh claude` を、e2e の中核とする。モデルの能力に頼る手順は、`--full` を付けたときだけ走らせる。消さない。画像を待つ時間は 2 分までにする。
 - **判定。** 各スクリプトが、手順ごとに、作業ディレクトリのファイル、送信の記録、中継のログで判定し、1 つでも失敗すれば 0 以外で終わる。失敗しても次の手順に進み、最後に失敗した手順を挙げる。`--full` の手順の失敗も失敗とし、モデルの能力に頼る手順であることを示す。共通の部分は `test/e2e/lib.sh` に置く。
-- **契機。** 走らせるかは、本人の判定ではなく、`scripts/e2e-targets.ts` が `main` との差分から出す。`bun run mutation` が、変異の前に表示する。中核を挙げるのは、次を変えたとき。
+- **契機。** 走らせるかは、本人の判定ではなく、`scripts/e2e-targets.ts` が `main` との差分から出す。`bun run mutation` が、変異の前に表示する。（追記 2026-11-20）`bun run pre-pr` は、PR 本文の下書きに、挙げた e2e ごとの結果の欄を作る（ADR 0025）。中核を挙げるのは、次を変えたとき。
   - `src/harness/`、`src/core/mcp.ts`、`src/prompt.ts`、起動まわり（`src/main.ts`、`src/workspace.ts`、`src/home.ts`、`src/serve-args.ts`、`bin/`）、`test/e2e/`。
   - ハーネスのアダプターと ACP・MCP の SDK のバージョン（`package.json` と `bun.lock` の差分）。
   - コネクターと `src/core/relay.ts` は、単体テストで守るので、契機にしない。

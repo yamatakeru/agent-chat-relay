@@ -19,4 +19,7 @@ trap 'rm -rf "$home"' EXIT
 # ファイルを渡したときは、差分の行に絞らない
 [ "$paths" = 1 ] || set -- --changed-since "$base" "$@"
 # fallow の npm のラッパーは node の shebang なので、Bun で、cwd の .env と bunfig.toml を読ませずに起動する
-HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin/fallow" mutation --allow-side-effects "$@"
+status=0
+HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin/fallow" mutation --allow-side-effects "$@" || status=$?
+echo "PR を出す前は、bun run pre-pr で下書きを得る（skill pre-pr。ADR 0025）" >&2
+exit "$status"
