@@ -4,7 +4,11 @@
 //
 //   bun scripts/e2e-targets.ts [比べるコミット（既定は main）]
 
-/** e2e の中核（ADR 0023）。line.sh は --full を付けないと、モデルの能力に頼る手順を走らせない */
+/**
+ * e2e の中核（ADR 0023）。line.sh は --full を付けないと、モデルの能力に頼る手順を走らせない。
+ * 中核は、結合に関わる変更とリリースのたびに走り、時間と実費がかかる。足すのは、実際のハーネスでしか確かめられず、
+ * 壊れると安全境界が破れるものだけ。それ以外は、単体テストで守るか、OPTIONAL に置く（#92 で、知らせの e2e を中核に足して外した。ADR 0024）
+ */
 export const CORE = ["test/e2e/line.sh claude", "test/e2e/resume.sh claude"]
 /** 中核の外の e2e。そのスクリプトか、それが使うモックと共通の部分を変えたときだけ挙げる（Chatwork は ADR 0023、知らせは ADR 0024） */
 const OPTIONAL = [

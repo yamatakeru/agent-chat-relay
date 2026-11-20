@@ -25,5 +25,6 @@ HOME="$home" bun --no-env-file --config=/dev/null "$root/node_modules/fallow/bin
   echo
   echo "PR の「確認できなかったこと」には、項目ごとに、確かめる手段、費用の見積もり（時間、実費）、確かめなかった理由を書く。"
   echo "手元で数分、実費なしで確かめられるものは、書かずに確かめる。「確かめられない」と書くのは、手段がないことを示せるときだけ。"
+  echo "simplify とレビュー（CodeRabbit）は、最後の変更のあとにかける。かけたあとに振る舞いや構造を変えたら、かけ直す。"
 } >&2
 exit "$status"
