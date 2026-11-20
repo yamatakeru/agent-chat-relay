@@ -20,6 +20,8 @@ RELAY=""
 MOCK=""
 e2e_exit() {
   kill $RELAY $MOCK 2>/dev/null
+  # 止まるのを待つ（待たないと、bash が「Terminated」を出す。中継が子のハーネスを止め終わる前に、会話ログを消すことにもなる）
+  wait $RELAY $MOCK 2>/dev/null
   rm -rf -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf %s "$PWD/.local/e2e" | sed 's/[^a-zA-Z0-9]/-/g')"-*
 }
 trap e2e_exit EXIT
