@@ -3,6 +3,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSyn
 import { join } from "node:path"
 import fc from "fast-check"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
+import { INSTRUCTIONS } from "../src/core/instructions.ts"
 import { addressesOthers, ChatworkConnector, parseBody } from "../src/connectors/chatwork.ts"
 import { DiscordConnector, renderContent } from "../src/connectors/discord.ts"
 import { splitText } from "../src/connectors/common.ts"
@@ -681,6 +682,13 @@ describe("relay", () => {
       for (const v of ["0", "30", "1.5", "abc", "-1", " 5"]) expect(() => noticeTimingFromEnv({ RELAY_APPROVAL_NOTICE_MIN: v })).toThrow("RELAY_APPROVAL_NOTICE_MIN に指定できるのは 1〜29 の整数")
       expect(() => noticeTimingFromEnv({ RELAY_SLOW_NOTICE_MIN: "1441" })).toThrow("RELAY_SLOW_NOTICE_MIN に指定できるのは 1〜1440 の整数")
     })
+  })
+
+  test("案内は、空行で分けた、空でない段落からなる。送れるものの説明は、その前の段落に続ける", () => {
+    // 文面の中身は、実際のモデルに流す評価 test/e2e/addressing.sh で守る（#107）
+    const paragraphs = INSTRUCTIONS.split("\n\n")
+    for (const p of paragraphs) expect(p.trim() === "" || (p.includes("\n") && !p.endsWith("\n{sending}"))).toBe(false)
+    expect(paragraphs.filter((p) => p.includes("{sending}"))).toHaveLength(1)
   })
 
   test("メンションの発言にだけ mentioned を付け、list_rooms には受信モードを書く（ADR 0028）", async () => {
