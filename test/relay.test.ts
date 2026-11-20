@@ -707,8 +707,10 @@ describe("relay", () => {
       conn.capabilities.text.max = 1000
       relay.receive(msg({ senderName: "アリス" }))
       await Bun.sleep(5)
-      expect(await relay.requestPermission({ title: "bash", input: "a".repeat(895), requireFullDisplay: true })).toBe("deny")
+      // 同じ入力でも、余白を除いた上限 950 字に対し、1 人向けは 950 字、全員向けは 961 字になる。
+      const tooLongForEveryone = relay.requestPermission({ title: "bash", input: "a".repeat(879), requireFullDisplay: true })
       expect(conn.approvals).toHaveLength(0)
+      expect(await tooLongForEveryone).toBe("deny")
 
       const input = `${"a".repeat(800)} END`
       const verdict = relay.requestPermission({ title: "bash", input, requireFullDisplay: true })
