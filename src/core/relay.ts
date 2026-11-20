@@ -294,15 +294,17 @@ export class Relay {
       return Promise.resolve("deny")
     }
     const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
-    const normalized = { ...req, always }
-    if (req.requireFullDisplay && approvalText([{ req: normalized, id: ID_PLACEHOLDER }], ID_PLACEHOLDER).length > MIN_TEXT - APPROVAL_MARGIN) {
+    const normalized = req.requireFullDisplay
+      ? { ...req, always, title: approvalLiteral(req.title), input: approvalLiteral(req.input) }
+      : { ...req, always }
+    if (normalized.requireFullDisplay && approvalText([{ req: normalized, id: ID_PLACEHOLDER }], ID_PLACEHOLDER).length > MIN_TEXT - APPROVAL_MARGIN) {
       this.log.error("操作と対象をすべて表示できないため、実行を拒否しました", { tool: req.title })
       return Promise.resolve("deny")
     }
     return new Promise<Verdict>((resolve) => {
       // 同時に届いた依頼は、1 通の束にまとめて送る（ADR 0014）
       const pending = { req: normalized, resolve }
-      if (req.requireFullDisplay && (req.title.length > MAX_BATCH_TITLE || req.input.length > MAX_BATCH_INPUT)) {
+      if (normalized.requireFullDisplay && (normalized.title.length > MAX_BATCH_TITLE || normalized.input.length > MAX_BATCH_INPUT)) {
         // 束にすると全文が収まらない依頼は 1 件で送る。収集中の束はそのまま待つ。
         const b = this.newBatch()
         b.items.push({ id: this.newPermissionId(), ...pending })
@@ -716,6 +718,11 @@ function describeAttachment(a: Attachment): string {
   // 名前は送信者が決められる。区切り文字で枠を壊されないよう置き換える
   const name = a.name.replace(/[[\]\r\n;]/g, "_")
   return a.size === undefined ? `${name} (${a.type})` : `${name} (${a.type}, ${Math.ceil(a.size / 1024)}KB)`
+}
+
+/** 承認の対象を装飾・リンク・タグとして解釈させない。元の操作の文字は置き換えず、表示だけ変える。 */
+function approvalLiteral(text: string): string {
+  return text.replace(/[-!#&*+<=>@[\\\]^_`|~:\p{Cf}]/gu, ch => `\\u{${ch.codePointAt(0)!.toString(16)}}`)
 }
 
 /** 束を送る前に文面の長さを測るときの ID（本物と同じ 5 文字） */

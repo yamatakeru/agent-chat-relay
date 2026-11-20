@@ -698,11 +698,11 @@ describe("relay", () => {
   test("全文が必要な実行承認は、束で省略されるなら個別に送り、個別でも収まらなければ拒否する", async () => {
     const { relay, conn } = setup()
     const bundled = relay.requestPermission({ title: "edit", input: "short", requireFullDisplay: true })
-    const long = "a".repeat(300) + " END"
-    const single = relay.requestPermission({ title: "bash", input: long, requireFullDisplay: true })
-    expect(await relay.requestPermission({ title: "bash", input: "a".repeat(1200), requireFullDisplay: true })).toBe("deny")
+    const long = "a".repeat(300)
+    const single = relay.requestPermission({ title: "bash", input: `${long} | [label] * \` END`, requireFullDisplay: true })
+    expect(await relay.requestPermission({ title: "bash", input: "*".repeat(160), requireFullDisplay: true })).toBe("deny")
     expect(conn.approvals).toHaveLength(1)
-    expect(conn.approvals[0]!.text).toContain(long)
+    expect(conn.approvals[0]!.text).toContain(`${long} \\u{7c} \\u{5b}label\\u{5d} \\u{2a} \\u{60} END`)
     expect(relay.answer(ALICE, conn.approvals[0]!.id, "allow")).toBe(true)
     expect(await single).toBe("allow")
     await Bun.sleep(5)

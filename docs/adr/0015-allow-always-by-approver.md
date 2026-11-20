@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-> pi と OpenCode の初回対応では、ハーネスが示しても「常に許可」は出しません（[ADR 0026](0027-harness-approval-and-settings.md)）。Claude Code の扱いは変えません。
+> pi と OpenCode の初回対応では、ハーネスが示しても「常に許可」は出しません（[ADR 0027](0027-harness-approval-and-settings.md)）。Claude Code の扱いは変えません。
 
 # 承認者は、ハーネスが示した「常に許可」を選べる
 
