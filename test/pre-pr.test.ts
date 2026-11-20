@@ -57,22 +57,25 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
 
   test("変異は 0 個でない状態だけを数え、捕まえていないものを、生き残りは 1 つずつ、ほかはファイルと区分ごとに挙げる", () => {
     const mutation: Mutation = {
-      summary: { counts: { total: 8, killed: 1, timeout: 1, survived: 1, no_coverage: 3, pruned: 1, runtime_error: 1, flaky: 0 } },
+      summary: { counts: { total: 9, killed: 1, timeout: 1, survived: 2, no_coverage: 3, pruned: 1, runtime_error: 1, flaky: 0 } },
       mutants: [
-        { file: "src/a.ts", line: 1, status: "killed", ...op },
-        { file: "src/a.ts", line: 2, status: "timeout", ...op },
-        { file: "src/a.ts", line: 9, status: "survived", ...op },
-        { file: "src/b.ts", line: 3, status: "no_coverage", test_reach: { reach: "none" }, ...op },
-        { file: "src/b.ts", line: 4, status: "no_coverage", test_reach: { reach: "none" }, ...op },
-        { file: "src/c.ts", line: 5, status: "no_coverage", test_reach: { reach: "none-file" }, ...op },
-        { file: "src/d.ts", line: 6, status: "pruned", prune_reason: "dead-code", ...op },
-        { file: "src/e.ts", line: 7, status: "runtime_error", ...op },
+        { file: "src/a.ts", line: 1, column: 1, status: "killed", ...op },
+        { file: "src/a.ts", line: 2, column: 1, status: "timeout", ...op },
+        { file: "src/a.ts", line: 9, column: 3, status: "survived", ...op },
+        // 同じ行の、同じ種類の変異でも、別々に挙げる
+        { file: "src/a.ts", line: 9, column: 12, status: "survived", ...op },
+        { file: "src/b.ts", line: 3, column: 1, status: "no_coverage", test_reach: { reach: "none" }, ...op },
+        { file: "src/b.ts", line: 4, column: 1, status: "no_coverage", test_reach: { reach: "none" }, ...op },
+        { file: "src/c.ts", line: 5, column: 1, status: "no_coverage", test_reach: { reach: "none-file" }, ...op },
+        { file: "src/d.ts", line: 6, column: 1, status: "pruned", prune_reason: "dead-code", ...op },
+        { file: "src/e.ts", line: 7, column: 1, status: "runtime_error", ...op },
       ],
     }
     const d = draft({ ...base, mutation })
-    expect(d).toContain("- `bun run mutation`：変異 8 個のうち、捕まえた 1 個、時間切れ（捕まえたものとして数える） 1 個、生き残り 1 個、テストが届かない 3 個、pruned 1 個、runtime_error 1 個\n")
+    expect(d).toContain("- `bun run mutation`：変異 9 個のうち、捕まえた 1 個、時間切れ（捕まえたものとして数える） 1 個、生き残り 2 個、テストが届かない 3 個、pruned 1 個、runtime_error 1 個\n")
     expect(d).toContain("  - 捕まえていない変異。テストで捕まえるか、捕まえない理由を書く：\n")
-    expect(d).toContain("    - `src/a.ts:9`（生き残り。negate-condition `<condition>` → `true`） 1 個：（理由）")
+    expect(d).toContain("    - `src/a.ts:9:3`（生き残り。negate-condition `<condition>` → `true`） 1 個：（理由）")
+    expect(d).toContain("    - `src/a.ts:9:12`（生き残り。negate-condition `<condition>` → `true`） 1 個：（理由）")
     expect(d).toContain("    - `src/b.ts`（テストが届かない。区分 none） 2 個：（理由）")
     expect(d).toContain("    - `src/c.ts`（テストが届かない。区分 none-file） 1 個：（理由）")
     expect(d).toContain("    - `src/d.ts`（pruned。理由 dead-code） 1 個：（理由）")
@@ -85,8 +88,8 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
     const mutation: Mutation = {
       summary: { counts: { total: 2, killed: 1, timeout: 1 } },
       mutants: [
-        { file: "src/a.ts", line: 1, status: "killed", ...op },
-        { file: "src/a.ts", line: 2, status: "timeout", ...op },
+        { file: "src/a.ts", line: 1, column: 1, status: "killed", ...op },
+        { file: "src/a.ts", line: 2, column: 1, status: "timeout", ...op },
       ],
     }
     const d = draft({ ...base, mutation })

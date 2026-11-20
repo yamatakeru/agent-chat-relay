@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { type Target, targetsSince } from "./e2e-targets.ts"
 
-type Mutant = { file: string; line: number; status: string; operator: string; change: { from: string; to: string }; test_reach?: { reach: string } | null; prune_reason?: string | null }
+type Mutant = { file: string; line: number; column: number; status: string; operator: string; change: { from: string; to: string }; test_reach?: { reach: string } | null; prune_reason?: string | null }
 export type Mutation = { summary: { counts: Record<string, number> }; mutants: Mutant[] }
 export type Results = { base: string; head: string; tests: { pass: number; fail: number } | undefined; check: boolean; mutation: Mutation | undefined; e2e: Target[] }
 
@@ -31,7 +31,7 @@ export function testCounts(out: string): { pass: number; fail: number } | undefi
 
 /** 捕まえていない変異をまとめる単位。生き残りは 1 つずつ、それ以外はファイルと区分ごと */
 function groupOf(x: Mutant): string {
-  if (x.status === "survived") return `\`${x.file}:${x.line}\`（${STATUS.survived}。${x.operator} \`${x.change.from}\` → \`${x.change.to}\`）`
+  if (x.status === "survived") return `\`${x.file}:${x.line}:${x.column}\`（${STATUS.survived}。${x.operator} \`${x.change.from}\` → \`${x.change.to}\`）`
   const kind = x.test_reach ? `区分 ${x.test_reach.reach}` : x.prune_reason ? `理由 ${x.prune_reason}` : "区分なし"
   return `\`${x.file}\`（${STATUS[x.status] ?? x.status}。${kind}）`
 }
@@ -91,13 +91,19 @@ function run(label: string, cmd: string[]): { ok: boolean; stdout: string; out: 
 
 if (import.meta.main) {
   const base = process.argv[2] ?? "main"
+  const rev = () => Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"]).stdout.toString().trim()
+  const head = rev()
   const test = run("bun test", [...BUN_ISOLATED, "test"])
   const check = run("bun run check", [...BUN_ISOLATED, "run", "check"])
   const mut = run("bun run mutation", ["sh", "scripts/mutation.sh", base, "--format", "json"])
   const mutation = parseMutation(mut.stdout)
   for (const [name, r] of [["bun test", test], ["bun run check", check]] as const) if (!r.ok) console.error(`\n== ${name} が失敗した ==\n${r.out}`)
   if (!mutation) console.error(`\n== bun run mutation の結果を読めなかった ==\n${mut.out}`)
-  const head = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"]).stdout.toString().trim()
+  // 走らせている間にコミットが変わったら、どのコミットの結果か分からないので、下書きを出さない
+  if (rev() !== head) {
+    console.error(`pre-pr: 走らせている間に、コミットが ${head} から ${rev()} に変わった。走らせ直す`)
+    process.exit(1)
+  }
   console.log(draft({ base, head, tests: testCounts(test.out), check: check.ok, mutation, e2e: targetsSince(base) }))
   console.error("pre-pr: この下書きで PR 本文を書く。書き方は skill pre-pr（.agents/skills/pre-pr/SKILL.md）")
   if (!test.ok || !check.ok || !mutation) process.exit(1)
