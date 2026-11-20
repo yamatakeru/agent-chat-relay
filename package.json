@@ -40,7 +40,8 @@
     "check": "tsc --noEmit && oxlint && bun --no-env-file --config=/dev/null scripts/check.ts",
     "docs:adr": "bun --no-env-file --config=/dev/null scripts/adr-index.ts",
     "mutation": "scripts/mutation.sh",
-    "pre-pr": "bun --no-env-file --config=/dev/null scripts/pre-pr.ts"
+    "pre-pr": "bun --no-env-file --config=/dev/null scripts/pre-pr.ts",
+    "pr-body": "bun --no-env-file --config=/dev/null scripts/pr-body.ts"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.101.0",

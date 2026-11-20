@@ -1,4 +1,5 @@
-// bun run pre-pr（scripts/pre-pr.ts）が出す、PR 本文の「確認」の下書きを作る（ADR 0025）。
+// bun run pre-pr（scripts/pre-pr.ts）が出す、PR 本文の「確認」の下書きを作り、
+// bun run pr-body（scripts/pr-body.ts）が、PR 本文の「確認できなかったこと」を検査する（ADR 0025）。
 // テストはこのファイルを読み込む。pre-pr.ts は、テストを入れ子に走らせるので、テストから読み込まない（#100）
 
 import type { Target } from "./e2e-targets.ts"
@@ -45,6 +46,15 @@ function mutationLines(m: Mutation): string[] {
   return lines
 }
 
+const UNVERIFIED = "## 確認できなかったこと"
+/**
+ * 「確認できなかったこと」に置ける項目の区分。手元のハーネス（Haiku）、モック、偽物で確かめられるものに当たる区分はない。
+ * 確かめる価値の判断（安全境界でない、など）と、時間と利用枠の見積もりは、本人がするので区分にしない（#54、#74、#78、#82、#92、#106）
+ */
+const KINDS = ["実サービス", "手段なし", "承認 名前"]
+/** KINDS の区分。承認は、名前を付けたものだけ */
+const KIND = /区分：(実サービス|手段なし|承認 [^\s。、）]+)/
+
 /** PR 本文の「確認」と「確認できなかったこと」の下書き */
 export function draft(r: Results): string {
   const lines = [
@@ -59,11 +69,35 @@ export function draft(r: Results): string {
     "- simplify：（最後の変更のあとにかけたか。何を直したか）",
     "- レビュー：（最後の変更のあとにかけたか。指摘の数と対応）",
     "",
-    "## 確認できなかったこと",
+    UNVERIFIED,
     "",
-    "- **（項目）**：手段：（）。費用：（時間、実費）。確かめなかった理由：（）",
+    `- **（項目）**：区分：（${KINDS.join("／")}）。手段：（）。費用：（時間、実費）。確かめなかった理由：（）`,
   ]
   return `${lines.join("\n")}\n`
+}
+
+/**
+ * PR 本文の「確認できなかったこと」の、区分のない項目。節がない本文（外部の PR など）と、「なし」は通す。
+ * 項目は、行の頭の箇条書き（`-`、`*`、`+`、番号付き）と、その下の字下げした行。地の文（訂正、Closes など）は見ない
+ */
+export function unverifiedErrors(body: string): string[] {
+  const section = body.replace(/\r\n/g, "\n").split(new RegExp(`^${UNVERIFIED}[ \t]*$`, "m"))[1]?.split(/^#{1,2} /m)[0]
+  if (section === undefined) return []
+  // 項目の 2 行目からは、字下げした行と空行だけを含める。行の頭からの地の文で終える
+  return section
+    .split(/^(?:[-*+]|\d+[.)]) /m)
+    .slice(1)
+    .map((block) => {
+      const [head, ...rest] = block.split("\n")
+      return `${head}\n${rest.join("\n").split(/^\S/m)[0]}`
+    })
+    .filter((item) => !/^なし。?$/.test(item.trim()) && !KIND.test(item))
+    .map(
+      (item) =>
+        `PR 本文の「確認できなかったこと」の「${item.split("\n")[0]!.slice(0, 40)}」に、区分（${KINDS.map((k) => `区分：${k}`).join("、")}）がない。` +
+        "手元のハーネス（Haiku）、モック、偽物で確かめられるものは、どの区分にも当たらないので、確かめて「確認」に移す。" +
+        "時間と利用枠と、確かめる価値の判断は、理由にならない。省くなら、PR を出す前に作業指示者に聞き、「区分：承認 名前」と書く（skill pre-pr）",
+    )
 }
 
 /** bun run mutation --format json の標準出力から、結果を読む。読めなければ undefined（fallow のエラーも JSON で返る） */

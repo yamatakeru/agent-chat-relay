@@ -102,7 +102,7 @@ scripts/relay.sh serve
 
 - [mise](https://mise.jdx.dev/)：Bun と cloudflared は、`mise.toml` で固定したバージョンを mise でインストールします。Ubuntu では、git と curl も必要です（`sudo apt install git curl`）。
 - [dotenvx](https://dotenvx.com/)：`scripts/relay.sh secrets` で使います。1.51 と 2.38 で動作を確認しています。インストール方法は、`brew tap dotenvx/brew && brew trust dotenvx/brew && brew install dotenvx`、`mise use -g dotenvx`、`curl -sfS https://dotenvx.sh | sh`、`npm i -g @dotenvx/dotenvx` のいずれかです。使わない場合は、`.env` を作らずに、秘密情報を環境変数で渡してください。
-- テストは `mise exec -- bun test`、型検査と lint（Oxlint）は `mise exec -- bun run check`、変更した行のミューテーションテストは `mise exec -- bun run mutation` です（ADR 0021）。`bun run mutation` は、走らせる e2e も表示します（ADR 0023）。PR を出す前は `mise exec -- bun run pre-pr` で、これらをまとめて走らせ、PR 本文の「確認」の下書きを得ます（ADR 0025）。実際のハーネスを使う確認は [docs/relay-setup.md](docs/relay-setup.md#モックでの確認) にあります。
+- テストは `mise exec -- bun test`、型検査と lint（Oxlint）は `mise exec -- bun run check`、変更した行のミューテーションテストは `mise exec -- bun run mutation` です（ADR 0021）。`bun run mutation` は、走らせる e2e も表示します（ADR 0023）。PR を出す前は `mise exec -- bun run pre-pr` で、これらをまとめて走らせ、PR 本文の「確認」の下書きを得ます。書いた本文は、PR を作る前に `mise exec -- bun run pr-body <本文のファイル>` で確かめます。CI も PR の本文に同じ検査をかけます（ADR 0025）。実際のハーネスを使う確認は [docs/relay-setup.md](docs/relay-setup.md#モックでの確認) にあります。
 
 ### clone して使っていた環境からの移行
 
