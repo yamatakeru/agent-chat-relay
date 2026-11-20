@@ -16,7 +16,7 @@ PR を出す前の規則は、`AGENTS.md` の「ミスの再発防止」の表�
 
 skill は、段としては文章のままです。読まなくても何も失敗しません。skill だけにすると、「規則を忘れる」が「skill を読み忘れる」に移るだけになりえます。
 
-**ハーネスが skill を探す場所**（各ハーネスのドキュメントと、Harness Notes の比較を読んだ。2026-11-20。Claude Code のほかは、動かして確かめていない）
+**ハーネスが skill を探す場所**（各ハーネスのドキュメントと、Harness Notes の比較を読んだ。2026-11-20。Codex、Cursor、OpenCode、Pi が `.agents/skills/` を読むことは、作業指示者が使っていて知っている）
 
 - リポジトリの `.agents/skills/` は、Codex、Cursor、OpenCode、Pi が読みます。Claude Code は `.claude/skills/` だけを読みます。
 - Cursor と OpenCode は両方を読みます。同じファイルにリンクで届く場合、Cursor は 1 つにまとめます。OpenCode は、名前が同じなら後に見つけたものを使います。
