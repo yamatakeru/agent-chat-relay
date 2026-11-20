@@ -702,6 +702,30 @@ describe("relay", () => {
       expect(await Promise.all(two)).toEqual(["allow", "deny"])
     })
 
+    test("pi の対象全文は、送り先が変わっても省略せずに送れるときだけ承認を求める", async () => {
+      const { relay, conn, to } = routing()
+      conn.capabilities.text.max = 1000
+      relay.receive(msg({ senderName: "アリス" }))
+      await Bun.sleep(5)
+      // 同じ入力でも、余白を除いた上限 950 字に対し、1 人向けは 950 字、全員向けは 961 字になる。
+      const tooLongForEveryone = relay.requestPermission({ title: "bash", input: "a".repeat(879), requireFullDisplay: true })
+      expect(conn.approvals).toHaveLength(0)
+      expect(await tooLongForEveryone).toBe("deny")
+
+      const input = `${"a".repeat(800)} END`
+      const verdict = relay.requestPermission({ title: "bash", input, requireFullDisplay: true })
+      expect(conn.approvals.map((a) => a.user)).toEqual([ALICE])
+      expect(to(ALICE)[0]!.text).toContain(input)
+      access.save({ ...access.load(), allowFrom: [BOB] })
+      relay.remindPending(BOB)
+      const reminder = to(BOB)[0]!
+      expect(reminder.text).toContain("この作業中の発言")
+      expect(reminder.text).toContain(input)
+      expect(reminder.text.length).toBeLessThanOrEqual(conn.capabilities.text.max)
+      expect(relay.answer(BOB, reminder.id, "allow")).toBe(true)
+      expect(await verdict).toBe("allow")
+    })
+
     test("送り手が 1 人でも承認者でなければ、推さずに全員に送る。名前が空なら、名前なしと書く", async () => {
       let asked = 0
       const { relay, conn } = routing(async () => (asked++, { sender: ALICE, probability: 1 }))
@@ -1045,6 +1069,23 @@ describe("relay", () => {
     expect(relay.answer(ALICE, first!.id, "allow")).toBe(false)
     expect(relay.answer(ALICE, conn.approvals[1]!.id, "deny")).toBe(true)
     expect(await later).toBe("deny")
+  })
+
+  test("全文が必要な実行承認は、束で省略されるなら個別に送り、個別でも収まらなければ拒否する", async () => {
+    const { relay, conn } = setup()
+    const bundled = relay.requestPermission({ title: "edit", input: "short", requireFullDisplay: true })
+    const long = "a".repeat(300)
+    const single = relay.requestPermission({ title: "bash", input: `${long} | [label] * \` END`, requireFullDisplay: true })
+    expect(await relay.requestPermission({ title: "bash", input: "*".repeat(160), requireFullDisplay: true })).toBe("deny")
+    expect(conn.approvals).toHaveLength(1)
+    expect(conn.approvals[0]!.text).toContain(`${long} \\u{7c} \\u{5b}label\\u{5d} \\u{2a} \\u{60} END`)
+    expect(relay.answer(ALICE, conn.approvals[0]!.id, "allow")).toBe(true)
+    expect(await single).toBe("allow")
+    await Bun.sleep(5)
+    expect(conn.approvals).toHaveLength(2)
+    expect(conn.approvals[1]!.text).toContain("short")
+    expect(relay.answer(ALICE, conn.approvals[1]!.id, "deny")).toBe(true)
+    expect(await bundled).toBe("deny")
   })
 
   test("束に入れる依頼は 5 つまで。最初の依頼から maxMs たてば、続いていても送る", async () => {

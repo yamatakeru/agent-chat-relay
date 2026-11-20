@@ -42,7 +42,7 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 
 ## 準備
 
-- Claude Code（`claude`）をインストールし、ログインしておきます。中継は、PATH 上の `claude` を `claude-agent-acp` 経由で起動します。
+- Claude Code を使う場合は、`claude` をインストールし、ログインしておきます。中継は、PATH 上の `claude` を `claude-agent-acp` 経由で起動します。pi を使う場合は、次の節の設定を用意してください。
 - 秘密情報を保存します。LINE は `agent-chat-relay secrets line`、Chatwork は `agent-chat-relay secrets chatwork`、Discord は `agent-chat-relay secrets discord` で入力します。どれか 1 つだけでも動きます。環境変数で渡すこともできます（[README.md](../README.md#秘密情報の管理)）。
 - 承認者が 2 人以上いて、送り手が複数いるターンの承認依頼も依頼者に絞りたい場合は、TypeSafe AI の API キーを `agent-chat-relay secrets typesafe` で保存します（任意。ADR 0026）。そのターンの発言とツールの入力を TypeSafe AI に送ることになるので、送ってよいかを確かめてから使ってください（[docs/relay.md](relay.md#実行承認)）。
 - 作業ディレクトリを独立した git リポジトリにできない場合（git がインストールされていない場合、作業ディレクトリの `.git` が壊れている場合、`GIT_DIR` などの git の環境変数でリポジトリの場所を変えている場合など）、中継は起動しません。エラーの文に、直し方（`.git` を確かめるか退避する、環境変数を外す、など）を表示します（[docs/relay.md](relay.md#構成)）。
@@ -57,11 +57,30 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 | `~/.agent-chat-relay/media/` | LINE に返信した画像（推測できない名前で公開し、7 日で削除します） |
 | `~/.agent-chat-relay/harness.log` | ハーネスの標準エラー出力（画面には表示しません。異常終了したときだけ、最後の 20 行を表示します）。10MB を超えそうになると `harness.log.1` に移して新しいファイルに切り替えます |
 
+### pi のモデルと認証の準備
+
+pi は中継に同梱されます。端末の pi やグローバル拡張は不要です。チャットサービスの秘密情報とは別に、中継専用のモデルと API キーを用意します。
+
+```sh
+pi_agent="${RELAY_HOME:-$HOME/.agent-chat-relay}/pi/agent"
+(umask 077; mkdir -p "$pi_agent")
+```
+
+このディレクトリに次のファイルを作ります。開発用の `scripts/relay.sh` の既定のデータの置き場は `.local/relay` です。
+
+- `settings.json`：例 `{"defaultProvider":"anthropic","defaultModel":"利用するモデルのID"}`。モデル ID は利用するプロバイダーで確認します。
+- `auth.json`：例 `{"anthropic":{"type":"api_key","key":"中継専用のAPIキー"}}`。実際のキーはローカルのエディターで入力し、コマンドの引数・履歴やチャットには載せないでください。
+- 独自の接続先を使う場合だけ、pi の形式の `models.json` も置きます。
+
+どのファイルも自分だけが読める通常ファイル（`0600`）にします。起動は `agent-chat-relay serve pi`、再開は `agent-chat-relay serve pi --session-id <id>` です。端末の認証は引き継がず、中継から対話式ログインは行いません。
+
+`--harness-settings default`（または `RELAY_HARNESS_SETTINGS=default`）を明示した場合だけ、pi の端末・プロジェクトの指示、設定、拡張を読み込みます。**信頼できる設定と拡張に限って使ってください。** 拡張が起動時などに中継の実行承認を通らずに動くことがあります。モデル・認証・セッションは中継専用のままです。pi の自動メモリは未対応です。
+
 ## 起動
 
 LINE を使う場合は、ターミナルを 2 つ使います。
 
-1. `agent-chat-relay serve` を実行します（ハーネスは Claude Code）。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しません。試す場合も、信頼できる人だけがいるルームに限ってください。
+1. `agent-chat-relay serve` を実行します（ハーネスは Claude Code）。pi を使う場合は `agent-chat-relay serve pi` を実行します。OpenCode は実行承認が働かないため（#6）、`RELAY_ALLOW_UNSAFE_HARNESS=1` を付けない限り起動しません。試す場合も、信頼できる人だけがいるルームに限ってください。
    - 起動のたびに新しいセッションになります。前の会話を続ける場合は、前回の起動ログの「セッションを開始しました」（または「再開しました」）に表示された `sessionId` を指定します：`agent-chat-relay serve --session-id <id>`。再開できない場合は、理由を表示して起動を中止します（新しいセッションは作りません）。再開できるのは、中継の作業ディレクトリで作ったセッションだけです（[docs/relay.md](relay.md#セッションの再開)）。
 2. `agent-chat-relay line-tunnel` を実行します。表示された `https://….trycloudflare.com` の末尾に `/line/webhook` を付けた URL を、LINE Developers コンソールの［Messaging API 設定］で Webhook URL に登録し、［検証］を押します。
 
@@ -120,7 +139,7 @@ agent-chat-relay serve
 | 環境変数（`serve` のフラグ） | 内容 |
 |---|---|
 | `RELAY_WORKSPACE`（`--workspace <dir>`） | 作業ディレクトリ。既定は `<RELAY_HOME>/workspace`。指定したディレクトリは作らず、`git init` もしない。`RELAY_HOME` や秘密情報の置き場を含むディレクトリは指定できない |
-| `RELAY_HARNESS_SETTINGS`（`--harness-settings default`） | `default` で、ユーザー設定と CLAUDE.md・AGENTS.md を、その環境の既定どおりに読み込ませる（Claude Code） |
+| `RELAY_HARNESS_SETTINGS`（`--harness-settings default`） | `default` で、端末・プロジェクトの設定を明示的に引き継ぐ（Claude Code・pi）。引き継ぐ範囲はハーネスによる |
 | `RELAY_HARNESS_MEMORY`（`--harness-memory`） | `1` で、自動メモリを有効にする（Claude Code）。ルームの発言をもとにメモリが書かれる |
 
 記憶を持ったエージェントをそのままつなぐには、端末で使っているフォルダを `RELAY_WORKSPACE` に指定し、ほかの 2 つも合わせて指定します。指定したときに起きること（「常に許可」が端末のセッションにも効くことなど）は、[docs/relay.md](relay.md) と ADR 0017 にあります。

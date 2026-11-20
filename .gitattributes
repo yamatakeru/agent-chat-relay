@@ -1,0 +1,2 @@
+# 統一 diff の空のコンテキスト行には接頭辞の空白が必要。
+third_party/pi-acp/managed.patch whitespace=-blank-at-eol

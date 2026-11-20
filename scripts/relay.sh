@@ -5,7 +5,7 @@
 #
 #   scripts/relay.sh secrets [line|chatwork|discord|typesafe]  秘密情報を保存する（LINE はチャネルシークレットとアクセストークン、Chatwork は API トークン、Discord は Bot のトークン、typesafe は Jev の API キー。ADR 0026）
 #   scripts/relay.sh serve [harness] [--session-id <id>]
-#                                       中継を起動する（harness：claude（既定）か opencode。--session-id で既存のセッションを再開する）
+#                                       中継を起動する（harness：claude（既定）・pi・opencode。--session-id で既存のセッションを再開する）
 #   scripts/relay.sh pair <code>        ペアリングのコードを承認する
 #   scripts/relay.sh access             登録したルームと許可した人の一覧
 #   scripts/relay.sh line-tunnel        LINE の Webhook を Cloudflare Quick Tunnel で公開する

@@ -9,6 +9,10 @@ import { VERSION } from "../version.ts"
 export type HarnessConfig = {
   command: string[]
   env?: Record<string, string>
+  /** false のときは env で明示した変数だけを子に渡す。 */
+  inheritEnv?: false
+  /** 操作と対象を省略した承認を受け付けないハーネスに指定する。 */
+  requireFullPermissionDisplay?: true
   /** 中継の環境変数のうち、ハーネスに渡さないもの（RELAY_*・DOTENV_* のほかに） */
   withheld?: string[]
   /** セッションの作業ディレクトリ（絶対パス） */
@@ -49,13 +53,13 @@ export async function startHarness(
   cfg: HarnessConfig,
   onPermission: (req: PermissionRequest) => Promise<Verdict>,
   log: Log,
-): Promise<{ session: Session; exited: Promise<number>; stop: () => void }> {
+): Promise<{ sessionId: string; session: Session; exited: Promise<number>; stop: () => void }> {
   // stderr はファイルへ直接つながず、中継が受けて書く。サイズを数えてローテーションするため
   const stderrLog = new RotatingFile(cfg.stderrPath, MAX_STDERR_BYTES)
   const proc = Bun.spawn(cfg.command, {
     cwd: cfg.cwd,
     // 中継の秘密情報（LINE のトークンなど）をハーネスへ渡さない。渡すと、エージェントが送信先の制限を迂回できる
-    env: { ...withoutRelaySecrets(process.env, cfg.withheld ?? []), ...cfg.env },
+    env: cfg.inheritEnv === false ? (cfg.env ?? {}) : { ...withoutRelaySecrets(process.env, cfg.withheld ?? []), ...cfg.env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -89,7 +93,7 @@ export async function startHarness(
       const input = tc.rawInput === undefined ? "" : JSON.stringify(tc.rawInput, null, 2)
       const always = alwaysOption(tc.kind, params.options)
       // そのターンでエージェントが書いた文も渡す。承認依頼の送り先を推すのに使う（ADR 0026）
-      const verdict = await onPermission({ title, input, always: always?.name, agentText: turnText })
+      const verdict = await onPermission({ title, input, always: always?.name, agentText: turnText, ...(cfg.requireFullPermissionDisplay ? { requireFullDisplay: true } : {}) })
       const option = verdict === "always" && always ? always : params.options.find((o) => o.kind === (verdict === "deny" ? "reject_once" : "allow_once"))
       log.info(`実行承認：${verdict}`, { tool: title })
       if (!option) return { outcome: { outcome: "cancelled" } }
@@ -102,7 +106,7 @@ export async function startHarness(
       if (u.sessionUpdate === "tool_call") log.info(`ツール：${u.title}`)
     })
 
-  const ready = Promise.withResolvers<Session>()
+  const ready = Promise.withResolvers<{ sessionId: string; session: Session }>()
   const done = Promise.withResolvers<void>()
   void app
     .connectWith(stream, async (ctx) => {
@@ -132,7 +136,7 @@ export async function startHarness(
         mode,
         steering,
       })
-      ready.resolve({
+      const session: Session = {
         async prompt(text) {
           turnText = ""
           const res = await ctx.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] })
@@ -141,7 +145,8 @@ export async function startHarness(
         },
         // 標準化前の拡張（ADR 0018）。宣言しているハーネスでだけ使う
         ...(steering ? { steer: (text: string) => steer(ctx, sessionId, text, log) } : {}),
-      })
+      }
+      ready.resolve({ sessionId, session })
       await done.promise
     })
     .catch((err) => {
@@ -156,7 +161,7 @@ export async function startHarness(
     ready.reject(new Error(`ハーネスが終了しました（終了コード ${code}）`))
     return code
   })
-  return { session: await ready.promise, exited, stop: () => proc.kill() }
+  return { ...await ready.promise, exited, stop: () => proc.kill() }
 }
 
 type Opened = { sessionId: string; modes?: acp.SessionModeState | null; start: "new" | "resume" | "load" }

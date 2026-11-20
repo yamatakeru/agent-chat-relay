@@ -20,7 +20,8 @@ import { chatworkFromEnv } from "./connectors/chatwork.ts"
 import { discordFromEnv } from "./connectors/discord.ts"
 import { lineFromEnv } from "./connectors/line.ts"
 import { harnessConfig, harnessOptionsFromEnv } from "./harness/config.ts"
-import { startHarness } from "./harness/harness.ts"
+import { startHarness, type HarnessConfig } from "./harness/harness.ts"
+import { preparePiLaunch } from "./harness/pi/config.ts"
 import { schedulePrune } from "./core/retention.ts"
 import { mcpHandler } from "./core/mcp.ts"
 import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
@@ -59,6 +60,17 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 秘密情報のファイル自体も渡すのは、ファイルがシンボリックリンクのとき、実体の場所も含めないため
   const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile), envFile])
   if (specified) log.info("管理者が指定した作業ディレクトリを使います", { workspace })
+  const { harness: harnessName, sessionId } = args
+  const harnessLog = join(home, "harness.log")
+  const launch = harnessName === "pi"
+    ? preparePiLaunch({ home, cwd: workspace, sessionId, stderrPath: harnessLog, options: harnessOptions }, log)
+    : (mcp: HarnessConfig["mcp"], onPermission: Parameters<typeof startHarness>[1]) => startHarness({
+      ...harnessConfig(harnessName, workspace, mcp, harnessOptions, log, specified, env),
+      // 秘密情報のファイルに手で足した行（RELAY_ 以外のキー）も渡さない
+      withheld: secretKeys(envFile),
+      sessionId,
+      stderrPath: harnessLog,
+    }, onPermission, log)
   const inbox = join(relayDir(workspace), "inbox")
 
   // 受け取った添付は 7 日で消す（ADR 0005）
@@ -105,19 +117,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   await Promise.all(connectors.map((c) => c.start()))
   for (const c of connectors) closers.push(() => c.stop())
 
-  const { harness: harnessName, sessionId } = args
-  const harnessLog = join(home, "harness.log")
-  const harness = await startHarness(
-    {
-      ...harnessConfig(harnessName, workspace, { url: `${mcp.url.href}mcp`, token }, harnessOptions, log, specified, env),
-      // 秘密情報のファイルに手で足した行（RELAY_ 以外のキー）も渡さない
-      withheld: secretKeys(envFile),
-      sessionId,
-      stderrPath: harnessLog,
-    },
-    (req) => relay.requestPermission(req),
-    log,
-  )
+  const harness = await launch({ url: `${mcp.url.href}mcp`, token }, req => relay.requestPermission(req))
   relay.attach(harness.session)
 
   // Ctrl+C は、端末と dotenvx の両方から届くことがある

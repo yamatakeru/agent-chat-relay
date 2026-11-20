@@ -46,7 +46,7 @@ function flag(env: Record<string, string | undefined>, name: string, on: string)
 }
 
 export function harnessConfig(
-  name: HarnessName,
+  name: Exclude<HarnessName, "pi">,
   cwd: string,
   mcp: HarnessConfig["mcp"],
   opts: HarnessOptions,

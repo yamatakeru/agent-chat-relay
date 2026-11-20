@@ -19,6 +19,7 @@ LINE・Chatwork・Discord のルームから、Claude Code などのコーディ
 | | Chatwork・Discord | 対応済み（モックで確認済み。実環境では未確認） |
 | | LINE WORKS | 未対応 |
 | ハーネス | Claude Code | 対応済み |
+| | pi | macOS（Apple Silicon）でモックを使って確認済み。Linux は [#102](https://github.com/yamatakeru/agent-chat-relay/issues/102) で確認予定 |
 | | OpenCode | 試験的。実行承認が働かないため、既定では起動しません（[#6](https://github.com/yamatakeru/agent-chat-relay/issues/6)） |
 | OS | macOS（Apple Silicon） | 動作確認済み |
 | | Ubuntu 24.04（x86_64） | CI でテストが通ることのみ確認済み |
@@ -26,7 +27,8 @@ LINE・Chatwork・Discord のルームから、Claude Code などのコーディ
 ## 前提条件
 
 - [Bun](https://bun.sh/) 1.4 以降：中継は Bun で動きます。npm でインストールする場合も必要です。
-- [Claude Code](https://code.claude.com/docs/en/setup)：インストールしてログインしておいてください。中継は PATH 上の `claude` を起動します。
+- Claude Code を使う場合：[Claude Code](https://code.claude.com/docs/en/setup) をインストールしてログインしておいてください。中継は PATH 上の `claude` を起動します。
+- pi を使う場合：pi の別途インストールは不要です。[pi のモデルと認証の準備](docs/relay-setup.md#pi-のモデルと認証の準備)のあと、`agent-chat-relay serve pi` で起動します。
 - git：既定の作業ディレクトリを、独立した git リポジトリにするために使います。
 - [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)（LINE を使う場合）：Webhook を公開するために使います。
 

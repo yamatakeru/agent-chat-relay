@@ -1,0 +1,521 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,24 +1,11 @@
+ import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk'
+ import { PiAcpAgent } from './acp/agent.js'
+-import { getPiCommand, shouldUseShellForPiCommand } from './pi-rpc/command.js'
+-// Terminal Auth entrypoint. The ACP client launches the agent with `--terminal-login`.
+-if (process.argv.includes('--terminal-login')) {
+-  const { spawnSync } = await import('node:child_process')
+-  const cmd = getPiCommand(process.env.PI_ACP_PI_COMMAND)
+-  const res = spawnSync(cmd, [], {
+-    stdio: 'inherit',
+-    env: process.env,
+-    shell: shouldUseShellForPiCommand(cmd)
+-  })
++import { managedPiPaths } from './pi-rpc/managed-chat.js'
+ 
+-  if ((res as any).error && (res as any).error.code === 'ENOENT') {
+-    process.stderr.write(
+-      `pi-acp: could not start pi (command not found: ${cmd}). Install it via \`npm install -g @earendil-works/pi-coding-agent\` or ensure \`pi\` is on your PATH.\n`
+-    )
+-    process.exit(1)
+-  }
+-
+-  process.exit(typeof res.status === 'number' ? res.status : 1)
++// 同梱の入り口には端末用の起動やログインへ戻る経路を設けない。
++if (!process.versions.bun || !managedPiPaths() || process.argv.length !== 2) {
++  process.stderr.write('Managed Pi ACP requires Bun and managed state\n')
++  process.exit(1)
+ }
+ 
+ const input = new WritableStream<Uint8Array>({
+--- a/src/acp/agent.ts
++++ b/src/acp/agent.ts
+@@ -25,8 +25,9 @@
+ } from '@agentclientprotocol/sdk'
+ import { getAuthMethods } from './auth.js'
+ import { SessionManager, type PiAcpSession } from './session.js'
+-import { SessionStore } from './session-store.js'
++import { SessionStore, type StoredSession } from './session-store.js'
+ import { PiRpcProcess } from '../pi-rpc/process.js'
++import { managedPiPaths, managedChatInput, managedSessionFile, managedCwdMatches } from '../pi-rpc/managed-chat.js'
+ import { listPiSessions, findPiSession } from './pi-sessions.js'
+ import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
+ import { toolResultToText } from './translate/pi-tools.js'
+@@ -121,8 +122,9 @@
+ 
+ export class PiAcpAgent implements ACPAgent {
+   private readonly conn: AgentSideConnection
+-  private readonly sessions = new SessionManager()
+-  private readonly store = new SessionStore()
++  private readonly managed = managedPiPaths()
++  private readonly store = new SessionStore(this.managed?.map)
++  private readonly sessions = new SessionManager(this.store)
+   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
+ 
+   dispose(): void {
+@@ -156,8 +158,18 @@
+     this.store.delete(sessionId)
+   }
+ 
++  private managedStoredFile(stored: StoredSession | null): string | undefined {
++    if (this.managed && stored?.cwd === this.managed.workspace && typeof stored.sessionFile === 'string') {
++      return managedSessionFile(this.managed.sessions, stored.sessionFile)
++    }
++  }
++
+   private findStoredSession(sessionId: string): { cwd: string; sessionFile: string } | null {
+     const stored = this.store.get(sessionId)
++    if (this.managed) {
++      const sessionFile = this.managedStoredFile(stored)
++      return sessionFile ? { cwd: this.managed.workspace, sessionFile } : null
++    }
+     if (stored?.cwd && stored?.sessionFile) {
+       return { cwd: stored.cwd, sessionFile: stored.sessionFile }
+     }
+@@ -193,13 +205,15 @@
+         throw RequestError.invalidParams(`Unknown sessionId: ${sessionId}`)
+       }
+ 
+-      const cwd = opts?.cwd ?? stored.cwd
+-
++      const requestedCwd = opts?.cwd ?? stored.cwd
++      const managedChat = managedChatInput(requestedCwd, opts?.mcpServers)
++      const cwd = this.managed?.workspace ?? requestedCwd
+       let proc: PiRpcProcess
+       try {
+         proc = await PiRpcProcess.spawn({
+           cwd,
+           sessionPath: stored.sessionFile,
++          managedChat,
+           piCommand: process.env.PI_ACP_PI_COMMAND
+         })
+       } catch (e: any) {
+@@ -209,10 +223,10 @@
+         throw e
+       }
+ 
+-      const fileCommands = loadSlashCommands(cwd)
++      const fileCommands = managedChat ? [] : loadSlashCommands(cwd)
+       const session = this.sessions.getOrCreate(sessionId, {
+         cwd,
+-        mcpServers: opts?.mcpServers ?? [],
++        mcpServers: managedChat ? [] : (opts?.mcpServers ?? []),
+         conn: this.conn,
+         proc,
+         fileCommands
+@@ -247,22 +261,22 @@
+       },
+       // Zed currently uses ClientCapabilities._meta["terminal-auth"] to decide whether to show
+       // the "Authenticate" banner/button. If not supported, we still return the method for the registry.
+-      authMethods: getAuthMethods({
++      authMethods: this.managed ? [] : getAuthMethods({
+         supportsTerminalAuthMeta: (params as any)?.clientCapabilities?._meta?.['terminal-auth'] === true
+       }),
+       agentCapabilities: {
+         loadSession: true,
+-        mcpCapabilities: { http: false, sse: false },
++        mcpCapabilities: { http: !!this.managed, sse: false },
+         promptCapabilities: {
+           image: true,
+           audio: false,
+-          embeddedContext: process.env.PI_ACP_ENABLE_EMBEDDED_CONTEXT === 'true'
++          embeddedContext: !this.managed && process.env.PI_ACP_ENABLE_EMBEDDED_CONTEXT === 'true'
+         },
+         sessionCapabilities: {
+           // **UNSTABLE** ACP capability used by Zed's codex-acp adapter.
+           // Enables a native session picker in clients that support it.
+           list: {},
+-          delete: {}
++          ...(this.managed ? {} : { delete: {} })
+         }
+       }
+     }
+@@ -273,15 +287,15 @@
+       throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`)
+     }
+ 
+-    this.lastSessionCwd = params.cwd
+-
+-    const fileCommands = loadSlashCommands(params.cwd)
+-    const enableSkillCommands = getEnableSkillCommands(params.cwd)
+-
+-    // Pi doesn't support mcpServers, but we accept and store.
++    const managedChat = managedChatInput(params.cwd, params.mcpServers)
++    const cwd = this.managed?.workspace ?? params.cwd
++    this.lastSessionCwd = cwd
++    const fileCommands = managedChat ? [] : loadSlashCommands(params.cwd)
++    const enableSkillCommands = !managedChat && getEnableSkillCommands(params.cwd)
+     const session = await this.sessions.create({
+-      cwd: params.cwd,
+-      mcpServers: params.mcpServers,
++      cwd,
++      mcpServers: managedChat ? [] : params.mcpServers,
++      managedChat,
+       conn: this.conn,
+       fileCommands,
+       piCommand: process.env.PI_ACP_PI_COMMAND
+@@ -355,8 +369,8 @@
+     }
+     const { configOptions, models, modes } = configuration
+ 
+-    const quietStartup = getQuietStartup(params.cwd)
+-    const updateNotice = buildUpdateNotice()
++    const quietStartup = !!managedChat || getQuietStartup(params.cwd)
++    const updateNotice = managedChat ? null : buildUpdateNotice()
+ 
+     // If quietStartup is enabled, suppress the full "startup info" prelude, but still surface
+     // the "New version available" notice (if any) since it's high-signal and actionable.
+@@ -404,6 +418,7 @@
+         // Publish real context usage now that the client knows the sessionId (clients ignore
+         // notifications for unknown sessions), so the window size is correct before the first prompt.
+         await session.publishContextUsage()
++        if (this.managed) return
+ 
+         try {
+           const pi = (await session.proc.getCommands()) as any
+@@ -450,7 +465,7 @@
+ 
+     // Built-in ACP slash command handling (headless-friendly subset).
+     // Note: file-based slash commands are expanded inside session.prompt().
+-    if (images.length === 0 && message.trimStart().startsWith('/')) {
++    if (!this.managed && images.length === 0 && message.trimStart().startsWith('/')) {
+       const trimmed = message.trim()
+       const space = trimmed.indexOf(' ')
+       const cmd = space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)
+@@ -910,6 +925,13 @@
+     // ACP: filter by cwd if provided.
+     // Zed currently sends `{}` (no cwd), so we default to the last session cwd to
+     // emulate pi's `/resume` picker (project-scoped).
++    if (this.managed) {
++      const workspace = this.managed.workspace
++      const explicitCwd = params.cwd
++      if (explicitCwd && !managedCwdMatches(explicitCwd, workspace)) return { sessions: [] }
++      return { sessions: this.store.list().flatMap(s => this.managedStoredFile(s)
++        ? [{ sessionId: s.sessionId, cwd: workspace, updatedAt: s.updatedAt }] : []) }
++    }
+     const all = listPiSessions()
+ 
+     const effectiveCwd = (params as any).cwd ?? this.lastSessionCwd
+@@ -939,6 +961,8 @@
+     if (!isAbsolute(params.cwd)) {
+       throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`)
+     }
++
++    if (this.managed) managedChatInput(params.cwd, params.mcpServers)
+ 
+     // If the client is re-loading a session that is already active, tear down the existing
+     // pi subprocess so we can start fresh and re-advertise commands reliably.
+@@ -952,7 +976,8 @@
+       throw RequestError.invalidParams(`Unknown sessionId: ${params.sessionId}`)
+     }
+ 
+-    const enableSkillCommands = getEnableSkillCommands(params.cwd)
++    const managed = !!this.managed
++    const enableSkillCommands = !managed && getEnableSkillCommands(params.cwd)
+     const session = await this.restoreSession(params.sessionId, {
+       cwd: params.cwd,
+       mcpServers: params.mcpServers
+@@ -966,7 +991,7 @@
+       throw err
+     }
+     const { configOptions, models, modes } = configuration
+-    const fileCommands = loadSlashCommands(params.cwd)
++    const fileCommands = managed ? [] : loadSlashCommands(params.cwd)
+ 
+     // Policy: within a single ACP connection (one Zed window), keep only one live pi subprocess.
+     // (Tests sometimes stub out `this.sessions`, so guard the call.)
+@@ -975,7 +1000,7 @@
+     // (Optional) ensure mapping stays fresh.
+     this.store.upsert({
+       sessionId: params.sessionId,
+-      cwd: params.cwd,
++      cwd: this.managed?.workspace ?? params.cwd,
+       sessionFile: stored.sessionFile
+     })
+ 
+@@ -1091,6 +1116,7 @@
+     setTimeout(() => {
+       void (async () => {
+         await session.publishContextUsage()
++        if (this.managed) return
+ 
+         try {
+           const pi = (await proc.getCommands()) as any
+@@ -1125,6 +1151,7 @@
+   }
+ 
+   async deleteSession(params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
++    if (this.managed) throw RequestError.methodNotFound('session/delete')
+     const stored = this.store.get(params.sessionId)
+     const piSession = findPiSession(params.sessionId)
+ 
+--- a/src/acp/session-store.ts
++++ b/src/acp/session-store.ts
+@@ -43,6 +43,10 @@
+     this.path = path
+   }
+ 
++  list(): StoredSession[] {
++    return Object.values(loadFile(this.path).sessions)
++  }
++
+   get(sessionId: string): StoredSession | null {
+     const db = loadFile(this.path)
+     return db.sessions[sessionId] ?? null
+--- a/src/acp/session.ts
++++ b/src/acp/session.ts
+@@ -40,6 +40,7 @@
+   conn: AgentSideConnection
+   fileCommands?: import('./slash-commands.js').FileSlashCommand[]
+   piCommand?: string
++  managedChat?: { url: string; authorization: string }
+ }
+ 
+ export type StopReason = 'end_turn' | 'cancelled' | 'error'
+@@ -170,7 +171,7 @@
+ 
+ export class SessionManager {
+   private sessions = new Map<string, PiAcpSession>()
+-  private readonly store = new SessionStore()
++  constructor(private readonly store = new SessionStore()) {}
+ 
+   /** Dispose all sessions and their underlying pi subprocesses. */
+   disposeAll(): void {
+@@ -212,7 +213,8 @@
+     try {
+       proc = await PiRpcProcess.spawn({
+         cwd: params.cwd,
+-        piCommand: params.piCommand
++        piCommand: params.piCommand,
++        managedChat: params.managedChat
+       })
+     } catch (e) {
+       if (e instanceof PiRpcSpawnError) {
+@@ -232,7 +234,12 @@
+     const sessionFile = typeof state?.sessionFile === 'string' ? state.sessionFile : null
+ 
+     if (sessionFile) {
+-      this.store.upsert({ sessionId, cwd: params.cwd, sessionFile })
++      try {
++        this.store.upsert({ sessionId, cwd: params.cwd, sessionFile })
++      } catch {
++        proc.dispose()
++        throw RequestError.internalError(undefined, 'Pi session map could not be written')
++      }
+     }
+ 
+     const session = new PiAcpSession({
+@@ -308,6 +315,8 @@
+   // For ACP diff support: capture file contents before edit/write mutations,
+   // then emit ToolCallContent {type:"diff"}. Compatible structured edit/write
+   // events may need to be implemented in pi in the future.
++  // 管理済み起動では、承認前の先読みや diff 用の追加の読み取りを行わない。
++  private readonly captureFileDiffs = process.env.PI_ACP_MANAGED_CHAT_WORKSPACE === undefined
+   private fileSnapshots = new Map<string, { path: string; oldText: string | null }>()
+   private fileMutationToolCallIds = new Set<string>()
+   private bashToolCallIds = new Set<string>()
+@@ -703,7 +712,7 @@
+         let snapshotOldText: string | null | undefined
+         if (isFileMutation) {
+           this.fileMutationToolCallIds.add(toolCallId)
+-          const p = getToolPath(args)
++          const p = this.captureFileDiffs ? getToolPath(args) : undefined
+           if (p) {
+             try {
+               const abs = isAbsolute(p) ? p : resolvePath(this.cwd, p)
+--- a/src/pi-rpc/managed-chat.ts
++++ b/src/pi-rpc/managed-chat.ts
+@@ -0,0 +1,65 @@
++import { lstatSync, realpathSync, statSync } from 'node:fs'
++import { isAbsolute, join, relative, sep } from 'node:path'
++import { RequestError, type McpServer } from '@agentclientprotocol/sdk'
++
++function inside(parent: string, child: string): boolean {
++  const rel = relative(parent, child)
++  return !!rel && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
++}
++
++function directory(path: string | undefined): string {
++  if (!path || !isAbsolute(path)) throw new Error()
++  const real = realpathSync(path)
++  if (!statSync(real).isDirectory()) throw new Error()
++  return real
++}
++
++export function managedPiPaths() {
++  if (process.env.PI_ACP_MANAGED_CHAT_WORKSPACE === undefined) return
++  try {
++    const workspace = directory(process.env.PI_ACP_MANAGED_CHAT_WORKSPACE)
++    const agentDir = directory(process.env.PI_CODING_AGENT_DIR)
++    const sessions = directory(join(agentDir, 'sessions'))
++    const map = join(agentDir, 'pi-acp-session-map.json')
++    if (workspace === agentDir || inside(workspace, agentDir) || inside(agentDir, workspace) || !inside(agentDir, sessions)) {
++      throw new Error()
++    }
++    const entry = lstatSync(map, { throwIfNoEntry: false })
++    if (entry && !entry.isFile()) throw new Error()
++    return { workspace, sessions, map }
++  } catch {
++    throw RequestError.internalError(undefined, 'Managed Pi state is not configured')
++  }
++}
++
++export function managedSessionFile(sessions: string, file: string): string | undefined {
++  try {
++    if (!isAbsolute(file)) return
++    const real = realpathSync(file)
++    if (inside(sessions, real) && statSync(real).isFile()) return real
++  } catch {
++    // 記録があっても、専用領域の実ファイルを確認できなければ再開しない。
++  }
++}
++
++export function managedCwdMatches(cwd: string, workspace: string): boolean {
++  try {
++    return directory(cwd) === workspace
++  } catch {
++    return false
++  }
++}
++
++export function managedChatInput(cwd: string, servers?: McpServer[]) {
++  const managed = managedPiPaths()
++  if (!managed) return
++  const server = servers?.[0]
++  if (!managedCwdMatches(cwd, managed.workspace) || servers?.length !== 1 || !server ||
++      !('type' in server) || server.type !== 'http' || server.name !== 'chat' ||
++      !/^http:\/\/127\.0\.0\.1:[0-9]+\/mcp$/.test(server.url) || server.headers.length !== 1 ||
++      server.headers[0]?.name.toLowerCase() !== 'authorization' ||
++      !/^Bearer [A-Za-z0-9_-]{43}$/.test(server.headers[0].value)) {
++    throw RequestError.invalidParams('Managed chat requires relay loopback HTTP MCP on session/new or session/load')
++  }
++  return { url: server.url, authorization: server.headers[0].value }
++}
+--- a/src/pi-rpc/process.ts
++++ b/src/pi-rpc/process.ts
+@@ -1,5 +1,9 @@
+ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+ import * as readline from 'node:readline'
++import type { Duplex } from 'node:stream'
++import { dirname } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { managedPiPaths } from './managed-chat.js'
+ import crossSpawn from 'cross-spawn'
+ import { getPiCommand, shouldUseShellForPiCommand } from './command.js'
+ 
+@@ -103,6 +107,7 @@
+   piCommand?: string
+   /** If set, pi will persist the session to this exact file (via `--session <path>`). */
+   sessionPath?: string
++  managedChat?: { url: string; authorization: string }
+ }
+ 
+ export class PiRpcProcess {
+@@ -152,21 +157,22 @@
+   }
+ 
+   static async spawn(params: SpawnParams): Promise<PiRpcProcess> {
+-    // On Windows, npm commonly creates pi.cmd / pi.bat launcher scripts.
+-    const cmd = getPiCommand(params.piCommand)
+-
+-    // Speed/robustness for ACP:
+-    // - themes are irrelevant in rpc mode and can be noisy/slow to load.
+-    // Keep extensions + prompt templates enabled because ACP users may rely on them
+-    // (e.g. MCP extensions, prompt templates for workflows).
+-    const args = ['--mode', 'rpc', '--no-themes']
++    const managed = managedPiPaths()
++    // 同梱時は中継と同じ Bun の起動引数を使う。実行時の相対位置は配布物内で固定。
++    const isolation: { BUN_ISOLATED: string[] } | undefined = managed
++      ? await import(new URL('../../harness/config.ts', import.meta.url).href)
++      : undefined
++    const [cmd, ...args] = isolation
++      ? [...isolation.BUN_ISOLATED, fileURLToPath(new URL('./managed-pi-rpc.ts', import.meta.url))]
++      : [getPiCommand(params.piCommand), '--mode', 'rpc', '--no-themes']
+     if (params.sessionPath) args.push('--session', params.sessionPath)
++    if (managed && !params.managedChat) throw new PiRpcSpawnError('Missing managed chat MCP input')
+ 
+     // Windows cmd launchers need shell escaping; direct executables use native argv.
+     const start = shouldUseShellForPiCommand(cmd) ? crossSpawn : spawn
+     const child = start(cmd, args, {
+       cwd: params.cwd,
+-      stdio: 'pipe',
++      stdio: managed ? ['pipe', 'pipe', 'pipe', 'pipe'] : 'pipe',
+       env: process.env
+     }) as ChildProcessWithoutNullStreams
+ 
+@@ -212,25 +218,54 @@
+ 
+     const proc = new PiRpcProcess(child)
+ 
+-    // Best-effort handshake.
+-    // Important: pi may emit a get_state response pointing at a sessionFile in a directory
+-    // that is created lazily. Create the parent dir up-front to avoid later parse errors
+-    // when we call commands like export_html.
++    // 管理済みの起動では、拡張の準備通知と RPC 応答の両方を待つ。
++    // 通常の起動では従来どおり、遅延作成される sessionFile の親を用意する。
+     try {
+-      const state = (await proc.getState()) as any
++      if (managed && params.managedChat) {
++        await proc.prepareManagedChat(child.stdio[3] as Duplex, params.managedChat)
++      }
++      const state = (await proc.getState(managed ? 5000 : undefined)) as any
+       const sessionFile = typeof state?.sessionFile === 'string' ? state.sessionFile : null
+-      if (sessionFile) {
++      if (managed && (!sessionFile || dirname(sessionFile) !== managed.sessions)) throw new Error('Missing managed session file')
++      if (sessionFile && !managed) {
+         const { mkdirSync } = await import('node:fs')
+-        const { dirname } = await import('node:path')
+         mkdirSync(dirname(sessionFile), { recursive: true })
+       }
+     } catch {
+-      // ignore for now
++      if (managed) {
++        proc.dispose()
++        throw new PiRpcSpawnError('Managed chat MCP did not become ready')
++      }
+     }
+ 
+     return proc
+   }
+ 
++  private async prepareManagedChat(pipe: Duplex, input: NonNullable<SpawnParams['managedChat']>): Promise<void> {
++    // 認証ヘッダーは子専用のパイプで一度だけ渡す。RPC 行や起動引数に混ぜない。
++    let finished!: (ready: boolean) => void
++    const result = new Promise<boolean>(resolve => { finished = resolve })
++    const onExit = () => finished(false)
++    const timeout = setTimeout(onExit, 10_000)
++    const unsubscribe = this.onEvent(ev => {
++      if (ev.type !== 'extension_ui_request' || ev.method !== 'notify') return
++      if (ev.message === 'managed-chat:ready') finished(true)
++      if (ev.message === 'managed-chat:failed') finished(false)
++    })
++    this.child.once('exit', onExit)
++    if (this.child.exitCode !== null || this.child.signalCode !== null) onExit()
++    pipe.on('error', onExit)
++    try {
++      pipe.end(JSON.stringify(input))
++      if (!(await result)) throw new Error('Managed chat MCP initialization failed')
++    } finally {
++      clearTimeout(timeout)
++      unsubscribe()
++      this.child.off('exit', onExit)
++      pipe.destroy()
++    }
++  }
++
+   onEvent(handler: (ev: PiRpcEvent) => void): () => void {
+     this.eventHandlers.push(handler)
+     return () => {
+@@ -266,8 +301,8 @@
+     if (!res.success) throw new Error(`pi abort failed: ${res.error ?? JSON.stringify(res.data)}`)
+   }
+ 
+-  async getState(): Promise<unknown> {
+-    const res = await this.request({ type: 'get_state' })
++  async getState(timeoutMs?: number): Promise<unknown> {
++    const res = await this.request({ type: 'get_state' }, { timeoutMs })
+     if (!res.success) throw new Error(`pi get_state failed: ${res.error ?? JSON.stringify(res.data)}`)
+     return res.data
+   }

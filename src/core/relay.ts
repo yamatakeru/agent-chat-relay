@@ -115,7 +115,7 @@ export interface Session {
  * always は、ハーネスが示した「常に許可」の範囲（選択肢の名前）。示されていなければ書かない。
  * agentText は、そのターンでエージェントが書いた文。承認依頼の送り先を推すのに使う（ADR 0026）
  */
-export type PermissionRequest = { title: string; input: string; always?: string; agentText?: string }
+export type PermissionRequest = { title: string; input: string; always?: string; agentText?: string; requireFullDisplay?: true }
 
 /**
  * 送り先を推すときに渡す、そのターンの発言。sender は ID（推した結果を戻すのにだけ使い、外へは送らない）。
@@ -139,6 +139,8 @@ const MAX_BATCH = 5
 const MAX_ALWAYS_SCOPE = 200
 /** 1 件だけの依頼の題名は、これより長ければ省く（Claude Code の Bash では、題名がコマンドそのもの） */
 const MAX_SINGLE_TITLE = 200
+const MAX_BATCH_TITLE = 100
+const MAX_BATCH_INPUT = 200
 /** 承認依頼の文面の上限から差し引く分。送り直すときに前に足す文と、Discord で答えたあとに足す結果が入るようにする */
 const APPROVAL_MARGIN = 50
 /** コネクターの本文の上限の下限。依頼 1 件の題名・答え方・「常に許可」の範囲を省かずに、承認依頼の文面に収めるため */
@@ -340,11 +342,32 @@ export class Relay {
   }
 
   private enqueue(req: PermissionRequest, route: Route): Promise<Verdict> {
+    const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
+    const normalized = req.requireFullDisplay
+      ? { ...req, always, title: approvalLiteral(req.title), input: approvalLiteral(req.input) }
+      : { ...req, always }
+    if (normalized.requireFullDisplay) {
+      const item = { req: normalized, id: ID_PLACEHOLDER, route }
+      const max = MIN_TEXT - APPROVAL_MARGIN
+      // 送り先の人が許可リストから外れると、出し直し時は全員向けの文面になる。
+      if (
+        approvalText([item], ID_PLACEHOLDER, max, false).length > max ||
+        (route.to && approvalText([item], ID_PLACEHOLDER, max, true).length > max)
+      ) {
+        this.log.error("操作と対象をすべて表示できないため、実行を拒否しました", { tool: req.title })
+        return Promise.resolve("deny")
+      }
+    }
     return new Promise<Verdict>((resolve) => {
-      // 同時に届いた依頼は、1 通の束にまとめて送る（ADR 0014）
+      const pending = { req: normalized, resolve, route }
+      if (normalized.requireFullDisplay && (normalized.title.length > MAX_BATCH_TITLE || normalized.input.length > MAX_BATCH_INPUT)) {
+        // 束にすると全文が収まらない依頼は 1 件で送る。収集中の束はそのまま待つ。
+        const b = this.newBatch()
+        b.items.push({ id: this.newPermissionId(), ...pending })
+        this.sendBatch(b)
+        return
+      }
       let b = this.collecting ?? this.openBatch()
-      const always = req.always && req.always.length <= MAX_ALWAYS_SCOPE ? req.always : undefined
-      const pending = { req: { ...req, always }, resolve, route }
       // 送り先が違えば、今の束を先に送る（ADR 0026）。
       // 足すと文面が上限を超えるときも同じ。コネクターが文面を切ると、依頼や「常に許可」の範囲が見えないまま、束全体に答えられてしまう（ADR 0015）。
       // 長さは全員への文面で測る。1 人への文面がそれより長く上限を超えたら、送るときに依頼ごとに分ける（sendBatchTo）
@@ -362,10 +385,13 @@ export class Relay {
     })
   }
 
-  private openBatch(): Batch {
+  private newBatch(): Batch {
     const b: Batch = { id: "", items: [], opened: Date.now(), timeout: setTimeout(() => this.expire(b), PERMISSION_TIMEOUT_MS) }
-    this.collecting = b
     return b
+  }
+
+  private openBatch(): Batch {
+    return this.collecting = this.newBatch()
   }
 
   private sendBatch(b: Batch): void {
@@ -761,6 +787,11 @@ function describeAttachment(a: Attachment): string {
   return a.size === undefined ? `${name} (${a.type})` : `${name} (${a.type}, ${Math.ceil(a.size / 1024)}KB)`
 }
 
+/** 承認の対象を装飾・リンク・タグとして解釈させない。元の操作の文字は置き換えず、表示だけ変える。 */
+function approvalLiteral(text: string): string {
+  return text.replace(/[-!#&*+<=>@[\\\]^_`|~:\p{Cf}]/gu, ch => `\\u{${ch.codePointAt(0)!.toString(16)}}`)
+}
+
 /**
  * その人が束に答えられるか（ADR 0026）。許可リストの人で、束の送り先が 1 人ならその人。
  * 送り先の人が許可リストから外れたら、答えられる人がいなくならないよう、全員が答えられる
@@ -791,7 +822,7 @@ const MAX_SENDERS_TEXT = 300
  * 束の送り先の決め方を、受け取った人に示す欄（ADR 0026）。その人だけに送ったならそう書き、全員に送ったなら、ターンに発言を渡した人を並べる。
  * ターンの外で届いた依頼には書かない
  */
-function routeLines(pending: PendingRequest[], narrowed: boolean): string[] {
+function routeLines(pending: Pick<PendingRequest, "route">[], narrowed: boolean): string[] {
   if (narrowed) {
     // Jev で決めた依頼があれば、そのうちいちばん低い確率を書く
     const p = pending.flatMap((i) => i.route.probability ?? [])
@@ -838,19 +869,19 @@ const ID_PLACEHOLDER = "xxxxx"
  * 承認依頼の束の文面。依頼が 1 つなら、その依頼だけを書き、入力を省いて max に収める。
  * narrowed は、受け取る人が束の送り先の 1 人か
  */
-function approvalText(pending: PendingRequest[], id: string, max: number, narrowed: boolean): string {
+function approvalText(pending: Pick<PendingRequest, "id" | "req" | "route">[], id: string, max: number, narrowed: boolean): string {
   const route = routeLines(pending, narrowed)
   if (pending.length === 1) {
     const { req } = pending[0]!
-    const head = [`🔐 実行の承認：${truncate(req.title, MAX_SINGLE_TITLE)}`, ...(route.length === 0 ? [] : ["", ...route])].join("\n")
+    const head = [`🔐 実行の承認：${req.requireFullDisplay ? req.title : truncate(req.title, MAX_SINGLE_TITLE)}`, ...(route.length === 0 ? [] : ["", ...route])].join("\n")
     const answers = [`許可：yes ${id}`, ...(req.always ? [`常に許可：always ${id}（${req.always}）`] : []), `拒否：no ${id}`].join("\n")
     const room = Math.min(1500, max - head.length - answers.length - 4)
-    return [head, "", truncate(req.input, room), "", answers].join("\n")
+    return [head, "", req.requireFullDisplay ? req.input : truncate(req.input, room), "", answers].join("\n")
   }
   const items = pending.map((i, n) =>
     [
-      `${n + 1}. ${truncate(i.req.title, 100)}`,
-      truncate(i.req.input, 200),
+      `${n + 1}. ${truncate(i.req.title, MAX_BATCH_TITLE)}`,
+      truncate(i.req.input, MAX_BATCH_INPUT),
       ...(i.req.always ? [`常に許可の範囲：${i.req.always}`] : []),
       `（この依頼だけ：yes ${i.id}・${i.req.always ? `always ${i.id}・` : ""}no ${i.id}）`,
     ].join("\n"),
