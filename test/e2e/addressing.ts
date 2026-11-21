@@ -1,13 +1,14 @@
 // 評価：受信モードが「すべて」のルームで、メンションのない発言に、エージェントが答えるか・黙るか（#107。結果は docs/addressing-eval.md）。
 // 正解を付けた会話を、実際の Claude Code と LINE の API のモック（test/e2e/mock-line.ts）に流す。契約の利用枠を使う。
 //
-//   mise exec -- bun --no-env-file --config=/dev/null test/e2e/addressing.ts run <ラベル> [--set main|holdout] [--root <中継のディレクトリ>] [--runs 3] [--port 18200]
+//   mise exec -- bun --no-env-file --config=/dev/null test/e2e/addressing.ts run <ラベル> [--set main|holdout] [--receive all|exceptOthersJev] [--root <中継のディレクトリ>] [--runs 3] [--port 18200]
 //   mise exec -- bun --no-env-file --config=/dev/null test/e2e/addressing.ts report [--check] <結果の JSON>...
 //
 // ふだんは test/e2e/addressing.sh から使う。--check は、結果が基準（CHECK）に届かなければ 0 以外で終わる
 //
 // 会話は 2 つ。main は案内の文面を決めるのに使い、holdout は、文面が main に合わせすぎていないかを、言い回しを変えた別の会話で確かめる。
 // モデルは ANTHROPIC_MODEL で選ぶ（なければ Claude Code の既定）。--root で、別のコミットの中継（git worktree など）を動かせる。
+// --receive exceptOthersJev は、受信モード「他人宛てを除く（Jev）」で流す（ADR 0029）。Jev の API キー（RELAY_TYPESAFE_API_KEY）を環境変数で渡す。
 // 中継は 3 つのポート（--port から順に、Webhook、MCP、モック）を使うので、同時に走らせるときは --port をずらす。
 // 記録と作業ディレクトリは .local/e2e/addressing-<ラベル>/ に、結果は .local/e2e/addressing-<ラベル>.json に書く。
 // 発言は、1 つずつ、前のターンが終わってから送る。束（burst）は、1.5 秒ずつ空けて続けて送る（作業中のターンへの差し込みを含む）
@@ -27,7 +28,7 @@ type SetName = keyof typeof SETS
 type Step = { index: number; want: Want; replies: string[] }
 type Burst = { indexes: number[]; answers: number; replies: string[] }
 type Run = { steps: Step[]; bursts: Burst[] }
-type Result = { label: string; set: SetName; model: string; root: string; runs: Run[] }
+type Result = { label: string; set: SetName; receive?: string; model: string; root: string; runs: Run[] }
 
 const NOTICES: string[] = Object.values(TURN_NOTICES)
 
@@ -39,7 +40,7 @@ async function waitFor(cond: () => boolean, ms: number, what: string): Promise<v
   }
 }
 
-async function runOnce(label: string, conversation: Line[], root: string, base: number, dir: string): Promise<Run> {
+async function runOnce(label: string, conversation: Line[], receive: string, root: string, base: number, dir: string): Promise<Run> {
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
   const home = join(dir, "home")
@@ -127,10 +128,10 @@ async function runOnce(label: string, conversation: Line[], root: string, base: 
     await waitFor(() => /relay pair [0-9a-f]{6}/.test(readFileSync(sent, "utf8")), 15_000, `${label}: ペアリングのコード`)
     const code = readFileSync(sent, "utf8").match(/relay pair ([0-9a-f]{6})/)![1]!
     Bun.spawnSync([...BUN_ISOLATED, join(root, "src/main.ts"), "pair", code], { env })
-    // 受信モードを「すべて」にする（古い形の requireMention: false は、どのコミットでも「すべて」）
+    // 受信モードを変える。「すべて」は、古い形の requireMention: false で書く（どのコミットでも「すべて」になる）
     const accessPath = join(home, "access.json")
     const access = JSON.parse(readFileSync(accessPath, "utf8"))
-    access.rooms[`line:${ROOM}`] = { requireMention: false, allowFrom: [] }
+    access.rooms[`line:${ROOM}`] = receive === "all" ? { requireMention: false, allowFrom: [] } : { receive, allowFrom: [] }
     writeFileSync(accessPath, JSON.stringify(access))
 
     const run: Run = { steps: [], bursts: [] }
@@ -239,14 +240,16 @@ if (import.meta.main) {
   if (cmd === "run" && args[0] && !args[0].startsWith("--")) {
     const label = args[0]
     const set = opt("--set", "main")
+    const receive = opt("--receive", "all")
+    if (!["all", "exceptOthersJev"].includes(receive)) throw new Error("--receive は all・exceptOthersJev のどれか")
     if (!(set in SETS)) throw new Error(`--set は ${Object.keys(SETS).join("・")} のどれか`)
     const root = resolve(opt("--root", join(import.meta.dir, "../..")))
     const runs = Number(opt("--runs", "3"))
     const base = Number(opt("--port", "18200"))
     const e2e = resolve(import.meta.dir, "../../.local/e2e")
-    const result: Result = { label, set: set as SetName, model: process.env.ANTHROPIC_MODEL ?? "既定", root, runs: [] }
+    const result: Result = { label, set: set as SetName, receive, model: process.env.ANTHROPIC_MODEL ?? "既定", root, runs: [] }
     for (let k = 0; k < runs; k++) {
-      result.runs.push(await runOnce(`${label}#${k + 1}`, SETS[set as SetName], root, base, join(e2e, `addressing-${label}`, String(k + 1))))
+      result.runs.push(await runOnce(`${label}#${k + 1}`, SETS[set as SetName], receive, root, base, join(e2e, `addressing-${label}`, String(k + 1))))
       writeFileSync(join(e2e, `addressing-${label}.json`), JSON.stringify(result, null, 2))
     }
     console.log(report([result]))
@@ -257,7 +260,7 @@ if (import.meta.main) {
     for (const f of failed) console.log(`NG: ${f}`)
     if (failed.length) process.exit(1)
   } else {
-    console.error("usage: addressing.ts run <ラベル> [--set main|holdout] [--root <dir>] [--runs N] [--port N] | report [--check] <結果の JSON>...")
+    console.error("usage: addressing.ts run <ラベル> [--set main|holdout] [--receive all|exceptOthersJev] [--root <dir>] [--runs N] [--port N] | report [--check] <結果の JSON>...")
     process.exit(2)
   }
 }
