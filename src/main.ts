@@ -244,7 +244,7 @@ async function main(): Promise<void> {
       return accessCommand(access, rest)
     default:
       throw new Error(
-        "usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access [mode <番号か ID> <mention|exceptOthers|exceptOthersJev|all>] | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota",
+        `usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access [mode <番号か ID> <${Object.keys(RECEIVE_MODES).join("|")}>] | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota`,
       )
   }
 }

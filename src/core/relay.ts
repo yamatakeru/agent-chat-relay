@@ -306,7 +306,7 @@ export class Relay {
       return r
     }
     // 判定には、この発言より前の、同じルームの発言を渡す
-    if (r.screen && this.screen) this.screening.set(m, this.screenMessage(m, [...(this.records.get(m.room) ?? [])]))
+    if (r.screen && this.screen) this.screening.set(m, this.screenMessage(this.screen, m, [...(this.records.get(m.room) ?? [])]))
     this.record(m)
     this.queue.push(m)
     this.kick()
@@ -538,10 +538,10 @@ export class Relay {
   }
 
   /** 他人宛てかを Jev で判定する。外すなら false。判定できなければ渡す（ADR 0029） */
-  private async screenMessage(m: Incoming, recent: ChatMessage[]): Promise<boolean> {
+  private async screenMessage(screen: Screener, m: Incoming, recent: ChatMessage[]): Promise<boolean> {
     const toScreen = (x: ChatMessage): ScreenMessage => ({ sender: x.sender, name: x.senderName ?? "", fromMe: x.fromMe === true, text: x.text })
     const query = { service: this.connector(m.room)?.label ?? "", room: (await this.roomName(m.room)) ?? "", recent: recent.map(toScreen), message: toScreen(m) }
-    const r = await this.screen!(query).catch((err) => {
+    const r = await screen(query).catch((err) => {
       this.log.error("他人宛てかを判定できませんでした", { error: String(err) })
       return undefined
     })

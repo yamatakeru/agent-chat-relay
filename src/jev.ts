@@ -186,6 +186,7 @@ export function screenRequest(q: ScreenQuery, context: number): unknown {
     if (!label) labels.set(m.sender, (label = `p${labels.size + 1}`))
     return { person: label, name: m.name.slice(0, LIMITS.name) }
   }
+  // slice(-0) はすべてを返すので、0 は別に扱う
   const recent = context === 0 ? [] : q.recent.slice(-context)
   return {
     model: MODEL,
