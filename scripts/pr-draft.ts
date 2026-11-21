@@ -46,6 +46,7 @@ function mutationLines(m: Mutation): string[] {
   return lines
 }
 
+const DRAFT_PREFIX = "<!-- bun run pre-pr が、コミット "
 const UNVERIFIED = "## 確認できなかったこと"
 /**
  * 「確認できなかったこと」に置ける項目の区分。手元のハーネス（Haiku）、モック、偽物で確かめられるものに当たる区分はない。
@@ -60,7 +61,7 @@ export function draft(r: Results): string {
   const lines = [
     "## 確認",
     "",
-    `<!-- bun run pre-pr が、コミット ${r.head} で、${r.base} との差分から書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->`,
+    `${DRAFT_PREFIX}${r.head} で、${r.base} との差分から書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->`,
     r.tests ? `- \`bun test\`：${r.tests.pass} 件が通った。失敗 ${r.tests.fail} 件` : "- `bun test`：結果を読めなかった",
     `- \`bun run check\`：${r.check ? "通った" : "失敗した"}`,
     ...(r.mutation ? mutationLines(r.mutation) : ["- `bun run mutation`：結果を読めなかった"]),
@@ -74,6 +75,43 @@ export function draft(r: Results): string {
     `- **（項目）**：区分：（${KINDS.join("／")}）。手段：（）。費用：（時間、実費）。確かめなかった理由：（）`,
   ]
   return `${lines.join("\n")}\n`
+}
+
+/**
+ * 下書きの数（変異、e2e の一覧）を変えないファイル。変異は文書にかからず、e2e を挙げる条件にも文書は入っていない。
+ * 通すものを書く形にして、新しい種類のファイルは、取り直しを求める側に倒す
+ */
+const isDoc = (f: string) => f.endsWith(".md") || f.startsWith("docs/")
+
+/**
+ * 下書きがあれば、記録したコミットから PR の先頭までに、文書以外のファイルが変わっていないかを確かめる（ADR 0025）。
+ * 文書だけの変更では、下書きの数は変わらないので、取り直しを求めない。changed は、2 つのコミットの間で変わったファイルを返し、
+ * コミットが見つからなければ undefined を返す。以前の下書きは短縮 SHA で記録していた
+ */
+export function draftHeadErrors(body: string, head: string, changed: (from: string, to: string) => string[] | undefined): string[] {
+  const errors: string[] = []
+  const rerun = "最後のコミットで bun run pre-pr を走らせ直し、下書きから「確認」を更新する（skill pre-pr）"
+  for (const line of body.split("\n")) {
+    const comment = line.replace(/^ {1,3}/, "")
+    if (!comment.startsWith(DRAFT_PREFIX)) continue
+    const recorded = comment.slice(DRAFT_PREFIX.length).match(/^([0-9a-f]{7,40}) で、/)?.[1]
+    if (!recorded || !head) {
+      errors.push(`PR 本文の pre-pr 下書きのコミット（${recorded ?? "不明"}）か、先頭のコミット（${head || "不明"}）が読めない。${rerun}`)
+      continue
+    }
+    if (head.startsWith(recorded)) continue
+    const files = changed(recorded, head)
+    if (!files) {
+      errors.push(`PR 本文の pre-pr 下書きのコミット（${recorded}）が見つからない（force push などで消えた）。${rerun}`)
+      continue
+    }
+    const code = files.filter((f) => !isDoc(f))
+    if (code.length) {
+      const list = code.slice(0, 3).join("、") + (code.length > 3 ? ` ほか ${code.length - 3} 件` : "")
+      errors.push(`PR 本文の pre-pr 下書きのコミット（${recorded}）のあと、先頭のコミット（${head}）までに、文書以外のファイル（${list}）が変わった。${rerun}`)
+    }
+  }
+  return errors
 }
 
 /**

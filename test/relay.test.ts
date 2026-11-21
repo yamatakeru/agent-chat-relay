@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test"
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import fc from "fast-check"
 import { AccessStore, canSendTo } from "../src/core/access.ts"
@@ -2908,13 +2908,19 @@ describe("作業ディレクトリ", () => {
     expect(Bun.spawnSync(["git", "init", "-q", other]).success).toBe(true)
     commit(other, "ほかのリポジトリ")
     const before = readFileSync(join(other, ".git", "config"), "utf8")
-    for (const make of [(ws: string) => writeFileSync(join(ws, ".git"), `gitdir: ${join(other, ".git")}\n`), (ws: string) => symlinkSync(join(other, ".git"), join(ws, ".git"))]) {
-      const ws = mkdtempSync(join(dir, "ws-"))
+    const layouts = [
+      (ws: string) => writeFileSync(join(ws, ".git"), `gitdir: ${join(other, ".git")}\n`),
+      (ws: string) => symlinkSync(join(other, ".git"), join(ws, ".git")),
+    ]
+    for (const [i, make] of layouts.entries()) {
+      const ws = join(dir, `ws-${i}`)
+      mkdirSync(ws)
       make(ws)
       expect(() => initWorkspace(ws)).toThrow(".git がディレクトリではない")
     }
     // 消えたリンク先を作り直さない
-    const dangling = mkdtempSync(join(dir, "ws-"))
+    const dangling = join(dir, "ws-dangling")
+    mkdirSync(dangling)
     symlinkSync(join(dir, "nowhere"), join(dangling, ".git"))
     expect(() => initWorkspace(dangling)).toThrow(".git がディレクトリではない")
     expect(existsSync(join(dir, "nowhere"))).toBe(false)
@@ -2985,8 +2991,8 @@ describe("作業ディレクトリ", () => {
   })
 
   test("中継の置き場（.relay/）やその中がリンクでも、リンク先には書かず、消さない", () => {
-    for (const link of [".relay", ".relay/inbox"]) {
-      const ws = mkdtempSync(join(dir, "ws-"))
+    for (const [i, link] of [".relay", ".relay/inbox"].entries()) {
+      const ws = join(dir, `ws-relay-link-${i}`)
       mkdirSync(join(ws, ".relay"), { recursive: true })
       if (link === ".relay") rmSync(join(ws, ".relay"), { recursive: true })
       mkdirSync(join(ws, "target"))
@@ -2995,9 +3001,9 @@ describe("作業ディレクトリ", () => {
       expect(existsSync(join(ws, "target", ".gitignore"))).toBe(false)
     }
     // .gitignore がシンボリックリンクやハードリンクでも、リンク先の中身は変えず、.relay/ の中に作り直す
-    for (const make of [symlinkSync, linkSync]) {
-      const ws = mkdtempSync(join(dir, "ws-"))
-      mkdirSync(join(ws, ".relay"))
+    for (const [i, make] of [symlinkSync, linkSync].entries()) {
+      const ws = join(dir, `ws-gitignore-link-${i}`)
+      mkdirSync(join(ws, ".relay"), { recursive: true })
       writeFileSync(join(ws, ".gitignore"), "admin\n")
       make(join(ws, ".gitignore"), join(ws, ".relay", ".gitignore"))
       relayDir(ws)

@@ -1,13 +1,12 @@
 import assert from "node:assert/strict"
 import { test } from "bun:test"
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { managedRead } from "../src/vendor/pi/managed-read.ts"
+import { tempDir } from "./tmp.ts"
 
 test.skipIf(process.platform !== "darwin")("pi の作業ディレクトリ内の読み取りは、パスが後から変わっても確認済みの内容だけを返す", async () => {
-  const local = join(import.meta.dir, "..", ".local")
-  mkdirSync(local, { recursive: true })
-  const root = realpathSync(mkdtempSync(join(local, "test-pi-read-")))
+  const root = realpathSync(tempDir("test-pi-read-"))
   const cwd = join(root, "workspace")
   const previous = process.cwd()
   try {
