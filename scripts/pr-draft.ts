@@ -46,6 +46,7 @@ function mutationLines(m: Mutation): string[] {
   return lines
 }
 
+const DRAFT_PREFIX = "<!-- bun run pre-pr が、コミット "
 const UNVERIFIED = "## 確認できなかったこと"
 /**
  * 「確認できなかったこと」に置ける項目の区分。手元のハーネス（Haiku）、モック、偽物で確かめられるものに当たる区分はない。
@@ -60,7 +61,7 @@ export function draft(r: Results): string {
   const lines = [
     "## 確認",
     "",
-    `<!-- bun run pre-pr が、コミット ${r.head} で、${r.base} との差分から書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->`,
+    `${DRAFT_PREFIX}${r.head} で、${r.base} との差分から書いた下書き。数と区分は実際の値なので、書き換えない。（）を埋める -->`,
     r.tests ? `- \`bun test\`：${r.tests.pass} 件が通った。失敗 ${r.tests.fail} 件` : "- `bun test`：結果を読めなかった",
     `- \`bun run check\`：${r.check ? "通った" : "失敗した"}`,
     ...(r.mutation ? mutationLines(r.mutation) : ["- `bun run mutation`：結果を読めなかった"]),
@@ -74,6 +75,20 @@ export function draft(r: Results): string {
     `- **（項目）**：区分：（${KINDS.join("／")}）。手段：（）。費用：（時間、実費）。確かめなかった理由：（）`,
   ]
   return `${lines.join("\n")}\n`
+}
+
+/** 下書きがあれば、記録したコミットを PR の先頭と照合する。以前の下書きは短縮 SHA で記録していた */
+export function draftHeadErrors(body: string, head: string): string[] {
+  const errors: string[] = []
+  for (const line of body.split("\n")) {
+    const comment = line.replace(/^ {1,3}/, "")
+    if (!comment.startsWith(DRAFT_PREFIX)) continue
+    const recorded = comment.slice(DRAFT_PREFIX.length).match(/^([0-9a-f]{7,40}) で、/)?.[1]
+    if (!recorded || !head.startsWith(recorded)) {
+      errors.push(`PR 本文の pre-pr 下書きのコミット（${recorded ?? "不明"}）が、先頭のコミット（${head || "不明"}）と一致しない。最後のコミットで bun run pre-pr を走らせ直し、下書きから「確認」を更新する（skill pre-pr）`)
+    }
+  }
+  return errors
 }
 
 /**

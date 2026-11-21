@@ -1,4 +1,4 @@
-# PR 本文の「確認できなかったこと」の各項目に、区分があることを確かめる（ADR 0025）。本文を直したときにも走らせる。
+# PR 本文の区分と pre-pr 下書きのコミットを確かめる（ADR 0025）。本文を直したときにも走らせる。
 # 本文は、run: に式で埋め込まず、イベントの JSON（GITHUB_EVENT_PATH）から読む
 name: PR body
 
@@ -16,4 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
-      - run: mise exec -- bun --no-env-file --config=/dev/null scripts/pr-body.ts --event "$GITHUB_EVENT_PATH"
+      - run: |
+          mise exec -- bun --no-env-file --config=/dev/null \
+            scripts/pr-body.ts --event "$GITHUB_EVENT_PATH"

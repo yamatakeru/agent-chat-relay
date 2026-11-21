@@ -19,7 +19,7 @@ function run(label: string, cmd: string[]): { ok: boolean; stdout: string; out: 
 }
 
 const base = process.argv[2] ?? "main"
-const rev = () => Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"]).stdout.toString().trim()
+const rev = () => Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: import.meta.dir }).stdout.toString().trim()
 const head = rev()
 const test = run("bun test", [...BUN_ISOLATED, "test"])
 const check = run("bun run check", [...BUN_ISOLATED, "run", "check"])

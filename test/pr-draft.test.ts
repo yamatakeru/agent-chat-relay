@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { draft, type Mutation, parseMutation, type Results, testCounts, unverifiedErrors } from "../scripts/pr-draft.ts"
+import { draft, draftHeadErrors, type Mutation, parseMutation, type Results, testCounts, unverifiedErrors } from "../scripts/pr-draft.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { tempDir } from "./tmp.ts"
 
@@ -175,7 +175,23 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
     expect(unverifiedErrors("## 確認できなかったこと\n\n- **a**：x\n  - z\n（訂正）y\n  - 区分：手段なし\n")).toHaveLength(1)
   })
 
-  test("bun run pr-body は、本文のファイルと、GitHub のイベントの JSON を検査し、区分のない項目があれば 1 で終わる", () => {
+  test("#109 の古い下書きを拒否し、先頭で作った下書きと下書きのない本文は通す", () => {
+    const head = "03e08898995dc151bc6bcd381543271f2d334c55"
+    const stale = "<!-- bun run pre-pr が、コミット 4604684e で、main との差分から書いた下書き -->"
+    const staleError = draftHeadErrors(stale, head)
+    expect(staleError).toEqual([expect.stringContaining("最後のコミットで bun run pre-pr を走らせ直し")])
+    expect(staleError[0]).toContain(`（4604684e）が、先頭のコミット（${head}）`)
+    for (const spaces of [" ", "  ", "   "]) expect(draftHeadErrors(`${spaces}${stale}\r\n`, head)).toEqual(staleError)
+    const fresh = draft({ ...base, head })
+    expect(draftHeadErrors(fresh, head)).toEqual([])
+    expect(draftHeadErrors(fresh, "")).toEqual([expect.stringContaining("先頭のコミット（不明）")])
+    expect(draftHeadErrors(`${fresh}\n${stale}`, head)).toEqual(staleError)
+    expect(draftHeadErrors(fresh.replace(head, head.slice(0, 8)), head)).toEqual([])
+    expect(draftHeadErrors(fresh.replace(head, `余分な文字 ${head}`), head)).toEqual([expect.stringContaining("下書きのコミット（不明）")])
+    expect(draftHeadErrors(`## 変更\n\n- ${stale}\n`, head)).toEqual([])
+  })
+
+  test("bun run pr-body は、本文のファイルと、GitHub のイベントの JSON を検査し、違反があれば 1 で終わる", () => {
     const dir = tempDir("pr-body-")
     try {
       const run = (...args: string[]) => Bun.spawnSync([...BUN_ISOLATED, join(import.meta.dir, "../scripts/pr-body.ts"), ...args], { stdout: "pipe", stderr: "pipe" })
@@ -190,6 +206,16 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
       expect(run("--event", write("ok.json", JSON.stringify({ pull_request: { body: ok } }))).exitCode).toBe(0)
       // 本文のない PR（body が null）は通す
       expect(run("--event", write("null.json", JSON.stringify({ pull_request: { body: null } }))).exitCode).toBe(0)
+      const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: import.meta.dir }).stdout.toString().trim()
+      const other = "03e08898995dc151bc6bcd381543271f2d334c55"
+      const confirmation = (sha: string) => `<!-- bun run pre-pr が、コミット ${sha} で、main との差分から書いた下書き -->`
+      const local = (sha: string) => run(write("draft.md", confirmation(sha)))
+      const ci = (sha: string) => run("--event", write("event.json", JSON.stringify({ pull_request: { body: confirmation(sha), head: { sha: other } } })))
+      expect(local(head).exitCode).toBe(0)
+      expect(local(other).exitCode).toBe(1)
+      // CI ではチェックアウトしたコミットではなく、イベントの PR head と照合する
+      expect(ci(other).exitCode).toBe(0)
+      expect(ci(head).exitCode).toBe(1)
       expect(run().exitCode).toBe(2)
       expect(run("--event").exitCode).toBe(2)
     } finally {
