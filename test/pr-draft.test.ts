@@ -242,7 +242,8 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
       }
       git("init", "-q", repo)
       const drafted = commit("src/a.ts", "1")
-      const docsOnly = commit("docs/adr/x.md", "文言")
+      // 日本語のパスも、文書として読む
+      const docsOnly = commit("docs/説明.md", "文言")
       const head = commit("src/a.ts", "2")
       const runIn = (...args: string[]) => Bun.spawnSync([...BUN_ISOLATED, join(import.meta.dir, "../scripts/pr-body.ts"), ...args], { env, stdout: "pipe", stderr: "pipe" })
       const confirmation = (sha: string) => `<!-- bun run pre-pr が、コミット ${sha} で、main との差分から書いた下書き -->`
@@ -258,6 +259,12 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
       expect(stale.exitCode).toBe(1)
       expect(stale.stderr.toString()).toContain("（src/a.ts）が変わった")
       expect(ci("0123456789abcdef0123456789abcdef01234567", head).stderr.toString()).toContain("見つからない")
+      // スクリプトを docs/ へ移したときは、移動元も見る
+      git("mv", "src/a.ts", "docs/a.ts")
+      git("commit", "-q", "-m", "mv")
+      const moved = ci(head, git("rev-parse", "HEAD"))
+      expect(moved.exitCode).toBe(1)
+      expect(moved.stderr.toString()).toContain("（src/a.ts）が変わった")
       expect(run().exitCode).toBe(2)
       expect(run("--event").exitCode).toBe(2)
     } finally {
