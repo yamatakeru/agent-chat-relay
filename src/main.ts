@@ -6,10 +6,10 @@
 //                  ほかのフラグは、環境変数 RELAY_WORKSPACE・RELAY_HARNESS_SETTINGS・RELAY_HARNESS_MEMORY の別名（ADR 0017）
 //   pair <code>    ペアリングのコードを承認する（ルームの登録、DM の相手の許可）
 //   access         登録したルームと許可した人の一覧（ID は伏せる）
-//   access mode <番号か ID> <mention|exceptOthers|all>
-//                  登録したルームの受信モードを変える。番号は access の一覧のもの（ADR 0028）
+//   access mode <番号か ID> <mention|exceptOthers|exceptOthersJev|all>
+//                  登録したルームの受信モードを変える。番号は access の一覧のもの（ADR 0028、0029）
 //   secrets <line|chatwork|discord|typesafe>
-//                  秘密情報を、画面に表示せずに入力してもらい、<home>/.env に保存する（typesafe は、承認依頼の送り先を推す Jev の API キー。ADR 0026）
+//                  秘密情報を、画面に表示せずに入力してもらい、<home>/.env に保存する（typesafe は、承認依頼の送り先を推し、他人宛ての発言を判定する Jev の API キー。ADR 0026、0029）
 //   line-tunnel    LINE の Webhook を Cloudflare Quick Tunnel で公開する（PATH 上の cloudflared を使う）
 //   line-quota     LINE の今月の送信数
 //
@@ -30,7 +30,7 @@ import { parseServeArgs, type ServeArgs } from "./serve-args.ts"
 import { type ConnectorFactory, type Log, noticeTimingFromEnv, Relay, type Routes } from "./core/relay.ts"
 import { stopper, untilHarnessExits } from "./shutdown.ts"
 import { relayDir, resolveWorkspace } from "./workspace.ts"
-import { jevFromEnv } from "./jev.ts"
+import { jevFromEnv, screenFromEnv } from "./jev.ts"
 import { loadSecrets, relayHome, secretKeys, secretsFile, storeSecrets } from "./home.ts"
 import { readSecret } from "./prompt.ts"
 
@@ -58,6 +58,7 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   const harnessOptions = harnessOptionsFromEnv(env)
   const noticeTiming = noticeTimingFromEnv(env)
   const attribute = jevFromEnv(env, log)
+  const screen = screenFromEnv(env, log)
   // 作業ディレクトリの中は承認なしで読めて返せるので、中継のデータと秘密情報の置き場を含めない（ADR 0017）。
   // 秘密情報のファイル自体も渡すのは、ファイルがシンボリックリンクのとき、実体の場所も含めないため
   const { path: workspace, specified } = resolveWorkspace(env, home, [home, PACKAGE_ROOT, dirname(envFile), envFile])
@@ -78,8 +79,9 @@ async function serve(access: AccessStore, args: ServeArgs): Promise<void> {
   // 受け取った添付は 7 日で消す（ADR 0005）
   schedulePrune(inbox, "受け取った添付", log)
 
-  const relay = new Relay(access, log, workspace, undefined, noticeTiming, attribute)
+  const relay = new Relay(access, log, workspace, undefined, noticeTiming, attribute, screen)
   if (attribute) log.info("送り手が複数いるターンの承認依頼は、Jev で依頼者を推して送り先を絞ります（ADR 0026）")
+  if (!screen && Object.values(access.load().rooms).some((p) => p.receive === "exceptOthersJev")) log.error(NO_JEV_KEY)
   const connectors = CONNECTORS.map((make) => make(process.env, { relay, log, home })).filter((c) => c !== undefined)
   if (connectors.length === 0) {
     throw new Error("チャットサービスの秘密情報がありません。agent-chat-relay secrets line・secrets chatwork・secrets discord のどれかを実行してください（開発時は scripts/relay.sh secrets）")
@@ -152,7 +154,7 @@ const SECRETS: Record<string, { intro: string; items: [key: string, label: strin
     items: [["RELAY_DISCORD_BOT_TOKEN", "Bot のトークン: "]],
   },
   typesafe: {
-    intro: "TypeSafe AI の API キー（Jev。承認依頼の送り先を推すのに使う）を入力します。入力内容は画面に表示されません。",
+    intro: "TypeSafe AI の API キー（Jev。承認依頼の送り先を推すのと、他人宛ての発言を判定するのに使う）を入力します。入力内容は画面に表示されません。",
     items: [["RELAY_TYPESAFE_API_KEY", "API キー: "]],
   },
 }
@@ -187,6 +189,9 @@ function mask(id: string): string {
   return `${serviceOf(id)}:${localId(id).slice(0, 1)}…`
 }
 
+/** 受信モードが「他人宛てを除く（Jev）」のルームがあるのに、Jev の API キーがないとき（ADR 0029） */
+const NO_JEV_KEY = "Jev の API キーがないため、受信モードが「他人宛てを除く（Jev）」のルームは、「他人宛てを除く」と同じに動きます。agent-chat-relay secrets typesafe で保存してください"
+
 /**
  * access：登録したルームと許可した人の一覧。ルームには番号を付ける（ID は伏せるため）。
  * access mode <番号か ID> <受信モード>：登録したルームの受信モードを変える（ADR 0028）
@@ -201,6 +206,8 @@ function accessCommand(access: AccessStore, args: string[]): void {
     if (!room) throw new Error(`${target} 番のルームはありません。access で番号を確かめてください`)
     access.setReceive(room, mode)
     console.log(`受信モードを変えました: ${mask(room)}（${RECEIVE_MODES[mode]}）`)
+    // 値は読まずに、キーがあるかだけを見る（秘密情報のファイルは暗号化していることがある）
+    if (mode === "exceptOthersJev" && !process.env.RELAY_TYPESAFE_API_KEY && !secretKeys(envFile).includes("RELAY_TYPESAFE_API_KEY")) console.error(NO_JEV_KEY)
     return
   }
   console.log("ルーム:")
@@ -237,7 +244,7 @@ async function main(): Promise<void> {
       return accessCommand(access, rest)
     default:
       throw new Error(
-        "usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access [mode <番号か ID> <mention|exceptOthers|all>] | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota",
+        `usage: agent-chat-relay serve [harness] [--session-id <id>] [--workspace <dir>] [--harness-settings default] [--harness-memory] | pair <code> | access [mode <番号か ID> <${Object.keys(RECEIVE_MODES).join("|")}>] | secrets <line|chatwork|discord|typesafe> | line-tunnel | line-quota`,
       )
   }
 }

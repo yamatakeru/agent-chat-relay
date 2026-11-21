@@ -9,9 +9,10 @@ import { dirname } from "node:path"
 
 /**
  * 受信モード（ADR 0028）。mention：メンション（Bot の発言への返信を含む）のある発言だけを渡す。
- * exceptOthers：他人宛ての印があり、メンションのない発言を除いて渡す。all：すべて渡す
+ * exceptOthers：他人宛ての印があり、メンションのない発言を除いて渡す。
+ * exceptOthersJev：exceptOthers に加えて、Jev が他人宛てと判定した発言も除く（ADR 0029）。all：すべて渡す
  */
-export const RECEIVE_MODES = { mention: "メンション時", exceptOthers: "他人宛てを除く", all: "すべて" } as const
+export const RECEIVE_MODES = { mention: "メンション時", exceptOthers: "他人宛てを除く", exceptOthersJev: "他人宛てを除く（Jev）", all: "すべて" } as const
 export type ReceiveMode = keyof typeof RECEIVE_MODES
 
 export function isReceiveMode(v: unknown): v is ReceiveMode {
@@ -54,7 +55,8 @@ export type Inbound = {
 }
 
 export type GateResult =
-  | { action: "deliver" }
+  /** screen は、渡す前に、Jev で他人宛てかを判定する発言（ADR 0029） */
+  | { action: "deliver"; screen?: true }
   /** 登録したルームの、渡さない発言。履歴には残す。toOthers は、他人宛てとして外したとき */
   | { action: "record"; toOthers?: true }
   | { action: "drop" }
@@ -114,16 +116,9 @@ export class AccessStore {
     } else {
       const key = registrationOf(m.room)
       const policy = a.rooms[key]
-      if (!policy) {
-        // 未登録のルームでは、Bot に話しかけられたときだけコードを返す。スレッドなら、親を登録するコードになる
-        result = m.mentioned ? this.pair(a, "room", key) : { action: "drop" }
-      } else if ((policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) || (policy.receive === "mention" && !m.mentioned)) {
-        result = { action: "record" }
-      } else if (policy.receive === "exceptOthers" && !m.mentioned && m.toOthers) {
-        result = { action: "record", toOthers: true }
-      } else {
-        result = { action: "deliver" }
-      }
+      // 未登録のルームでは、Bot に話しかけられたときだけコードを返す。スレッドなら、親を登録するコードになる
+      if (!policy) result = m.mentioned ? this.pair(a, "room", key) : { action: "drop" }
+      else result = byPolicy(policy, m)
     }
     if (result.action === "pair") changed = true
     if (changed) this.save(a)
@@ -211,6 +206,16 @@ export class AccessStore {
     }
     return changed
   }
+}
+
+/** 登録したルームの発言を、そのルームの設定（許可する人と受信モード）で振り分ける */
+function byPolicy(policy: RoomPolicy, m: Inbound): GateResult {
+  if (policy.allowFrom.length > 0 && !policy.allowFrom.includes(m.sender)) return { action: "record" }
+  if (m.mentioned || policy.receive === "all") return { action: "deliver" }
+  if (policy.receive === "mention") return { action: "record" }
+  // 他人宛てを除くモード
+  if (m.toOthers) return { action: "record", toOthers: true }
+  return policy.receive === "exceptOthersJev" ? { action: "deliver", screen: true } : { action: "deliver" }
 }
 
 /**

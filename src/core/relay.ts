@@ -128,6 +128,15 @@ export type AttributionMessage = { sender: string; name: string; room: string; m
 export type AttributionQuery = { title: string; input: string; agentText: string; messages: AttributionMessage[] }
 /** 推した依頼者と、その確率。下限に届かないなど、推せなければ undefined */
 export type Attributor = (q: AttributionQuery) => Promise<{ sender: string; probability: number } | undefined>
+/**
+ * 他人宛ての判定（ADR 0029）に渡す発言。sender は、同じ人に同じ名前を付けるのにだけ使い、外へは送らない。
+ * fromMe は Bot の発言。name は表示名で、なければ空
+ */
+export type ScreenMessage = { sender: string; name: string; fromMe: boolean; text: string }
+/** service はサービスの名前、room はルームの名前（なければ空）。recent は、同じルームの直前の発言（古い順） */
+export type ScreenQuery = { service: string; room: string; recent: ScreenMessage[]; message: ScreenMessage }
+/** drop なら、他人宛てとして外す。probabilities はログに書く。判定できなければ undefined（渡す） */
+export type Screener = (q: ScreenQuery) => Promise<{ drop: boolean; probabilities: Record<string, number> } | undefined>
 /** always は「常に許可」（ADR 0015） */
 export type Verdict = "allow" | "always" | "deny"
 
@@ -227,6 +236,8 @@ export class Relay {
   private readonly sending = new Set<Promise<void>>()
   /** run() が動いていれば、その Promise */
   private runningTurns?: Promise<void>
+  /** 他人宛ての判定（ADR 0029）に回した発言と、その答え（true なら渡す）。渡した発言とともに消えるよう、WeakMap にする */
+  private readonly screening = new WeakMap<Incoming, Promise<boolean>>()
 
   constructor(
     private readonly access: AccessStore,
@@ -237,6 +248,8 @@ export class Relay {
     private readonly timing = NOTICE_TIMING,
     /** 送り手が複数いるターンで、承認依頼の依頼者を推す（Jev。ADR 0026）。なければ全員に送る */
     private readonly attribute?: Attributor,
+    /** 受信モードが「他人宛てを除く（Jev）」のルームで、他人宛てかを判定する（ADR 0029）。なければ「他人宛てを除く」と同じに動く */
+    private readonly screen?: Screener,
   ) {}
 
   addConnector(c: Connector): void {
@@ -292,6 +305,8 @@ export class Relay {
         .finally(() => ok && this.remindPending(m.sender))
       return r
     }
+    // 判定には、この発言より前の、同じルームの発言を渡す
+    if (r.screen && this.screen) this.screening.set(m, this.screenMessage(this.screen, m, [...(this.records.get(m.room) ?? [])]))
     this.record(m)
     this.queue.push(m)
     this.kick()
@@ -522,6 +537,32 @@ export class Relay {
     return [...rooms, ...a.allowFrom.map((user) => ({ chat_id: user, kind: "dm" as const }))]
   }
 
+  /** 他人宛てかを Jev で判定する。外すなら false。判定できなければ渡す（ADR 0029） */
+  private async screenMessage(screen: Screener, m: Incoming, recent: ChatMessage[]): Promise<boolean> {
+    const toScreen = (x: ChatMessage): ScreenMessage => ({ sender: x.sender, name: x.senderName ?? "", fromMe: x.fromMe === true, text: x.text })
+    const query = { service: this.connector(m.room)?.label ?? "", room: (await this.roomName(m.room)) ?? "", recent: recent.map(toScreen), message: toScreen(m) }
+    const r = await screen(query).catch((err) => {
+      this.log.error("他人宛てかを判定できませんでした", { error: String(err) })
+      return undefined
+    })
+    if (!r) return true
+    // 本文は書かない。しきい値を確かめられるよう、渡した発言の確率も書く
+    if (r.drop) this.log.info("他人宛ての発言を、エージェントに渡さずに記録しました", { room: m.room, reason: "jev", ...r.probabilities })
+    else this.log.info("Jev で他人宛てでないと判定し、渡しました", { room: m.room, ...r.probabilities })
+    return !r.drop
+  }
+
+  /**
+   * 待ち行列の、今ある発言を取り出す。他人宛ての判定を待っている発言があれば、その答えを待ち、外す発言を除く。
+   * 待つ間に届いた発言は残すので、発言の順番は変わらない
+   */
+  private async take(): Promise<Incoming[]> {
+    const batch = this.queue.slice()
+    const keep = await Promise.all(batch.map((m) => this.screening.get(m) ?? Promise.resolve(true)))
+    this.queue.splice(0, batch.length)
+    return batch.filter((_, i) => keep[i])
+  }
+
   private kick(): void {
     this.arrived?.()
     if (this.running || !this.session || this.queue.length === 0) return
@@ -532,7 +573,8 @@ export class Relay {
   private async run(): Promise<void> {
     try {
       while (this.session && this.queue.length > 0) {
-        const batch = this.queue.splice(0)
+        const batch = await this.take()
+        if (batch.length === 0) continue
         const text = await this.render(batch)
         const turnRooms = new Map<string, TurnRoom>()
         this.turn = turnRooms
@@ -571,7 +613,8 @@ export class Relay {
     for (;;) {
       if (done) return
       if (this.queue.length > 0) {
-        const batch = this.queue.splice(0)
+        const batch = await this.take()
+        if (batch.length === 0) continue
         try {
           const text = await this.render(batch)
           if (!done && (await steer(text))) {
