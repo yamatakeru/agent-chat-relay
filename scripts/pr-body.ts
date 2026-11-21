@@ -19,6 +19,11 @@ const pr = event ? JSON.parse(text).pull_request : undefined
 const body: string = event ? (pr?.body ?? "") : text
 // pull_request ワークフローのチェックアウト先はマージ用のコミットなので、CI では HEAD を使わない
 const head: string = event ? (pr?.head?.sha ?? "") : Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: import.meta.dir }).stdout.toString().trim()
-const errors = [...unverifiedErrors(body), ...draftHeadErrors(body, head)]
+/** 2 つのコミットの間で変わったファイル。コミットが見つからなければ undefined（CI は fetch-depth: 0 で履歴を取る） */
+const changed = (from: string, to: string) => {
+  const r = Bun.spawnSync(["git", "diff", "--name-only", from, to], { cwd: import.meta.dir, stderr: "pipe" })
+  return r.exitCode === 0 ? r.stdout.toString().split("\n").filter(Boolean) : undefined
+}
+const errors = [...unverifiedErrors(body), ...draftHeadErrors(body, head, changed)]
 for (const e of errors) console.error(e)
 if (errors.length) process.exit(1)

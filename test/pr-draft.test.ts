@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { draft, draftHeadErrors, type Mutation, parseMutation, type Results, testCounts, unverifiedErrors } from "../scripts/pr-draft.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { tempDir } from "./tmp.ts"
@@ -175,20 +175,43 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
     expect(unverifiedErrors("## 確認できなかったこと\n\n- **a**：x\n  - z\n（訂正）y\n  - 区分：手段なし\n")).toHaveLength(1)
   })
 
-  test("#109 の古い下書きを拒否し、先頭で作った下書きと下書きのない本文は通す", () => {
+  test("下書きのあとに文書以外が変わっていれば拒否し、文書だけの変更、先頭で作った下書き、下書きのない本文は通す", () => {
     const head = "03e08898995dc151bc6bcd381543271f2d334c55"
-    const stale = "<!-- bun run pre-pr が、コミット 4604684e で、main との差分から書いた下書き -->"
-    const staleError = draftHeadErrors(stale, head)
-    expect(staleError).toEqual([expect.stringContaining("最後のコミットで bun run pre-pr を走らせ直し")])
-    expect(staleError[0]).toContain(`（4604684e）が、先頭のコミット（${head}）`)
-    for (const spaces of [" ", "  ", "   "]) expect(draftHeadErrors(`${spaces}${stale}\r\n`, head)).toEqual(staleError)
+    const comment = (sha: string) => `<!-- bun run pre-pr が、コミット ${sha} で、main との差分から書いた下書き -->`
+    // 偽の git diff。記録したコミットごとに、先頭までに変わったファイルを返す
+    const diffs: Record<string, string[]> = {
+      // #109：下書きのあとは ADR の文言だけ
+      "4604684e": ["docs/adr/0026-route-permission-requests-to-requester.md", "AGENTS.md", ".agents/skills/pre-pr/SKILL.md"],
+      // 下書きのあとに、評価のスクリプトも変えた
+      "1f946465": ["docs/addressing-eval.md", "test/e2e/addressing.ts"],
+      "aaaaaaaa": ["src/a.ts", "src/b.ts", "scripts/c.ts", "package.json", "README.md"],
+      // 名前に docs や md を含むだけのものは、文書ではない
+      "bbbbbbbb": ["src/docs/a.ts", "scripts/md.ts", "a.md.ts"],
+    }
+    const calls: [string, string][] = []
+    const changed = (from: string, to: string) => (calls.push([from, to]), diffs[from])
+    expect(draftHeadErrors(comment("4604684e"), head, changed)).toEqual([])
+    expect(calls).toEqual([["4604684e", head]])
+    const code = draftHeadErrors(comment("1f946465"), head, changed)
+    expect(code).toEqual([`PR 本文の pre-pr 下書きのコミット（1f946465）のあと、先頭のコミット（${head}）までに、文書以外のファイル（test/e2e/addressing.ts）が変わった。最後のコミットで bun run pre-pr を走らせ直し、下書きから「確認」を更新する（skill pre-pr）`])
+    expect(draftHeadErrors(comment("aaaaaaaa"), head, changed)[0]).toContain("（src/a.ts、src/b.ts、scripts/c.ts ほか 1 件）")
+    expect(draftHeadErrors(comment("bbbbbbbb"), head, changed)[0]).toContain("（src/docs/a.ts、scripts/md.ts、a.md.ts）")
+    // 記録したコミットが見つからなければ拒否する
+    expect(draftHeadErrors(comment("cccccccc"), head, changed)).toEqual([expect.stringContaining("（cccccccc）が見つからない")])
+    // 先頭で作った下書き（完全な SHA と短縮 SHA）は、差分を取らずに通す
+    calls.length = 0
     const fresh = draft({ ...base, head })
-    expect(draftHeadErrors(fresh, head)).toEqual([])
-    expect(draftHeadErrors(fresh, "")).toEqual([expect.stringContaining("先頭のコミット（不明）")])
-    expect(draftHeadErrors(`${fresh}\n${stale}`, head)).toEqual(staleError)
-    expect(draftHeadErrors(fresh.replace(head, head.slice(0, 8)), head)).toEqual([])
-    expect(draftHeadErrors(fresh.replace(head, `余分な文字 ${head}`), head)).toEqual([expect.stringContaining("下書きのコミット（不明）")])
-    expect(draftHeadErrors(`## 変更\n\n- ${stale}\n`, head)).toEqual([])
+    expect(draftHeadErrors(fresh, head, changed)).toEqual([])
+    expect(draftHeadErrors(fresh.replace(head, head.slice(0, 8)), head, changed)).toEqual([])
+    expect(calls).toEqual([])
+    // 先頭か下書きのコミットが読めなければ拒否する
+    expect(draftHeadErrors(fresh, "", changed)).toEqual([expect.stringContaining("先頭のコミット（不明）が読めない")])
+    expect(draftHeadErrors(fresh.replace(head, `余分な文字 ${head}`), head, changed)).toEqual([expect.stringContaining("下書きのコミット（不明）")])
+    // 字下げ 3 文字までと CRLF の行も読む。下書きが複数あれば、それぞれ確かめる
+    for (const spaces of [" ", "  ", "   "]) expect(draftHeadErrors(`${spaces}${comment("1f946465")}\r\n`, head, changed)).toEqual(code)
+    expect(draftHeadErrors(`${fresh}\n${comment("1f946465")}`, head, changed)).toEqual(code)
+    // 地の文の中の同じ文字列は、下書きとして読まない
+    expect(draftHeadErrors(`## 変更\n\n- ${comment("1f946465")}\n`, head, changed)).toEqual([])
   })
 
   test("bun run pr-body は、本文のファイルと、GitHub のイベントの JSON を検査し、違反があれば 1 で終わる", () => {
@@ -206,16 +229,35 @@ describe("PR を出す前の下書き（ADR 0025）", () => {
       expect(run("--event", write("ok.json", JSON.stringify({ pull_request: { body: ok } }))).exitCode).toBe(0)
       // 本文のない PR（body が null）は通す
       expect(run("--event", write("null.json", JSON.stringify({ pull_request: { body: null } }))).exitCode).toBe(0)
-      const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: import.meta.dir }).stdout.toString().trim()
-      const other = "03e08898995dc151bc6bcd381543271f2d334c55"
+      // 下書きと先頭のコミットは、一時的な git のリポジトリに作る（CI の浅いチェックアウトには、このリポジトリの古いコミットがない）
+      const repo = join(dir, "repo")
+      const env = { ...process.env, GIT_DIR: join(repo, ".git"), GIT_WORK_TREE: repo }
+      const git = (...a: string[]) => Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { env, stdout: "pipe", stderr: "pipe" }).stdout.toString().trim()
+      const commit = (file: string, text: string) => {
+        mkdirSync(join(repo, dirname(file)), { recursive: true })
+        writeFileSync(join(repo, file), text)
+        git("add", "-A")
+        git("commit", "-q", "-m", file)
+        return git("rev-parse", "HEAD")
+      }
+      git("init", "-q", repo)
+      const drafted = commit("src/a.ts", "1")
+      const docsOnly = commit("docs/adr/x.md", "文言")
+      const head = commit("src/a.ts", "2")
+      const runIn = (...args: string[]) => Bun.spawnSync([...BUN_ISOLATED, join(import.meta.dir, "../scripts/pr-body.ts"), ...args], { env, stdout: "pipe", stderr: "pipe" })
       const confirmation = (sha: string) => `<!-- bun run pre-pr が、コミット ${sha} で、main との差分から書いた下書き -->`
-      const local = (sha: string) => run(write("draft.md", confirmation(sha)))
-      const ci = (sha: string) => run("--event", write("event.json", JSON.stringify({ pull_request: { body: confirmation(sha), head: { sha: other } } })))
+      const local = (sha: string) => runIn(write("draft.md", confirmation(sha)))
+      const ci = (sha: string, to: string) => runIn("--event", write("event.json", JSON.stringify({ pull_request: { body: confirmation(sha), head: { sha: to } } })))
+      // 手元では HEAD と比べる
       expect(local(head).exitCode).toBe(0)
-      expect(local(other).exitCode).toBe(1)
-      // CI ではチェックアウトしたコミットではなく、イベントの PR head と照合する
-      expect(ci(other).exitCode).toBe(0)
-      expect(ci(head).exitCode).toBe(1)
+      expect(local(docsOnly).exitCode).toBe(1)
+      // CI ではチェックアウトしたコミットではなく、イベントの PR の先頭と比べる。差分は git で取る
+      expect(ci(drafted, drafted).exitCode).toBe(0)
+      expect(ci(drafted, docsOnly).exitCode).toBe(0)
+      const stale = ci(drafted, head)
+      expect(stale.exitCode).toBe(1)
+      expect(stale.stderr.toString()).toContain("（src/a.ts）が変わった")
+      expect(ci("0123456789abcdef0123456789abcdef01234567", head).stderr.toString()).toContain("見つからない")
       expect(run().exitCode).toBe(2)
       expect(run("--event").exitCode).toBe(2)
     } finally {
