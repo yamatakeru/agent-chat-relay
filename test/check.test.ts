@@ -109,8 +109,8 @@ test("Jev への問い合わせか、その評価を変えたら、Jev の評価
     expect(e2eTargets([f], "")).toEqual([{ script: "scripts/jev-eval.sh --check", reasons: [f] }])
   }
   expect(e2eTargets(["test/e2e/conversations.ts"], "").map((t) => t.script)).toEqual(["test/e2e/addressing.sh", "scripts/jev-eval.sh --check"])
-  expect(e2eTargets(["x/src/jev.ts", "src/jev.tsx", "scripts/jev-eval.sh.orig"], "")).toEqual([])
-  expect(e2eTargets(["test/e2e/addressing-jev.ts.orig", "test/e2e/conversations.tsx"], "").map((t) => t.script)).toEqual(CORE)
+  expect(e2eTargets(["x/src/jev.ts", "src/jev.tsx", "x/scripts/jev-eval.sh", "scripts/jev-eval.sh.orig", "x/test/e2e/addressing-jev.ts", "x/test/e2e/conversations.ts"], "")).toEqual([])
+  for (const f of ["test/e2e/addressing-jev.ts.orig", "test/e2e/conversations.tsx"]) expect(e2eTargets([f], "").map((t) => t.script)).toEqual(CORE)
 })
 
 test("ハーネスのアダプターと ACP・MCP の SDK のバージョンを変えたら、e2e の中核を挙げる。ほかの依存では挙げない", () => {

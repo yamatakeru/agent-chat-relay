@@ -236,8 +236,8 @@ export class Relay {
   private readonly sending = new Set<Promise<void>>()
   /** run() が動いていれば、その Promise */
   private runningTurns?: Promise<void>
-  /** 待ち行列の発言のうち、他人宛ての判定（ADR 0029）を待っているもの。答えが true なら渡す */
-  private readonly screening = new Map<Incoming, Promise<boolean>>()
+  /** 他人宛ての判定（ADR 0029）に回した発言と、その答え（true なら渡す）。渡した発言とともに消えるよう、WeakMap にする */
+  private readonly screening = new WeakMap<Incoming, Promise<boolean>>()
 
   constructor(
     private readonly access: AccessStore,
@@ -560,7 +560,6 @@ export class Relay {
     const batch = this.queue.slice()
     const keep = await Promise.all(batch.map((m) => this.screening.get(m) ?? Promise.resolve(true)))
     this.queue.splice(0, batch.length)
-    for (const m of batch) this.screening.delete(m)
     return batch.filter((_, i) => keep[i])
   }
 

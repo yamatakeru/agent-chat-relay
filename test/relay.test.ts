@@ -766,11 +766,16 @@ describe("relay", () => {
 
     test("Jev が他人宛てと判定した発言は、記録だけして渡さない。本文を書かずに、確率をログに残す", async () => {
       const infos: { m: string; extra?: Record<string, unknown> }[] = []
-      const { screen } = screening(drop("ボブさん、それ急ぎ？"))
+      const { screen, queries } = screening(drop("ボブさん、それ急ぎ？"))
       const relay = jevSetup(screen, { info: (m, extra) => void infos.push({ m, extra }), error: () => {} })
       const prompts: string[] = []
       relay.attach(workingSession(prompts))
       expect(relay.receive(msg({ text: "ボブさん、それ急ぎ？", mentioned: false }))).toEqual({ action: "deliver", screen: true, acknowledge: false })
+      await Bun.sleep(5)
+      // 外した発言だけなら、ターンを起こさない
+      expect(prompts).toEqual([])
+      // ルームの名前が分からなければ、空にする
+      expect(queries[0]!.room).toBe("")
       relay.receive(msg({ text: "だれか分かる？", mentioned: false }))
       await Bun.sleep(5)
       expect(prompts.join("\n")).not.toContain("急ぎ")
@@ -3242,7 +3247,15 @@ describe("Jev で他人宛てを判定する要求と答え（ADR 0029）", () =
     expect(body.state.recent_messages[2].text).toHaveLength(1000)
     expect(body.state.message).toEqual({ person: "p1", name: "アリス", text: "今週だけで" })
     expect(Object.keys(body.questions)).toEqual(["agent", "other", "answers_agent"])
-    for (const q of Object.values(body.questions)) expect(q).toMatchObject({ type: "noul" })
+    for (const q of Object.values(body.questions) as { type: string; instructions: string; criteria?: Record<string, string> }[]) {
+      expect(q.type).toBe("noul")
+      // 問いは、state の項目を名前で指す（TypeSafe AI の推奨）。指す項目は state にある
+      const refs = [...q.instructions.matchAll(/`([a-z_]+)(\.[a-z_]+)?`/g)].map((r) => r[1]!)
+      expect(refs.length).toBeGreaterThan(0)
+      for (const r of refs) expect(Object.keys(body.state)).toContain(r)
+      for (const c of Object.values(q.criteria ?? {})) expect(c).not.toBe("")
+    }
+    expect(body.state.agent).toContain("`agent`")
     expect(JSON.stringify(body)).not.toContain(ALICE)
     expect(JSON.stringify(body)).not.toContain(BOB)
     // 直前の発言は、新しい方から数える。名前は、送る発言の中で付ける。0 なら送らない
