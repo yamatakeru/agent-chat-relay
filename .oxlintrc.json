@@ -11,6 +11,18 @@
       "rules": {
         "typescript/await-thenable": "off"
       }
+    },
+    {
+      "files": ["test/**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "patterns": [{
+            "regex": "^(node:)?fs(/promises)?$",
+            "importNames": ["mkdtemp", "mkdtempSync", "mkdtempDisposable", "mkdtempDisposableSync"],
+            "message": "test/tmp.ts の tempDir() を使う。ミューテーションでテストが途中で止まっても一時ディレクトリを片付けるため。"
+          }]
+        }]
+      }
     }
   ]
 }

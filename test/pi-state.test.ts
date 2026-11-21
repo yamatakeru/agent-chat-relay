@@ -1,13 +1,12 @@
 import assert from "node:assert/strict"
 import { test } from "bun:test"
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, linkSync, mkdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { preparePiState } from "../src/harness/pi/state.ts"
+import { tempDir } from "./tmp.ts"
 
 function fixture(run: (home: string, cwd: string, outside: string) => void) {
-  const local = join(import.meta.dir, "..", ".local")
-  mkdirSync(local, { recursive: true })
-  const root = realpathSync(mkdtempSync(join(local, "test-pi-state-")))
+  const root = realpathSync(tempDir("test-pi-state-"))
   try {
     const cwd = join(root, "workspace")
     mkdirSync(cwd)

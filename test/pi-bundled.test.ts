@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { test } from "bun:test"
 import { randomBytes } from "node:crypto"
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { delimiter, dirname, join, resolve } from "node:path"
 import type { Log, PermissionRequest, Verdict } from "../src/core/relay.ts"
+import { tempDir } from "./tmp.ts"
 
 const repo = join(import.meta.dir, "..")
 // npm pack した配布物でも、同じテストをそのまま実行する。
@@ -16,9 +17,7 @@ const { preparePiState } = await import(join(src, "harness/pi/state.ts")) as typ
 const { BUN_ISOLATED } = await import(join(src, "harness/config.ts")) as typeof import("../src/harness/config.ts")
 
 test("同梱 pi が新規・再開で reply し、組み込みツールに ACP の実行承認を求める", async () => {
-  const local = join(repo, ".local")
-  mkdirSync(local, { recursive: true })
-  const dir = realpathSync(mkdtempSync(join(local, "test-pi-")))
+  const dir = realpathSync(tempDir("test-pi-"))
   const cwd = join(dir, "project", "workspace")
   const otherCwd = join(dir, "other")
   const home = join(dir, "home")
