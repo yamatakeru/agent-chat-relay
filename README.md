@@ -1,8 +1,14 @@
 # agent-chat-relay
 
+> **このリポジトリでの開発・配布は終了しました。** 開発は Dot-labo の非公開リポジトリに移り、CLI は npm で公開しています。新規インストールは [`@dotlabo/agent-chat-relay`](https://www.npmjs.com/package/@dotlabo/agent-chat-relay) を使ってください。旧版をお使いの方は[移行手順](#旧版からの移行)を参照してください。
+>
+> このリポジトリは、[issue](https://github.com/yamatakeru/agent-chat-relay/issues?q=is%3Aissue+is%3Aclosed)・[PR](https://github.com/yamatakeru/agent-chat-relay/pulls?q=is%3Apr+is%3Aclosed)・[リリース](https://github.com/yamatakeru/agent-chat-relay/releases)など、移行前の記録を参照できるよう公開したままにします。新規 issue・PR はこのリポジトリでは受け付けません。
+
 LINE・Chatwork・Discord のルームから、Claude Code などのコーディングエージェントに作業を依頼するための中継サーバーです。
 
 ルームでの発言をエージェントのセッションに渡し、エージェントは MCP ツールを使ってルームに返信します。エージェントとは ACP（Agent Client Protocol）でやり取りするので、特定のエージェントに固有の機能には依存しません。設計の経緯は [ADR 0006](docs/adr/0006-own-core-drives-any-harness-over-acp.md) にあります。
+
+以下の機能・対応状況と使い方は、移行前の記録です。現在の配布版については npm のパッケージページを参照してください。
 
 ## 主な機能
 
@@ -35,10 +41,28 @@ LINE・Chatwork・Discord のルームから、Claude Code などのコーディ
 ## インストール
 
 ```sh
-bun install -g agent-chat-relay
+bun install -g @dotlabo/agent-chat-relay
 ```
 
-`npm install -g agent-chat-relay` でもインストールできます（実行には Bun を使います）。コマンドは `agent-chat-relay` で、`ac-relay` という短い別名もあります。
+`npm install -g @dotlabo/agent-chat-relay` でもインストールできます（実行には Bun を使います）。コマンド名は変わりません。`agent-chat-relay` と、別名の `ac-relay` が使えます。
+
+## 旧版からの移行
+
+### 旧 npm パッケージからの移行
+
+1. 中継を止め、データの置き場（既定は `~/.agent-chat-relay/`）と、別の場所に保存している設定があればそれもバックアップします。
+2. コマンド名が同じなので、旧パッケージをインストールしたときと同じパッケージマネージャーで先に削除します。Bun なら `bun remove -g agent-chat-relay`、npm なら `npm uninstall -g agent-chat-relay` です。その後、上の手順で新しいパッケージをインストールします。
+3. これまで `RELAY_HOME` や `RELAY_ENV_FILE` を指定していた場合は、引き続き同じ場所を指定します。ルームの登録、許可リスト、秘密情報は入れ直す必要はありません。`agent-chat-relay access` で登録・許可とルームの受信モードを確認してから、従来の引数で起動します。
+
+新しい版が `access.json` を書き直すと、旧版は新しい形式の受信モードを読み取れません。旧版に戻す場合は、起動前に移行前の `access.json` をバックアップから復元してください。
+
+### clone して使っていた環境からの移行
+
+`scripts/relay.sh` で使っていたデータは、自動では移りません。中継を止めてデータをバックアップし、新しいパッケージをインストールしてから、次の手順で設定します。
+
+1. データの置き場（既定は `~/.agent-chat-relay/`）を自分だけが読み書きできるようにし、旧リポジトリの `.local/relay/access.json` をコピーします。移行先にすでに `access.json` がある場合は、上書きせず、中継ごとに `RELAY_HOME` を分けます。
+2. dotenvx で暗号化した `.env` はそのまま使えません。`agent-chat-relay secrets chatwork` などで、使っているサービスの秘密情報を入れ直します。旧リポジトリの `.env` や `.env.keys` をコピーする必要はありません。
+3. `agent-chat-relay access` で登録と許可を確認してから起動します。作業ディレクトリを変更すると、旧セッションは `--session-id` で再開できません。旧作業ディレクトリのファイルが必要なら、新しい作業ディレクトリにコピーします。
 
 ## 使い方
 
@@ -88,7 +112,7 @@ agent-chat-relay serve
 
 ## 開発
 
-リポジトリを clone し、`scripts/relay.sh` で動かします。コマンドは `agent-chat-relay` と同じです。データはリポジトリ内の `.local/relay/` に置き、秘密情報は dotenvx で暗号化してリポジトリ直下の `.env` に保存します（public リポジトリに誤ってコミットしても漏れないようにするため）。
+移行前、このリポジトリを clone して開発するときは `scripts/relay.sh` で動かしていました。コマンドは `agent-chat-relay` と同じです。データはリポジトリ内の `.local/relay/` に置き、秘密情報は dotenvx で暗号化してリポジトリ直下の `.env` に保存します（public リポジトリに誤ってコミットしても漏れないようにするため）。
 
 ```sh
 git clone https://github.com/yamatakeru/agent-chat-relay.git
@@ -104,27 +128,13 @@ scripts/relay.sh serve
 - [dotenvx](https://dotenvx.com/)：`scripts/relay.sh secrets` で使います。1.51 と 2.38 で動作を確認しています。インストール方法は、`brew tap dotenvx/brew && brew trust dotenvx/brew && brew install dotenvx`、`mise use -g dotenvx`、`curl -sfS https://dotenvx.sh | sh`、`npm i -g @dotenvx/dotenvx` のいずれかです。使わない場合は、`.env` を作らずに、秘密情報を環境変数で渡してください。
 - テストは `mise exec -- bun test`、型検査と lint（Oxlint）は `mise exec -- bun run check`、変更した行のミューテーションテストは `mise exec -- bun run mutation` です（ADR 0021）。`bun run mutation` は、走らせる e2e も表示します（ADR 0023）。PR を出す前は `mise exec -- bun run pre-pr` で、これらをまとめて走らせ、PR 本文の「確認」の下書きを得ます。書いた本文は、PR を作る前に `mise exec -- bun run pr-body <本文のファイル>` で確かめます。CI も PR の本文に同じ検査をかけます（ADR 0025）。実際のハーネスを使う確認は [docs/relay-setup.md](docs/relay-setup.md#モックでの確認) にあります。
 
-### clone して使っていた環境からの移行
-
-`scripts/relay.sh` で使っていたデータは、自動では移りません。インストールした `agent-chat-relay` に移るときは、中継を止めてから、次のようにします。
-
-```sh
-mkdir -p ~/.agent-chat-relay && chmod 700 ~/.agent-chat-relay
-cp <リポジトリ>/.local/relay/access.json ~/.agent-chat-relay/
-agent-chat-relay secrets chatwork   # 使っているサービスの分だけ、入れ直す
-```
-
-- ルームの登録と許可リスト（`access.json`）は、そのまま使えます。
-- 秘密情報は、dotenvx で暗号化した `.env` を読めないので、入れ直します。
-- 作業ディレクトリの場所が変わるので、前のセッションは `--session-id` で再開できません（再開できるのは、同じ作業ディレクトリで作ったセッションだけです）。前の作業ディレクトリの中身が必要なら、`~/.agent-chat-relay/workspace/` に移してください。
-
 ## ドキュメント
 
 | ファイル | 内容 |
 |---|---|
 | [docs/relay-setup.md](docs/relay-setup.md) | チャットサービスの準備、起動、ペアリング、動作確認の項目 |
 | [docs/relay.md](docs/relay.md) | 仕様 |
-| [docs/releasing.md](docs/releasing.md) | npm へのリリースの手順 |
+| [docs/releasing.md](docs/releasing.md) | 旧パッケージのリリース手順の記録 |
 | [docs/adr/](docs/adr/) | 設計判断の記録 |
 | [GLOSSARY.md](GLOSSARY.md) | 用語集 |
 

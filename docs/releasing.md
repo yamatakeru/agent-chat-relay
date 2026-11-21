@@ -1,6 +1,8 @@
 # リリースの手順
 
-npm のパッケージ `agent-chat-relay` の新しいバージョンを公開する手順です。0.1.1 以降は、GitHub Actions から、trusted publishing（OIDC）と staged publishing で上げます（ADR 0022）。0.1.0 は、手元から公開しました。
+> この文書は旧パッケージの公開手順の記録です。このリポジトリから新しいリリースは出しません。現在の配布先と移行手順は [README](../README.md#旧版からの移行) を参照してください。
+
+npm のパッケージ `agent-chat-relay` の新しいバージョンを公開していたときの手順です。0.1.1 以降は、GitHub Actions から、trusted publishing（OIDC）と staged publishing で上げます（ADR 0022）。0.1.0 は、手元から公開しました。
 
 ## 流れ
 
