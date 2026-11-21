@@ -139,10 +139,25 @@ describe("access コマンド", () => {
     writeFileSync(file(), before)
     const bad = run(["mode", "1", "others"])
     expect(bad.exitCode).toBe(1)
-    expect(bad.stderr.toString()).toContain("mention|exceptOthers|all")
+    expect(bad.stderr.toString()).toContain("mention|exceptOthers|exceptOthersJev|all")
     expect(run(["mode", "2", "all"]).stderr.toString()).toContain("2 番のルームはありません")
     expect(run(["mode", "line:Cb", "all"]).stderr.toString()).toContain("登録していないルーム")
     expect(readFileSync(file(), "utf8")).toBe(before)
+  })
+
+  test("Jev で判定する受信モードにしたとき、Jev の API キーがなければ警告する。キーの値は読まない（ADR 0029）", () => {
+    mkdirSync(join(dir, "home"))
+    writeFileSync(file(), JSON.stringify({ allowFrom: [], rooms: { "line:Ca": { receive: "mention", allowFrom: [] } }, pending: {} }))
+    const noKey = run(["mode", "1", "exceptOthersJev"])
+    expect(noKey.exitCode).toBe(0)
+    expect(noKey.stdout.toString()).toContain("line:C…（他人宛てを除く（Jev））")
+    expect(noKey.stderr.toString()).toContain("Jev の API キーがないため")
+    expect(run([]).stdout.toString()).toContain("1. line:C…  他人宛てを除く（Jev）")
+    // ほかの受信モードでは警告しない
+    expect(run(["mode", "1", "exceptOthers"]).stderr.toString()).toBe("")
+    // 暗号化した値でも、キーがあれば警告しない
+    writeFileSync(join(dir, "home", ".env"), 'RELAY_TYPESAFE_API_KEY="encrypted:xxxx"\n', { mode: 0o600 })
+    expect(run(["mode", "1", "exceptOthersJev"]).stderr.toString()).toBe("")
   })
 })
 
@@ -191,6 +206,22 @@ describe("serve コマンド", () => {
     expect(r.exitCode).toBe(1)
     expect(r.stderr.toString()).toContain("RELAY_JEV_MIN_PROBABILITY")
     expect(existsSync(join(ws, ".relay"))).toBe(false)
+    const context = serve(join(dir, ".env"), ws, { env: { RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_CONTEXT_MESSAGES: "31" } })
+    expect(context.exitCode).toBe(1)
+    expect(context.stderr.toString()).toContain("RELAY_JEV_CONTEXT_MESSAGES")
+    expect(existsSync(join(ws, ".relay"))).toBe(false)
+  })
+
+  test("Jev で判定する受信モードのルームがあるのに、Jev の API キーがなければ、起動時に警告する（ADR 0029）", () => {
+    const ws = join(dir, "ws")
+    mkdirSync(ws)
+    mkdirSync(join(dir, "home"))
+    const access = (receive: string) => writeFileSync(join(dir, "home", "access.json"), JSON.stringify({ allowFrom: [], rooms: { "line:Ca": { receive, allowFrom: [] } }, pending: {} }))
+    access("exceptOthersJev")
+    expect(serve(join(dir, ".env"), ws).stderr.toString()).toContain("Jev の API キーがないため")
+    expect(serve(join(dir, ".env"), ws, { env: { RELAY_TYPESAFE_API_KEY: "k" } }).stderr.toString()).not.toContain("Jev の API キーがないため")
+    access("exceptOthers")
+    expect(serve(join(dir, ".env"), ws).stderr.toString()).not.toContain("Jev の API キーがないため")
   })
 })
 

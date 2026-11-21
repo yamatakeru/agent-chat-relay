@@ -1,0 +1,929 @@
+{
+  "date": "2026-11-21",
+  "rows": [
+    {
+      "set": "main",
+      "index": 1,
+      "name": "ボブ",
+      "text": "おはようございます",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.44,
+        "other": 0.06,
+        "answersAgent": 0.05
+      },
+      "ms": 359
+    },
+    {
+      "set": "main",
+      "index": 2,
+      "name": "アリス",
+      "text": "ボブさん、昨日のレビューありがとう",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.99,
+        "answersAgent": 0.05
+      },
+      "ms": 223
+    },
+    {
+      "set": "main",
+      "index": 3,
+      "name": "ボブ",
+      "text": "いえいえ、こちらこそ助かりました",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.09,
+        "other": 0.82,
+        "answersAgent": 0.04
+      },
+      "ms": 206
+    },
+    {
+      "set": "main",
+      "index": 4,
+      "name": "アリス",
+      "text": "Python で辞書をキーの順に並べ替えるのって、どう書くんだっけ？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.51,
+        "other": 0.05,
+        "answersAgent": 0.09
+      },
+      "ms": 283
+    },
+    {
+      "set": "main",
+      "index": 5,
+      "name": "ボブ",
+      "text": "sorted に items を渡すやつですね",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.44,
+        "other": 0.34,
+        "answersAgent": 0.05
+      },
+      "ms": 198
+    },
+    {
+      "set": "main",
+      "index": 6,
+      "name": "アリス",
+      "text": "なるほど、ありがとう",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.65,
+        "other": 0.18,
+        "answersAgent": 0.06
+      },
+      "ms": 200
+    },
+    {
+      "set": "main",
+      "index": 7,
+      "name": "カオル",
+      "text": "みんな、UTC の 15 時って日本時間だと何時だっけ？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.13,
+        "other": 0.08,
+        "answersAgent": 0.03
+      },
+      "ms": 201
+    },
+    {
+      "set": "main",
+      "index": 8,
+      "name": "アリス",
+      "text": "カオルさん、例の見積もりって今日中に送れそう？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.99,
+        "answersAgent": 0.04
+      },
+      "ms": 241
+    },
+    {
+      "set": "main",
+      "index": 9,
+      "name": "カオル",
+      "text": "夕方には送ります！",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.06,
+        "other": 0.72,
+        "answersAgent": 0.03
+      },
+      "ms": 199
+    },
+    {
+      "set": "main",
+      "index": 10,
+      "name": "ボブ",
+      "text": "だれか、git で直前のコミットのメッセージだけ直すコマンド覚えてる？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.18,
+        "other": 0.05,
+        "answersAgent": 0.03
+      },
+      "ms": 207
+    },
+    {
+      "set": "main",
+      "index": 11,
+      "name": "アリス",
+      "text": "お昼どうする？",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.16,
+        "other": 0.08,
+        "answersAgent": 0.02
+      },
+      "ms": 214
+    },
+    {
+      "set": "main",
+      "index": 12,
+      "name": "カオル",
+      "text": "そば行きたいです",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.12,
+        "other": 0.13,
+        "answersAgent": 0.04
+      },
+      "ms": 199
+    },
+    {
+      "set": "main",
+      "index": 13,
+      "name": "アリス",
+      "text": "この JSON、どこがおかしいんだろう {\"a\": 1, \"b\": [2, 3,]}",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.38,
+        "other": 0.06,
+        "answersAgent": 0.03
+      },
+      "ms": 193
+    },
+    {
+      "set": "main",
+      "index": 14,
+      "name": "アリス",
+      "text": "じゃあ、末尾のカンマを消せば読めるようになる？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.65,
+        "other": 0.1,
+        "answersAgent": 0.11
+      },
+      "ms": 245
+    },
+    {
+      "set": "main",
+      "index": 15,
+      "name": "カオル",
+      "text": "アリスさん、その JSON って何に使うやつですか？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.99,
+        "answersAgent": 0.04
+      },
+      "ms": 197
+    },
+    {
+      "set": "main",
+      "index": 16,
+      "name": "アリス",
+      "text": "デプロイの設定ファイルだよ",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.17,
+        "other": 0.72,
+        "answersAgent": 0.05
+      },
+      "ms": 173
+    },
+    {
+      "set": "main",
+      "index": 17,
+      "name": "ボブ",
+      "text": "ちなみに 1 マイルって何キロだっけ",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.25,
+        "other": 0.05,
+        "answersAgent": 0.03
+      },
+      "ms": 210
+    },
+    {
+      "set": "main",
+      "index": 18,
+      "name": "カオル",
+      "text": "マイル表記、分かりにくいですよね",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.24,
+        "other": 0.08,
+        "answersAgent": 0.04
+      },
+      "ms": 191
+    },
+    {
+      "set": "main",
+      "index": 19,
+      "name": "アリス",
+      "text": "ボブさん、来週の休みの件、もう上長に伝えた？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.99,
+        "answersAgent": 0.02
+      },
+      "ms": 175
+    },
+    {
+      "set": "main",
+      "index": 20,
+      "name": "ボブ",
+      "text": "まだです、今日中に伝えます",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.07,
+        "other": 0.76,
+        "answersAgent": 0.03
+      },
+      "ms": 292
+    },
+    {
+      "set": "main",
+      "index": 21,
+      "name": "ボブ",
+      "text": "これ、来週までにだれかやっておいてくれると嬉しいなあ",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.19,
+        "other": 0.09,
+        "answersAgent": 0.03
+      },
+      "ms": 205
+    },
+    {
+      "set": "main",
+      "index": 22,
+      "name": "ボブ",
+      "text": "あとで飲み物買ってきます",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.09,
+        "other": 0.08,
+        "answersAgent": 0.03
+      },
+      "ms": 180
+    },
+    {
+      "set": "main",
+      "index": 23,
+      "name": "アリス",
+      "text": "ありがとう、お茶でお願い",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.23,
+        "other": 0.44,
+        "answersAgent": 0.04
+      },
+      "ms": 181
+    },
+    {
+      "set": "main",
+      "index": 24,
+      "name": "カオル",
+      "text": "正規表現で、行頭の空白だけ消すのってどう書くんでしたっけ？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.43,
+        "other": 0.06,
+        "answersAgent": 0.03
+      },
+      "ms": 297
+    },
+    {
+      "set": "main",
+      "index": 25,
+      "name": "アリス",
+      "text": "カオルさん、それ急ぎ？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.99,
+        "answersAgent": 0.04
+      },
+      "ms": 189
+    },
+    {
+      "set": "holdout",
+      "index": 1,
+      "name": "カオル",
+      "text": "今日は暑いですね",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.16,
+        "other": 0.04,
+        "answersAgent": 0.08
+      },
+      "ms": 198
+    },
+    {
+      "set": "holdout",
+      "index": 2,
+      "name": "アリス",
+      "text": "ほんとに。エアコン強めにしようかな",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.13,
+        "other": 0.47,
+        "answersAgent": 0.06
+      },
+      "ms": 186
+    },
+    {
+      "set": "holdout",
+      "index": 3,
+      "name": "ボブ",
+      "text": "これって英語でなんて言うんだっけ、「締め切りを延ばす」",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.57,
+        "other": 0.06,
+        "answersAgent": 0.16
+      },
+      "ms": 226
+    },
+    {
+      "set": "holdout",
+      "index": 4,
+      "name": "ボブ",
+      "text": "もう少しカジュアルな言い方もある？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.85,
+        "other": 0.07,
+        "answersAgent": 0.09
+      },
+      "ms": 240
+    },
+    {
+      "set": "holdout",
+      "index": 5,
+      "name": "カオル",
+      "text": "ボブさん、それ先方へのメールで使うんですか？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.04,
+        "other": 0.98,
+        "answersAgent": 0.07
+      },
+      "ms": 230
+    },
+    {
+      "set": "holdout",
+      "index": 6,
+      "name": "ボブ",
+      "text": "そうそう、午後に送る予定",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.27,
+        "other": 0.65,
+        "answersAgent": 0.06
+      },
+      "ms": 183
+    },
+    {
+      "set": "holdout",
+      "index": 7,
+      "name": "アリス",
+      "text": "了解です",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.13,
+        "other": 0.27,
+        "answersAgent": 0.05
+      },
+      "ms": 171
+    },
+    {
+      "set": "holdout",
+      "index": 8,
+      "name": "カオル",
+      "text": "計算得意な人いますか？ 2,480 円の 3 割引きっていくら？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.36,
+        "other": 0.06,
+        "answersAgent": 0.06
+      },
+      "ms": 220
+    },
+    {
+      "set": "holdout",
+      "index": 9,
+      "name": "アリス",
+      "text": "カオルさん、それ経費で落ちるやつ？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.03,
+        "other": 0.98,
+        "answersAgent": 0.03
+      },
+      "ms": 241
+    },
+    {
+      "set": "holdout",
+      "index": 10,
+      "name": "カオル",
+      "text": "たぶん大丈夫です",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.09,
+        "other": 0.75,
+        "answersAgent": 0.04
+      },
+      "ms": 213
+    },
+    {
+      "set": "holdout",
+      "index": 11,
+      "name": "アリス",
+      "text": "シェルで、カレントディレクトリの中の一番大きいファイルを探すには？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.52,
+        "other": 0.05,
+        "answersAgent": 0.04
+      },
+      "ms": 196
+    },
+    {
+      "set": "holdout",
+      "index": 12,
+      "name": "ボブ",
+      "text": "それ、ボットに聞いてみたら？",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.56,
+        "other": 0.26,
+        "answersAgent": 0.06
+      },
+      "ms": 235
+    },
+    {
+      "set": "holdout",
+      "index": 13,
+      "name": "カオル",
+      "text": "なんでこのビルド、こんなに遅いんだろうね",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.22,
+        "other": 0.06,
+        "answersAgent": 0.04
+      },
+      "ms": 185
+    },
+    {
+      "set": "holdout",
+      "index": 14,
+      "name": "ボブ",
+      "text": "アリスさん、明日の打ち合わせ、10 時からで合ってます？",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.98,
+        "answersAgent": 0.03
+      },
+      "ms": 226
+    },
+    {
+      "set": "holdout",
+      "index": 15,
+      "name": "アリス",
+      "text": "合ってます！",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.04,
+        "other": 0.81,
+        "answersAgent": 0.03
+      },
+      "ms": 225
+    },
+    {
+      "set": "holdout",
+      "index": 16,
+      "name": "カオル",
+      "text": "ねえ、HTTP の 418 ってなんのステータスだっけ",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.46,
+        "other": 0.07,
+        "answersAgent": 0.02
+      },
+      "ms": 177
+    },
+    {
+      "set": "holdout",
+      "index": 17,
+      "name": "カオル",
+      "text": "へえ、そんなのあるんだ",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.74,
+        "other": 0.12,
+        "answersAgent": 0.04
+      },
+      "ms": 217
+    },
+    {
+      "set": "holdout",
+      "index": 18,
+      "name": "ボブ",
+      "text": "今週の金曜、飲み会行ける人？",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.09,
+        "other": 0.06,
+        "answersAgent": 0.03
+      },
+      "ms": 182
+    },
+    {
+      "set": "holdout",
+      "index": 19,
+      "name": "アリス",
+      "text": "行きます〜",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.06,
+        "other": 0.29,
+        "answersAgent": 0.03
+      },
+      "ms": 1307
+    },
+    {
+      "set": "holdout",
+      "index": 20,
+      "name": "ボブ",
+      "text": "TypeScript で、配列から重複を取り除く一番短い書き方って？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.46,
+        "other": 0.05,
+        "answersAgent": 0.04
+      },
+      "ms": 215
+    },
+    {
+      "set": "holdout",
+      "index": 21,
+      "name": "アリス",
+      "text": "ボブさん、例の資料あとで見ておきますね",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.02,
+        "other": 0.98,
+        "answersAgent": 0.02
+      },
+      "ms": 257
+    },
+    {
+      "set": "holdout",
+      "index": 22,
+      "name": "ボブ",
+      "text": "ありがとうございます！",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.74,
+        "other": 0.12,
+        "answersAgent": 0.14
+      },
+      "ms": 424
+    },
+    {
+      "set": "holdout",
+      "index": 23,
+      "name": "カオル",
+      "text": "ところで、cron で毎週月曜の朝 9 時って、どう書くんでしたっけ",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.49,
+        "other": 0.07,
+        "answersAgent": 0.03
+      },
+      "ms": 1582
+    },
+    {
+      "set": "holdout",
+      "index": 24,
+      "name": "アリス",
+      "text": "お先に失礼します",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.09,
+        "other": 0.08,
+        "answersAgent": 0.02
+      },
+      "ms": 690
+    },
+    {
+      "set": "extra",
+      "index": 1,
+      "name": "アリス",
+      "text": "今週の分だけでいいよ",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.93,
+        "other": 0.1,
+        "answersAgent": 0.99
+      },
+      "ms": 655
+    },
+    {
+      "set": "extra",
+      "index": 2,
+      "name": "ボブ",
+      "text": "カオルさん、議事録のフォルダの場所ってどこでしたっけ",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.06,
+        "other": 0.97,
+        "answersAgent": 0.03
+      },
+      "ms": 627
+    },
+    {
+      "set": "extra",
+      "index": 3,
+      "name": "カオル",
+      "text": "共有ドライブの「会議」の下です",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.05,
+        "other": 0.67,
+        "answersAgent": 0.03
+      },
+      "ms": 632
+    },
+    {
+      "set": "extra",
+      "index": 4,
+      "name": "ボブ",
+      "text": "カオルさんが言ってた Docker のエラー、どうやったら直るんだろう",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.18,
+        "other": 0.66,
+        "answersAgent": 0.03
+      },
+      "ms": 697
+    },
+    {
+      "set": "extra",
+      "index": 5,
+      "name": "カオル",
+      "text": "port is already allocated って出てます",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.66,
+        "other": 0.2,
+        "answersAgent": 0.84
+      },
+      "ms": 670
+    },
+    {
+      "set": "extra",
+      "index": 6,
+      "name": "アリス",
+      "text": "ボブさん、カオルさん、どっちか分かる？ 来月の勉強会の日程",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.05,
+        "other": 0.98,
+        "answersAgent": 0.05
+      },
+      "ms": 760
+    },
+    {
+      "set": "extra",
+      "index": 7,
+      "name": "ボブ",
+      "text": "第 2 金曜だったと思います",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.09,
+        "other": 0.36,
+        "answersAgent": 0.07
+      },
+      "ms": 880
+    },
+    {
+      "set": "extra",
+      "index": 8,
+      "name": "アリス",
+      "text": "ボブさん、ついでに聞くけど、Go の goroutine ってスレッドと何が違うの？",
+      "want": "either",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.06,
+        "other": 0.98,
+        "answersAgent": 0.04
+      },
+      "ms": 641
+    },
+    {
+      "set": "extra",
+      "index": 9,
+      "name": "ボブ",
+      "text": "うーん、自信ないです",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.12,
+        "other": 0.56,
+        "answersAgent": 0.04
+      },
+      "ms": 1878
+    },
+    {
+      "set": "extra",
+      "index": 10,
+      "name": "アリス",
+      "text": "了解、ありがとう",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.12,
+        "other": 0.54,
+        "answersAgent": 0.04
+      },
+      "ms": 908
+    },
+    {
+      "set": "extra",
+      "index": 11,
+      "name": "カオル",
+      "text": "さっきの docker ps、止めたら動きました！",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.55,
+        "other": 0.17,
+        "answersAgent": 0.51
+      },
+      "ms": 773
+    },
+    {
+      "set": "extra",
+      "index": 12,
+      "name": "ボブ",
+      "text": "アリスさん、さっきの件、あとで電話します",
+      "want": "silent",
+      "drop": true,
+      "probabilities": {
+        "agent": 0.01,
+        "other": 0.99,
+        "answersAgent": 0.03
+      },
+      "ms": 822
+    },
+    {
+      "set": "extra",
+      "index": 13,
+      "name": "アリス",
+      "text": "OK",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.08,
+        "other": 0.64,
+        "answersAgent": 0.04
+      },
+      "ms": 812
+    },
+    {
+      "set": "extra",
+      "index": 14,
+      "name": "カオル",
+      "text": "アリスさんの言ってた勉強会って、何をやるんでしたっけ？",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.1,
+        "other": 0.58,
+        "answersAgent": 0.03
+      },
+      "ms": 759
+    },
+    {
+      "set": "extra",
+      "index": 15,
+      "name": "アリス",
+      "text": "Rust 入門だよ",
+      "want": "silent",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.07,
+        "other": 0.77,
+        "answersAgent": 0.03
+      },
+      "ms": 175
+    },
+    {
+      "set": "extra",
+      "index": 16,
+      "name": "ボブ",
+      "text": "それなら、Rust の所有権を一言で説明するとどうなる？",
+      "want": "answer",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.2,
+        "other": 0.45,
+        "answersAgent": 0.02
+      },
+      "ms": 217
+    },
+    {
+      "set": "extra",
+      "index": 17,
+      "name": "カオル",
+      "text": "なるほど、わかりやすい",
+      "want": "either",
+      "drop": false,
+      "probabilities": {
+        "agent": 0.73,
+        "other": 0.17,
+        "answersAgent": 0.07
+      },
+      "ms": 220
+    }
+  ]
+}

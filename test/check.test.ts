@@ -104,6 +104,15 @@ test("案内の文面か、メンションのない発言の評価を変えた�
   expect(e2eTargets(["x/src/core/instructions.ts", "src/core/instructions.tsx", "test/e2e/addressing.sh.orig"], "").map((t) => t.script)).toEqual(CORE)
 })
 
+test("Jev への問い合わせか、その評価を変えたら、Jev の評価を挙げる。評価の会話を変えたら、2 つの評価を挙げる（ADR 0029）", () => {
+  for (const f of ["src/jev.ts", "scripts/jev-eval.sh", "test/e2e/addressing-jev.ts"]) {
+    expect(e2eTargets([f], "")).toEqual([{ script: "scripts/jev-eval.sh --check", reasons: [f] }])
+  }
+  expect(e2eTargets(["test/e2e/conversations.ts"], "").map((t) => t.script)).toEqual(["test/e2e/addressing.sh", "scripts/jev-eval.sh --check"])
+  expect(e2eTargets(["x/src/jev.ts", "src/jev.tsx", "scripts/jev-eval.sh.orig"], "")).toEqual([])
+  expect(e2eTargets(["test/e2e/addressing-jev.ts.orig", "test/e2e/conversations.tsx"], "").map((t) => t.script)).toEqual(CORE)
+})
+
 test("ハーネスのアダプターと ACP・MCP の SDK のバージョンを変えたら、e2e の中核を挙げる。ほかの依存では挙げない", () => {
   const diff = (line: string) => `diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n${line}\n`
   for (const [line, name] of [

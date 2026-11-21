@@ -18,76 +18,7 @@ import { join, resolve } from "node:path"
 import { sign } from "../../src/connectors/http.ts"
 import { TURN_NOTICES } from "../../src/core/relay.ts"
 import { BUN_ISOLATED } from "../../src/harness/config.ts"
-
-type Want = "answer" | "silent" | "either"
-type Line = { user: "A" | "B" | "C"; text: string; want: Want; mention?: boolean; burst?: number }
-
-const USERS = { A: "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", B: "Ubbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", C: "Uccccccccccccccccccccccccccccccccc" }
-const NAMES = { A: "アリス", B: "ボブ", C: "カオル" }
-const ROOM = "C111aaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-/**
- * 評価用の会話。answer：Bot が答えるべき、silent：黙るべき、either：どちらでもよい（数えない）。
- * answer は、だれに向けたかを書いていない問いかけ、全員や「だれか」に向けた問い、Bot との会話の続き。
- * silent は、名前で特定の人に向けた発言（構造の印はない）、人どうしのやりとり、Bot が役に立てない雑談と相づち
- */
-const MAIN: Line[] = [
-  { user: "A", text: "今日からこのルームでもよろしくね。", want: "answer", mention: true },
-  { user: "B", text: "おはようございます", want: "either" },
-  { user: "A", text: "ボブさん、昨日のレビューありがとう", want: "silent" },
-  { user: "B", text: "いえいえ、こちらこそ助かりました", want: "silent" },
-  { user: "A", text: "Python で辞書をキーの順に並べ替えるのって、どう書くんだっけ？", want: "answer" },
-  { user: "B", text: "sorted に items を渡すやつですね", want: "silent" },
-  { user: "A", text: "なるほど、ありがとう", want: "either" },
-  { user: "C", text: "みんな、UTC の 15 時って日本時間だと何時だっけ？", want: "answer" },
-  { user: "A", text: "カオルさん、例の見積もりって今日中に送れそう？", want: "silent" },
-  { user: "C", text: "夕方には送ります！", want: "silent" },
-  { user: "B", text: "だれか、git で直前のコミットのメッセージだけ直すコマンド覚えてる？", want: "answer" },
-  { user: "A", text: "お昼どうする？", want: "silent" },
-  { user: "C", text: "そば行きたいです", want: "silent" },
-  { user: "A", text: 'この JSON、どこがおかしいんだろう {"a": 1, "b": [2, 3,]}', want: "answer" },
-  { user: "A", text: "じゃあ、末尾のカンマを消せば読めるようになる？", want: "answer" },
-  { user: "C", text: "アリスさん、その JSON って何に使うやつですか？", want: "silent" },
-  { user: "A", text: "デプロイの設定ファイルだよ", want: "silent" },
-  { user: "B", text: "ちなみに 1 マイルって何キロだっけ", want: "answer" },
-  { user: "C", text: "マイル表記、分かりにくいですよね", want: "silent" },
-  { user: "A", text: "ボブさん、来週の休みの件、もう上長に伝えた？", want: "silent" },
-  { user: "B", text: "まだです、今日中に伝えます", want: "silent" },
-  { user: "B", text: "これ、来週までにだれかやっておいてくれると嬉しいなあ", want: "either" },
-  { user: "B", text: "あとで飲み物買ってきます", want: "silent", burst: 1 },
-  { user: "A", text: "ありがとう、お茶でお願い", want: "silent", burst: 1 },
-  { user: "C", text: "正規表現で、行頭の空白だけ消すのってどう書くんでしたっけ？", want: "answer", burst: 1 },
-  { user: "A", text: "カオルさん、それ急ぎ？", want: "silent", burst: 1 },
-]
-
-/** main と分類は同じで、言い回しを変え、迷いやすい発言を足した会話 */
-const HOLDOUT: Line[] = [
-  { user: "B", text: "今日も一日がんばりましょう", want: "either", mention: true },
-  { user: "C", text: "今日は暑いですね", want: "silent" },
-  { user: "A", text: "ほんとに。エアコン強めにしようかな", want: "silent" },
-  { user: "B", text: "これって英語でなんて言うんだっけ、「締め切りを延ばす」", want: "answer" },
-  { user: "B", text: "もう少しカジュアルな言い方もある？", want: "answer" },
-  { user: "C", text: "ボブさん、それ先方へのメールで使うんですか？", want: "silent" },
-  { user: "B", text: "そうそう、午後に送る予定", want: "silent" },
-  { user: "A", text: "了解です", want: "silent" },
-  { user: "C", text: "計算得意な人いますか？ 2,480 円の 3 割引きっていくら？", want: "answer" },
-  { user: "A", text: "カオルさん、それ経費で落ちるやつ？", want: "silent" },
-  { user: "C", text: "たぶん大丈夫です", want: "silent" },
-  { user: "A", text: "シェルで、カレントディレクトリの中の一番大きいファイルを探すには？", want: "answer" },
-  { user: "B", text: "それ、ボットに聞いてみたら？", want: "either" },
-  { user: "C", text: "なんでこのビルド、こんなに遅いんだろうね", want: "either" },
-  { user: "B", text: "アリスさん、明日の打ち合わせ、10 時からで合ってます？", want: "silent" },
-  { user: "A", text: "合ってます！", want: "silent" },
-  { user: "C", text: "ねえ、HTTP の 418 ってなんのステータスだっけ", want: "answer" },
-  { user: "C", text: "へえ、そんなのあるんだ", want: "silent" },
-  { user: "B", text: "今週の金曜、飲み会行ける人？", want: "silent" },
-  { user: "A", text: "行きます〜", want: "silent" },
-  { user: "B", text: "TypeScript で、配列から重複を取り除く一番短い書き方って？", want: "answer" },
-  { user: "A", text: "ボブさん、例の資料あとで見ておきますね", want: "silent", burst: 1 },
-  { user: "B", text: "ありがとうございます！", want: "silent", burst: 1 },
-  { user: "C", text: "ところで、cron で毎週月曜の朝 9 時って、どう書くんでしたっけ", want: "answer", burst: 1 },
-  { user: "A", text: "お先に失礼します", want: "silent", burst: 1 },
-]
+import { HOLDOUT, MAIN, NAMES, ROOM, USERS, type Line, type Want } from "./conversations.ts"
 
 const SETS = { main: MAIN, holdout: HOLDOUT }
 type SetName = keyof typeof SETS

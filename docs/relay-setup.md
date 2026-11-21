@@ -44,7 +44,7 @@ Messaging API のチャネルは、LINE Developers コンソールから直接�
 
 - Claude Code を使う場合は、`claude` をインストールし、ログインしておきます。中継は、PATH 上の `claude` を `claude-agent-acp` 経由で起動します。pi を使う場合は、次の節の設定を用意してください。
 - 秘密情報を保存します。LINE は `agent-chat-relay secrets line`、Chatwork は `agent-chat-relay secrets chatwork`、Discord は `agent-chat-relay secrets discord` で入力します。どれか 1 つだけでも動きます。環境変数で渡すこともできます（[README.md](../README.md#秘密情報の管理)）。
-- 承認者が 2 人以上いて、送り手が複数いるターンの承認依頼も依頼者に絞りたい場合は、TypeSafe AI の API キーを `agent-chat-relay secrets typesafe` で保存します（任意。ADR 0026）。そのターンの発言とツールの入力を TypeSafe AI に送ることになるので、送ってよいかを確かめてから使ってください（[docs/relay.md](relay.md#実行承認)）。
+- 承認者が 2 人以上いて、送り手が複数いるターンの承認依頼も依頼者に絞りたい場合は、TypeSafe AI の API キーを `agent-chat-relay secrets typesafe` で保存します（任意。ADR 0026）。そのターンの発言とツールの入力を TypeSafe AI に送ることになるので、送ってよいかを確かめてから使ってください（[docs/relay.md](relay.md#実行承認)）。同じキーは、受信モード「他人宛てを除く（Jev）」でも使います（ADR 0029）。
 - 作業ディレクトリを独立した git リポジトリにできない場合（git がインストールされていない場合、作業ディレクトリの `.git` が壊れている場合、`GIT_DIR` などの git の環境変数でリポジトリの場所を変えている場合など）、中継は起動しません。エラーの文に、直し方（`.git` を確かめるか退避する、環境変数を外す、など）を表示します（[docs/relay.md](relay.md#構成)）。
 
 中継が使うファイルは次のとおりです。置き場は `~/.agent-chat-relay/` で、`RELAY_HOME` で変えられます（ADR 0019）。
@@ -129,6 +129,7 @@ agent-chat-relay serve
 | `RELAY_APPROVAL_NOTICE_MIN` | 承認依頼に答えが出ないとき、ルームに「承認待ち」を知らせるまでの時間（分。既定は 10、1〜29。ADR 0024） |
 | `RELAY_SLOW_NOTICE_MIN` | 返事もターンの終わりもないとき、ルームに「時間がかかっている」と知らせるまでの時間（分。既定は 20、1〜1440。ADR 0024） |
 | `RELAY_JEV_MIN_PROBABILITY` | Jev で推した依頼者だけに承認依頼を送る、確率の下限（既定は 0.8、0 より大きく 1 以下。`RELAY_TYPESAFE_API_KEY` があるときだけ効く。ADR 0026） |
+| `RELAY_JEV_CONTEXT_MESSAGES` | 受信モード「他人宛てを除く（Jev）」で、判定する発言と一緒に Jev に送る、同じルームの直前の発言の数（既定は 10、0〜30 の整数。ADR 0029） |
 
 ### 普段の環境で動かす
 
@@ -149,7 +150,7 @@ agent-chat-relay serve
 1. Bot に 1 対 1 でメッセージを送ります。コードが返ってくるので、端末で `agent-chat-relay pair <コード>` を実行します。これで自分が許可リストに追加され、実行承認の依頼を受け取れるようになります。
 2. Bot をグループに招待します（招待済みの場合は、Bot にメンションしてメッセージを送ります）。コードが返ってくるので、同じように `pair` を実行します。
 3. 登録した内容は `agent-chat-relay access` で確認できます（ID は伏せて表示します）。
-4. 登録したルームの受信モードは「メンション時」です。ほかの人どうしの発言も渡すには、`agent-chat-relay access mode <番号> <受信モード>` で変えます。番号は `access` の一覧のものです。受信モードは、`mention`（メンション時）、`exceptOthers`（他人宛てを除く。ほかの人に向けたメンションや返信を除いて渡す）、`all`（すべて）です（[docs/relay.md](relay.md#ルームの登録と送信者の許可)、ADR 0028）。
+4. 登録したルームの受信モードは「メンション時」です。ほかの人どうしの発言も渡すには、`agent-chat-relay access mode <番号> <受信モード>` で変えます。番号は `access` の一覧のものです。受信モードは、`mention`（メンション時）、`exceptOthers`（他人宛てを除く。ほかの人に向けたメンションや返信を除いて渡す）、`exceptOthersJev`（他人宛てを除く（Jev）。それに加えて、名前で呼びかけただけの発言なども、Jev で判定して除く）、`all`（すべて）です（[docs/relay.md](relay.md#ルームの登録と送信者の許可)、ADR 0028、0029）。`exceptOthersJev` では、そのルームの発言を TypeSafe AI に送るので、ルームの人に断ってから使ってください。
 
 ## 動作確認の項目（LINE）
 
@@ -206,6 +207,7 @@ e2e のスクリプトは、チャットサービスごとに `test/e2e/<サー�
 | `test/e2e/resume.sh claude` | 中核。LINE の API をモックにして、セッションの再開を確認します。合言葉を覚えさせてから停止し、`--session-id` で再開して、合言葉、返信、承認を確認します。存在しない ID では起動しないことも確認します |
 | `test/e2e/notices.sh claude` | LINE の API をモックにして、ターンの知らせ（ADR 0024）を、実際の `serve` で確認します。承認者の DM で作業中にハーネスのプロセスを落とし、「失敗」が届くこと、中継が知らせを待つこと、待っている間に Ctrl+C（SIGINT）すると、すぐに止まることを確かめます。知らせの送信は、モックで詰まらせます。`--full` を付けると、承認依頼に答えずにいたときの「承認待ち」と「時間がかかっている」、画面に書いて終えたときの「返事のない終わり」も確認します（時間の環境変数を 1 分にするので、約 2 分かかります） |
 | `test/e2e/addressing.sh` | LINE の API をモックにして、受信モードが「すべて」のルームに、正解を付けた会話を流し、メンションのない発言に答えるか・黙るかを数えます（#107）。案内（`src/core/instructions.ts`）を変えたときに走らせます。2 つの会話を 3 回ずつ流し、基準に届かなければ失敗します。Haiku で約 10 分です。方法と結果は [docs/addressing-eval.md](addressing-eval.md) にあります |
+| `scripts/jev-eval.sh` | 実際の Jev に、正解を付けた会話のメンションのない発言を 1 つずつ問い合わせ、他人宛てとして外す発言を数えます（ADR 0029）。Jev への問い合わせ（`src/jev.ts`）か、評価の会話を変えたときに走らせます。`--check` を付けると、答えるべき発言を 1 つでも外したら失敗します。リポジトリ直下の `.env` の `RELAY_TYPESAFE_API_KEY` を使います。数十秒で、費用は 1 円もかかりません。結果は `test/fixtures/addressing-jev.json` と [docs/addressing-eval.md](addressing-eval.md) にあります |
 | `test/e2e/chatwork.sh claude` | Chatwork の API をモックにして、ペアリング、返信、停止中に届いた依頼を渡さないこと、承認とファイルの返送、ルームへの追加を確認します。`--full` を付けると、画像の説明と、停止中に届いた依頼を記録から読むことも確認します |
 
 各スクリプトは、手順ごとに成否を判定し（`ok:` か `NG:`）、1 つでも失敗すれば 0 以外で終わります。`--full` で加わる手順は、モデルの能力に頼るので、失敗しても中継の退行とは限りません（出力にもそう示します）。どの e2e を走らせるかは、`bun run mutation` が、`main` との差分から表示します（`scripts/e2e-targets.ts`。ADR 0023）。リリースの前には、中核を走らせます（`docs/releasing.md`）。

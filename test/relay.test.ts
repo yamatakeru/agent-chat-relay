@@ -24,12 +24,14 @@ import {
   type PermissionRequest,
   noticeTimingFromEnv,
   Relay,
+  type ScreenQuery,
+  type Screener,
   type Session,
   sendablePaths,
   TURN_NOTICES,
   type Verdict,
 } from "../src/core/relay.ts"
-import { jevFromEnv } from "../src/jev.ts"
+import { jevFromEnv, screenFromEnv, screenRequest } from "../src/jev.ts"
 import { BUN_ISOLATED } from "../src/harness/config.ts"
 import { alwaysOption, startHarness, stdinStream } from "../src/harness/harness.ts"
 import { parseServeArgs } from "../src/serve-args.ts"
@@ -167,6 +169,26 @@ describe("access", () => {
     expect(gate({ mentioned: false, toOthers: true }).action).toBe("deliver")
     access.save({ allowFrom: [], rooms: { [ROOM]: { receive: "mention", allowFrom: [] } }, pending: {} })
     expect(gate({ mentioned: false, toOthers: true })).toEqual({ action: "record" })
+  })
+
+  test("受信モードが「他人宛てを除く（Jev）」なら、印のある発言は外し、メンションも印もない発言だけを Jev の判定に回す（ADR 0029）", () => {
+    access.save({ allowFrom: [], rooms: { [ROOM]: { receive: "exceptOthersJev", allowFrom: [] } }, pending: {} })
+    const gate = (over: { mentioned: boolean; toOthers?: boolean }) => access.gate({ room: ROOM, sender: ALICE, isDM: false, ...over })
+    expect(gate({ mentioned: false, toOthers: true })).toEqual({ action: "record", toOthers: true })
+    expect(gate({ mentioned: false })).toEqual({ action: "deliver", screen: true })
+    expect(gate({ mentioned: true })).toEqual({ action: "deliver" })
+    expect(gate({ mentioned: true, toOthers: true })).toEqual({ action: "deliver" })
+    // 許可していない人の発言は、判定に回さない
+    access.save({ allowFrom: [], rooms: { [ROOM]: { receive: "exceptOthersJev", allowFrom: [BOB] } }, pending: {} })
+    expect(gate({ mentioned: false })).toEqual({ action: "record" })
+    // ほかの受信モードでは、判定に回さない
+    for (const receive of ["exceptOthers", "all"] as const) {
+      access.save({ allowFrom: [], rooms: { [ROOM]: { receive, allowFrom: [] } }, pending: {} })
+      expect(gate({ mentioned: false })).toEqual({ action: "deliver" })
+    }
+    // DM は判定に回さない
+    access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { receive: "exceptOthersJev", allowFrom: [] } }, pending: {} })
+    expect(access.gate({ room: ALICE, sender: ALICE, isDM: true, mentioned: false })).toEqual({ action: "deliver" })
   })
 
   test("古い形（requireMention）は読み替え、知らない受信モードはメンション時として扱い、1 回だけログに書く", () => {
@@ -721,6 +743,117 @@ describe("relay", () => {
     access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { receive: "mention", allowFrom: [] } }, pending: {} })
     expect(relay.receive(msg({ text: "雑談 2", mentioned: false, toOthers: true }))).toEqual({ action: "record" })
     expect(infos).toEqual([{ m: "他人宛ての発言を、エージェントに渡さずに記録しました", extra: { room: ROOM, reason: "structure" } }])
+  })
+
+  describe("Jev で他人宛てを判定する（ADR 0029）", () => {
+    type Answer = Awaited<ReturnType<Screener>>
+    /** 判定を queries に残す。answers が空なら渡す。answer は、その発言の答え（Promise を返せば、答えを遅らせられる） */
+    function screening(answer: (q: ScreenQuery) => Answer | Promise<Answer>) {
+      const queries: ScreenQuery[] = []
+      const screen: Screener = async (q) => {
+        queries.push(q)
+        return answer(q)
+      }
+      return { screen, queries }
+    }
+    const drop = (text: string) => (q: ScreenQuery) => (q.message.text === text ? { drop: true, probabilities: { agent: 0.01, other: 0.99, answersAgent: 0.02 } } : { drop: false, probabilities: { agent: 0.5, other: 0.1, answersAgent: 0.1 } })
+    function jevSetup(screen: Screener | undefined, log: Log = quiet) {
+      access.save({ allowFrom: [ALICE], rooms: { [ROOM]: { receive: "exceptOthersJev", allowFrom: [] } }, pending: {} })
+      const relay = new Relay(access, log, undefined, NO_WAIT, undefined, undefined, screen)
+      relay.addConnector(new FakeConnector())
+      return relay
+    }
+
+    test("Jev が他人宛てと判定した発言は、記録だけして渡さない。本文を書かずに、確率をログに残す", async () => {
+      const infos: { m: string; extra?: Record<string, unknown> }[] = []
+      const { screen } = screening(drop("ボブさん、それ急ぎ？"))
+      const relay = jevSetup(screen, { info: (m, extra) => void infos.push({ m, extra }), error: () => {} })
+      const prompts: string[] = []
+      relay.attach(workingSession(prompts))
+      expect(relay.receive(msg({ text: "ボブさん、それ急ぎ？", mentioned: false }))).toEqual({ action: "deliver", screen: true, acknowledge: false })
+      relay.receive(msg({ text: "だれか分かる？", mentioned: false }))
+      await Bun.sleep(5)
+      expect(prompts.join("\n")).not.toContain("急ぎ")
+      expect(prompts.join("\n")).toContain("だれか分かる？")
+      expect((await relay.fetchMessages(ROOM)).map((m) => m.text)).toEqual(["ボブさん、それ急ぎ？", "だれか分かる？"])
+      expect(infos).toEqual([
+        { m: "他人宛ての発言を、エージェントに渡さずに記録しました", extra: { room: ROOM, reason: "jev", agent: 0.01, other: 0.99, answersAgent: 0.02 } },
+        { m: "Jev で他人宛てでないと判定し、渡しました", extra: { room: ROOM, agent: 0.5, other: 0.1, answersAgent: 0.1 } },
+      ])
+    })
+
+    test("判定には、サービス名、ルーム名、この発言より前の同じルームの発言（Bot の発言を含む）を渡す。メンションの発言は判定しない", async () => {
+      const { screen, queries } = screening(() => undefined)
+      const relay = jevSetup(screen)
+      const conn = new FakeConnector()
+      conn.roomName = async () => "開発"
+      relay.addConnector(conn)
+      relay.attach(workingSession([]))
+      relay.receive(msg({ text: "まとめて", senderName: "アリス" }))
+      await relay.reply(ROOM, "今週の分だけでよいですか？")
+      relay.receive(msg({ room: "line:Cother", text: "別のルーム" }))
+      relay.receive(msg({ text: "今週だけで", sender: BOB, mentioned: false }))
+      await Bun.sleep(5)
+      expect(queries).toHaveLength(1)
+      expect(queries[0]).toEqual({
+        service: "LINE",
+        room: "開発",
+        recent: [
+          { sender: ALICE, name: "アリス", fromMe: false, text: "まとめて" },
+          { sender: "me", name: "", fromMe: true, text: "今週の分だけでよいですか？" },
+        ],
+        message: { sender: BOB, name: "", fromMe: false, text: "今週だけで" },
+      })
+    })
+
+    test("判定を待つ間も、発言の順番を保つ。あとに届いたメンションも、前の発言の判定を待つ", async () => {
+      let answer!: (a: Answer) => void
+      const { screen } = screening((q) => (q.message.text === "一つ目" ? new Promise<Answer>((r) => (answer = r)) : undefined))
+      const relay = jevSetup(screen)
+      const prompts: string[] = []
+      relay.attach(workingSession(prompts))
+      relay.receive(msg({ text: "一つ目", mentioned: false }))
+      relay.receive(msg({ text: "二つ目" }))
+      await Bun.sleep(5)
+      expect(prompts).toHaveLength(0)
+      answer({ drop: false, probabilities: {} })
+      await Bun.sleep(5)
+      const all = prompts.join("\n")
+      expect(all.indexOf("一つ目")).toBeGreaterThan(-1)
+      expect(all.indexOf("一つ目")).toBeLessThan(all.indexOf("二つ目"))
+    })
+
+    test("作業中のターンに差し込む発言も、判定してから差し込み、外した発言だけなら差し込まない", async () => {
+      const { screen } = screening(drop("ボブさん、了解です"))
+      const relay = jevSetup(screen)
+      const s = steeringSession([])
+      relay.attach(s.session)
+      relay.receive(msg({ text: "最初" }))
+      await Bun.sleep(5)
+      relay.receive(msg({ text: "ボブさん、了解です", mentioned: false }))
+      await Bun.sleep(5)
+      expect(s.steers).toHaveLength(0)
+      relay.receive(msg({ text: "ところで質問", mentioned: false }))
+      await Bun.sleep(5)
+      expect(s.steers).toHaveLength(1)
+      expect(s.steers[0]).toContain("ところで質問")
+      s.finish()
+      await Bun.sleep(5)
+      expect(s.prompts).toHaveLength(1)
+    })
+
+    test("判定できない、判定が失敗した、Jev を使わない、のどれでも渡す", async () => {
+      const errors: string[] = []
+      for (const screen of [screening(() => undefined).screen, screening(() => Promise.reject(new Error("boom"))).screen, undefined]) {
+        const relay = jevSetup(screen, { info: () => {}, error: (m, e) => void errors.push(`${m} ${JSON.stringify(e)}`) })
+        const prompts: string[] = []
+        relay.attach(workingSession(prompts))
+        relay.receive(msg({ text: "雑談", mentioned: false }))
+        await Bun.sleep(5)
+        expect(prompts.join("\n")).toContain("雑談")
+      }
+      expect(errors).toEqual(['他人宛てかを判定できませんでした {"error":"Error: boom"}'])
+    })
   })
 
   test("本文と属性は無害化して渡す", async () => {
@@ -3064,6 +3197,100 @@ describe("Jev で承認依頼の依頼者を推す（ADR 0026）", () => {
     ] as const) {
       const { f } = fakeFetch(() => choice("p1", { p1: 0.79, p2: 0.21 }))
       expect(await jevFromEnv({ RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_MIN_PROBABILITY: min }, quiet, f)!(QUERY)).toEqual(expected)
+    }
+  })
+})
+
+describe("Jev で他人宛てを判定する要求と答え（ADR 0029）", () => {
+  const me = (text: string) => ({ sender: "me", name: "", fromMe: true, text })
+  const QUERY: ScreenQuery = {
+    service: "LINE",
+    room: "開発",
+    recent: [
+      { sender: ALICE, name: "アリス", fromMe: false, text: "まとめて" },
+      me("今週の分だけでよいですか？"),
+      { sender: BOB, name: "ボブ", fromMe: false, text: "x".repeat(1500) },
+    ],
+    message: { sender: ALICE, name: "アリス", fromMe: false, text: "今週だけで" },
+  }
+  function fakeFetch(answer: () => Response | Promise<Response>) {
+    const requests: { url: string; init: RequestInit; body: any }[] = []
+    const f = (async (url: string, init: RequestInit) => {
+      requests.push({ url, init, body: JSON.parse(init.body as string) })
+      return answer()
+    }) as unknown as typeof fetch
+    return { f, requests }
+  }
+  const nouls = (agent: number, other: number, answersAgent: number) =>
+    Response.json({ answers: { agent: { type: "noul", noul: agent }, other: { type: "noul", noul: other }, answers_agent: { type: "noul", noul: answersAgent } } })
+
+  test("API キーがなければ使わない。直前の発言の数は 0〜30 の整数で、それ以外は起動しない", () => {
+    expect(screenFromEnv({}, quiet)).toBeUndefined()
+    for (const v of ["31", "-1", "1.5", "abc", "10x"]) expect(() => screenFromEnv({ RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_CONTEXT_MESSAGES: v }, quiet)).toThrow("RELAY_JEV_CONTEXT_MESSAGES")
+    for (const v of ["0", "30", ""]) expect(screenFromEnv({ RELAY_TYPESAFE_API_KEY: "k", RELAY_JEV_CONTEXT_MESSAGES: v }, quiet)).toBeFunction()
+  })
+
+  test("人には名前を付けて ID を送らず、Bot の発言は agent にする。直前の発言は数と長さを切る", () => {
+    const body = screenRequest(QUERY, 10) as any
+    expect(body.model).toBe("jev-1.14.0")
+    expect(body.state.chat).toEqual({ service: "LINE", room: "開発" })
+    expect(body.state.recent_messages.map((m: { person: string; name?: string }) => [m.person, m.name])).toEqual([
+      ["p1", "アリス"],
+      ["agent", undefined],
+      ["p2", "ボブ"],
+    ])
+    expect(body.state.recent_messages[2].text).toHaveLength(1000)
+    expect(body.state.message).toEqual({ person: "p1", name: "アリス", text: "今週だけで" })
+    expect(Object.keys(body.questions)).toEqual(["agent", "other", "answers_agent"])
+    for (const q of Object.values(body.questions)) expect(q).toMatchObject({ type: "noul" })
+    expect(JSON.stringify(body)).not.toContain(ALICE)
+    expect(JSON.stringify(body)).not.toContain(BOB)
+    // 直前の発言は、新しい方から数える。名前は、送る発言の中で付ける。0 なら送らない
+    const one = screenRequest(QUERY, 1) as any
+    expect(one.state.recent_messages.map((m: { name: string }) => m.name)).toEqual(["ボブ"])
+    expect([one.state.recent_messages[0].person, one.state.message.person]).toEqual(["p1", "p2"])
+    expect((screenRequest(QUERY, 0) as any).state.recent_messages).toEqual([])
+    // 名前、ルーム名、判定する発言の本文も長さを切る
+    const long = screenRequest({ ...QUERY, room: "r".repeat(150), message: { ...QUERY.message, name: "n".repeat(150), text: "t".repeat(1500) } }, 10) as any
+    expect([long.state.chat.room.length, long.state.message.name.length, long.state.message.text.length]).toEqual([100, 100, 1000])
+  })
+
+  test("直前の発言の数の既定は 10 で、環境変数で変えられる", async () => {
+    const recent = Array.from({ length: 40 }, (_, i) => ({ sender: ALICE, name: "アリス", fromMe: false, text: String(i) }))
+    for (const [v, n] of [[undefined, 10], ["3", 3], ["30", 30]] as const) {
+      const { f, requests } = fakeFetch(() => nouls(0.5, 0.1, 0.1))
+      await screenFromEnv({ RELAY_TYPESAFE_API_KEY: "secret-key", RELAY_JEV_CONTEXT_MESSAGES: v }, quiet, f)!({ ...QUERY, recent })
+      expect(requests[0]!.body.state.recent_messages).toHaveLength(n)
+      expect(requests[0]!.body.state.recent_messages.at(-1).text).toBe("39")
+      expect(new Headers(requests[0]!.init.headers).get("Authorization")).toBe("Bearer secret-key")
+    }
+  })
+
+  test("外すのは、ほかの人宛てが 0.8 以上で、agent 宛てと agent への答えがどちらも 0.2 以下のときだけ", async () => {
+    const cases: [number, number, number, boolean][] = [
+      [0.2, 0.8, 0.2, true],
+      [0.01, 0.99, 0.01, true],
+      [0.2, 0.79, 0.2, false],
+      [0.21, 0.9, 0.1, false],
+      [0.1, 0.9, 0.21, false],
+    ]
+    for (const [agent, other, answersAgent, drop] of cases) {
+      const { f } = fakeFetch(() => nouls(agent, other, answersAgent))
+      expect(await screenFromEnv({ RELAY_TYPESAFE_API_KEY: "k" }, quiet, f)!(QUERY)).toEqual({ drop, probabilities: { agent, other, answersAgent } })
+    }
+  })
+
+  test("エラー、通信の失敗、答えの形が違う、のどれでも判定しない（渡す）", async () => {
+    const answers: (() => Response | Promise<Response>)[] = [
+      () => new Response("rate limited", { status: 429 }),
+      () => Promise.reject(new DOMException("timeout", "TimeoutError")),
+      () => Response.json({ answers: { agent: { noul: 0.1 }, other: { noul: 0.9 } } }),
+      () => Response.json({ answers: { agent: { noul: "0.1" }, other: { noul: 0.9 }, answers_agent: { noul: 0.1 } } }),
+      () => new Response("not json"),
+    ]
+    for (const answer of answers) {
+      const { f } = fakeFetch(answer)
+      expect(await screenFromEnv({ RELAY_TYPESAFE_API_KEY: "k" }, quiet, f)!(QUERY)).toBeUndefined()
     }
   })
 })
